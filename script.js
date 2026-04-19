@@ -135,7 +135,7 @@ const PINNED_REPOS=[
 /* ══════════════════════════════════════════════════
    THEME SYSTEM
 ══════════════════════════════════════════════════ */
-const THEME_RGB={linen:'15,118,110',noir:'200,134,10',glacier:'74,159,255',crimson:'204,31,56',phosphor:'0,200,60',dusk:'232,98,42'};
+const THEME_RGB={linen:'15,118,110',enterprise:'59,130,246',startup:'168,85,247',creative:'236,72,153',fintech:'34,197,94',saas:'15,23,42',luxury:'217,119,6',gaming:'16,185,129',sustainable:'34,197,94'};
 let curRgb='15,118,110';
 
 function setTheme(name){
@@ -277,8 +277,8 @@ function animHero(){
   /* Per-theme skew: Bebas Neue (condensed sans) handles aggressive skew well.
      Wide serifs (Playfair, Marcellus, Fraunces) look best with gentle skew.
      Monospace (Major Mono) somewhere in between.                              */
-  const theme=document.documentElement.getAttribute('data-theme')||'noir';
-  const skewMap={noir:-8,glacier:-2,crimson:-2,phosphor:-4,dusk:-2};
+  const theme=document.documentElement.getAttribute('data-theme')||'linen';
+  const skewMap={linen:-6,enterprise:-8,startup:-8,creative:-8,fintech:-8,saas:-8,luxury:-6,gaming:-8,sustainable:-6};
   const skew=skewMap[theme]||-6;
   nameEl.querySelectorAll('.ln').forEach(line=>{
     const t=line.textContent;
