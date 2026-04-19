@@ -771,4 +771,56 @@ document.addEventListener('DOMContentLoaded',()=>{
   fetchRepos();
   // Init first game
   games.breaker.init();
+  
+  // Initialize scroll-triggered animations
+  initScrollAnimations();
 });
+
+/* ══════════════════════════════════════════════════
+   SCROLL-TRIGGERED ANIMATIONS
+══════════════════════════════════════════════════ */
+function initScrollAnimations(){
+  const observerOptions = {
+    threshold: 0.1,
+    rootMargin: '0px 0px -60px 0px'  // Trigger 60px before element enters viewport
+  };
+  
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if(entry.isIntersecting){
+        // Add animation classes based on data attributes
+        const animType = entry.target.dataset.animType || 'fadeSlideUp';
+        entry.target.style.animationName = animType;
+        entry.target.style.animationDuration = entry.target.dataset.animDuration || '.6s';
+        entry.target.style.animationTimingFunction = 'var(--ease)';
+        entry.target.style.animationFillMode = 'both';
+        
+        // Stop observing after animation is triggered
+        observer.unobserve(entry.target);
+      }
+    });
+  }, observerOptions);
+  
+  // Observe all elements with data-scroll-animate attribute
+  document.querySelectorAll('[data-scroll-animate]').forEach(el => {
+    observer.observe(el);
+  });
+  
+  // Observe work cards for staggered entrance
+  const workCards = document.querySelectorAll('.pc');
+  workCards.forEach((card, index) => {
+    card.style.animationDelay = `${index * 0.1}s`;
+    observer.observe(card);
+  });
+}
+
+// Add parallax effect to elements on scroll
+window.addEventListener('scroll', () => {
+  const scrollY = window.scrollY;
+  const parallaxElements = document.querySelectorAll('[data-parallax]');
+  
+  parallaxElements.forEach(el => {
+    const speed = el.dataset.parallax || 0.5;
+    el.style.transform = `translateY(${scrollY * speed}px)`;
+  });
+}, {passive: true});

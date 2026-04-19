@@ -329,11 +329,11 @@ if(!container){throw new Error('hero-3d not found');}
 
 /* ── helpers ── */
 const isMobile = window.innerWidth < 768;
-const FILAMENTS = isMobile ? 120 : 280;
-const CURVE_SEGS = isMobile ? 18 : 32;
-const CORE_R = 0.18;
-const SPHERE_R = 0.72;
-const TIP_R = 0.018;
+const FILAMENTS = isMobile ? 160 : 360;
+const CURVE_SEGS = isMobile ? 24 : 40;
+const CORE_R = 0.16;
+const SPHERE_R = 0.78;
+const TIP_R = 0.022;
 
 function getCSSColor(varName){
   const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
@@ -364,9 +364,9 @@ let bloomPass;
 if(!isMobile){
   bloomPass = new UnrealBloomPass(
     new THREE.Vector2(container.offsetWidth, container.offsetHeight),
-    0.38, // strength
-    0.42, // radius
-    0.36  // threshold
+    0.52, // strength (increased for bushier glow)
+    0.56, // radius (increased for softer glow)
+    0.32  // threshold (lowered for more glow)
   );
   composer.addPass(bloomPass);
 }
@@ -380,45 +380,49 @@ let accentHex = getCSSColor('--a');
 const coreMat = new THREE.MeshStandardMaterial({
   color: accentColor,
   emissive: accentColor,
-  emissiveIntensity: 1.35,
-  roughness: 0.16,
-  metalness: 0.05,
-  transparent:true, opacity:0.88
+  emissiveIntensity: 1.55,
+  roughness: 0.12,
+  metalness: 0.08,
+  transparent:true, opacity:0.92
 });
 const filaMat = new THREE.LineBasicMaterial({
   color: accentColor,
   transparent: true,
-  opacity: 0.24,
+  opacity: 0.28,
   blending: THREE.AdditiveBlending,
-  depthWrite: false
+  depthWrite: false,
+  linewidth: 1.2
 });
 const nodeMat = new THREE.MeshStandardMaterial({
   color: accentColor,
   emissive: accentColor,
-  emissiveIntensity: 1.15,
-  roughness: 0.14,
-  metalness: 0.0,
-  transparent:true, opacity:0.66
+  emissiveIntensity: 1.35,
+  roughness: 0.1,
+  metalness: 0.05,
+  transparent:true, opacity:0.75
 });
 const dustMat = new THREE.PointsMaterial({
   color: accentColor,
-  size: 0.007,
+  size: 0.009,
   transparent: true,
-  opacity: 0.12,
+  opacity: 0.18,
   blending: THREE.AdditiveBlending,
   depthWrite: false,
   sizeAttenuation: true
 });
 
 /* ── lights ── */
-const amb = new THREE.AmbientLight(0xffffff, 0.05);
+const amb = new THREE.AmbientLight(0xffffff, 0.08);
 scene.add(amb);
-const ptLight = new THREE.PointLight(accentColor, 1.35, 3.6);
+const ptLight = new THREE.PointLight(accentColor, 1.6, 4.2);
 ptLight.position.set(0,0,0);
 scene.add(ptLight);
-const rimLight = new THREE.DirectionalLight(0xffffff, 0.22);
-rimLight.position.set(-2,2,2);
+const rimLight = new THREE.DirectionalLight(0xffffff, 0.28);
+rimLight.position.set(-2.4, 2.4, 2.4);
 scene.add(rimLight);
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.15);
+fillLight.position.set(2, -1.2, -2);
+scene.add(fillLight);
 
 /* ── fibonacci sphere distribution ── */
 function fibonacciSphere(n){
@@ -443,19 +447,27 @@ const coreMesh = new THREE.Mesh(coreGeo, coreMat);
 root.add(coreMesh);
 
 /* inner glow halo */
-const haloGeo = new THREE.SphereGeometry(CORE_R*1.55,32,32);
+const haloGeo = new THREE.SphereGeometry(CORE_R*1.65,48,48);
 const haloMat = new THREE.MeshStandardMaterial({
-  color: accentColor, emissive: accentColor, emissiveIntensity:0.45,
-  transparent:true, opacity:0.045, side:THREE.BackSide, depthWrite:false
+  color: accentColor, emissive: accentColor, emissiveIntensity:0.65,
+  transparent:true, opacity:0.065, side:THREE.BackSide, depthWrite:false
 });
 const halo = new THREE.Mesh(haloGeo, haloMat);
 root.add(halo);
 
+/* middle aura shell */
+const midAuraGeo = new THREE.SphereGeometry(CORE_R*2.2,32,32);
+const midAuraMat = new THREE.MeshStandardMaterial({
+  color: accentColor, emissive: accentColor, emissiveIntensity:0.32,
+  transparent:true, opacity:0.025, side:THREE.BackSide, depthWrite:false
+});
+root.add(new THREE.Mesh(midAuraGeo, midAuraMat));
+
 /* outer aura shell */
-const auraGeo = new THREE.SphereGeometry(CORE_R*2.6,32,32);
+const auraGeo = new THREE.SphereGeometry(CORE_R*3.0,48,48);
 const auraMat = new THREE.MeshStandardMaterial({
-  color: accentColor, emissive: accentColor, emissiveIntensity:0.18,
-  transparent:true, opacity:0.014, side:THREE.BackSide, depthWrite:false
+  color: accentColor, emissive: accentColor, emissiveIntensity:0.24,
+  transparent:true, opacity:0.018, side:THREE.BackSide, depthWrite:false
 });
 root.add(new THREE.Mesh(auraGeo, auraMat));
 
@@ -503,29 +515,32 @@ nodesMesh.instanceMatrix.needsUpdate = true;
 root.add(nodesMesh);
 
 /* ── secondary smaller filament layer (fine web) ── */
-const innerOrigins = fibonacciSphere(Math.floor(FILAMENTS*0.45));
+const innerOrigins = fibonacciSphere(Math.floor(FILAMENTS*0.56));
 const innerPos = [];
 innerOrigins.forEach(origin=>{
   const start = origin.clone().multiplyScalar(CORE_R+0.02);
-  const end   = origin.clone().multiplyScalar(SPHERE_R*0.52 + Math.random()*0.08);
-  const curve = new THREE.LineCurve3(start, end);
-  const pts = curve.getPoints(4);
+  const end   = origin.clone().multiplyScalar(SPHERE_R*0.58 + Math.random()*0.12);
+  const midR = (CORE_R + SPHERE_R*0.58)*0.5;
+  const perp = new THREE.Vector3().crossVectors(origin, new THREE.Vector3(Math.random()-.5, Math.random()-.5, Math.random()-.5).normalize()).normalize();
+  const ctrl = origin.clone().multiplyScalar(midR).add(perp.multiplyScalar(0.04+Math.random()*0.06));
+  const curve = new THREE.QuadraticBezierCurve3(start, ctrl, end);
+  const pts = curve.getPoints(6);
   pts.forEach(p=>innerPos.push(p.x,p.y,p.z));
   innerPos.push(NaN,NaN,NaN);
 });
 const innerGeo = new THREE.BufferGeometry();
 innerGeo.setAttribute('position', new THREE.Float32BufferAttribute(innerPos,3));
 const innerMat = new THREE.LineBasicMaterial({
-  color: accentColor, transparent:true, opacity:0.16,
-  blending: THREE.AdditiveBlending, depthWrite:false
+  color: accentColor, transparent:true, opacity:0.22,
+  blending: THREE.AdditiveBlending, depthWrite:false, linewidth: 0.8
 });
 root.add(new THREE.Line(innerGeo, innerMat));
 
-/* ── ambient dust ── */
-const DUST = 600;
+/* ── ambient dust (enhanced) ── */
+const DUST = isMobile ? 480 : 1200;
 const dustPos = new Float32Array(DUST*3);
 for(let i=0;i<DUST;i++){
-  const r = 0.5 + Math.random()*1.4;
+  const r = 0.4 + Math.random()*1.8;
   const theta = Math.random()*Math.PI*2;
   const phi2  = Math.acos(2*Math.random()-1);
   dustPos[i*3]   = r*Math.sin(phi2)*Math.cos(theta);
@@ -537,14 +552,41 @@ dustGeo.setAttribute('position', new THREE.Float32BufferAttribute(dustPos,3));
 const dustMesh = new THREE.Points(dustGeo, dustMat);
 scene.add(dustMesh);
 
+/* ── secondary subtle dust layer ── */
+const DUST2 = isMobile ? 240 : 600;
+const dust2Pos = new Float32Array(DUST2*3);
+const dust2Mat = new THREE.PointsMaterial({
+  color: accentColor,
+  size: 0.004,
+  transparent: true,
+  opacity: 0.08,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  sizeAttenuation: true
+});
+for(let i=0;i<DUST2;i++){
+  const r = 0.8 + Math.random()*2.2;
+  const theta = Math.random()*Math.PI*2;
+  const phi2  = Math.acos(2*Math.random()-1);
+  dust2Pos[i*3]   = r*Math.sin(phi2)*Math.cos(theta);
+  dust2Pos[i*3+1] = r*Math.sin(phi2)*Math.sin(theta);
+  dust2Pos[i*3+2] = r*Math.cos(phi2);
+}
+const dust2Geo = new THREE.BufferGeometry();
+dust2Geo.setAttribute('position', new THREE.Float32BufferAttribute(dust2Pos,3));
+const dust2Mesh = new THREE.Points(dust2Geo, dust2Mat);
+scene.add(dust2Mesh);
+
 /* ── offset root to right side on desktop ── */
 function positionSphere(){
   if(window.innerWidth >= 768){
     root.position.set(1.05, 0, 0);
     dustMesh.position.set(1.05, 0, 0);
+    dust2Mesh.position.set(1.05, 0, 0);
   } else {
     root.position.set(0, 0.2, 0);
     dustMesh.position.set(0, 0.2, 0);
+    dust2Mesh.position.set(0, 0.2, 0);
   }
 }
 positionSphere();
@@ -636,22 +678,25 @@ function animate(){
   mouse.tx += (mouse.nx - mouse.tx) * 0.042;
   mouse.ty += (mouse.ny - mouse.ty) * 0.042;
 
-  // auto rotation + parallax tilt
-  root.rotation.y = t * 0.18 + mouse.tx * 0.28;
-  root.rotation.x = mouse.ty * 0.18;
-  dustMesh.rotation.y = t * 0.06;
-  dustMesh.rotation.x = t * 0.025;
+  // auto rotation + parallax tilt (enhanced)
+  root.rotation.y = t * 0.22 + mouse.tx * 0.32;
+  root.rotation.x = mouse.ty * 0.22;
+  dustMesh.rotation.y = t * 0.08;
+  dustMesh.rotation.x = t * 0.032;
+  dust2Mesh.rotation.y = -t * 0.04;
+  dust2Mesh.rotation.x = t * 0.018;
 
-  // breathing scale + spring click scale
-  const breath = 1 + Math.sin(t*1.1)*0.022;
-  springVel += -springScale * 0.14 - springVel * 0.28;
+  // breathing scale + spring click scale (enhanced)
+  const breath = 1 + Math.sin(t*1.2)*0.028;
+  springVel += -springScale * 0.16 - springVel * 0.32;
   springScale += springVel;
   root.scale.setScalar(breath * (1 + springScale));
 
-  // pulsing glow on core
-  coreMat.emissiveIntensity = 0.95 + Math.sin(t*2.3)*0.12;
-  nodeMat.emissiveIntensity = 1.05 + Math.sin(t*1.9+1.2)*0.14;
-  ptLight.intensity = 1.2 + Math.sin(t*1.7)*0.14;
+  // pulsing glow on core (enhanced)
+  coreMat.emissiveIntensity = 1.15 + Math.sin(t*2.1)*0.18;
+  nodeMat.emissiveIntensity = 1.25 + Math.sin(t*1.8+1.2)*0.2;
+  ptLight.intensity = 1.4 + Math.sin(t*1.6)*0.2;
+  fillLight.intensity = 0.15 + Math.sin(t*0.8)*0.08;
 
   // bloom — base + surge decay
   bloomSurge *= 0.88;
