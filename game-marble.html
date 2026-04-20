@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Marble Run — Kenneth D'Silva</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; font-family: monospace; }
+  #portfolio-link {
+    position: fixed; top: 24px; left: 24px; z-index: 100;
+    color: #00ffff; text-decoration: none; font-family: monospace; font-size: 13px;
+    background: rgba(0,0,0,0.7); padding: 6px 12px; border: 1px solid #00ffff33;
+    border-radius: 4px; transition: background 0.2s;
+  }
+  #portfolio-link:hover { background: rgba(0,255,255,0.1); }
+  #hud {
+    position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+    z-index: 50; display: flex; gap: 24px; align-items: center;
+    background: rgba(0,0,0,0.6); padding: 8px 20px; border-radius: 8px;
+    border: 1px solid #00ffff22; color: #00ffff; font-size: 14px;
+  }
+  #hud span { color: #fff; }
+  #hint {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    z-index: 50; color: #666; font-size: 12px; font-family: monospace;
+    background: rgba(0,0,0,0.5); padding: 4px 14px; border-radius: 4px;
+  }
+  #overlay {
+    position: fixed; inset: 0; z-index: 80;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,10,0.88); color: #fff; font-family: monospace;
+  }
+  #overlay h1 { font-size: 52px; color: #00ffff; text-shadow: 0 0 20px #00ffff; margin-bottom: 16px; }
+  #overlay p { font-size: 16px; color: #aaa; margin-bottom: 8px; }
+  #overlay button {
+    margin-top: 28px; padding: 12px 32px; font-size: 18px; font-family: monospace;
+    background: #001133; color: #00ffff; border: 2px solid #00ffff;
+    border-radius: 6px; cursor: pointer; transition: background 0.2s;
+  }
+  #overlay button:hover { background: #002244; }
+  #flash { position: fixed; inset: 0; z-index: 70; pointer-events: none; background: rgba(255,0,0,0); transition: background 0.15s; }
+</style>
+</head>
+<body>
+<a href="index.html" id="portfolio-link">← Portfolio</a>
+<div id="hud">
+  LEVEL <span id="hud-level">1</span> &nbsp;|&nbsp;
+  ORBS <span id="hud-orbs">0 / 3</span> &nbsp;|&nbsp;
+  BEST <span id="hud-time">--</span>
+</div>
+<div id="hint">WASD / ARROWS to roll · SPACE to hop · Mouse drag to rotate camera</div>
+<div id="flash"></div>
+<div id="overlay">
+  <h1>MARBLE RUN</h1>
+  <p>Roll across the platforms, collect 3 orbs, reach the gate.</p>
+  <p style="color:#ff8800;">3 Levels of increasing difficulty</p>
+  <button id="start-btn">START GAME</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+// --- Three.js setup ---
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050912);
+scene.fog = new THREE.FogExp2(0x050912, 0.04);
+
+// --- Camera ---
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 200);
+let camOffset = new THREE.Vector3(0, 7, 12);
+let camTarget = new THREE.Vector3();
+let camAngleH = 0;
+let camAngleV = 0.3;
+let isDragging = false;
+let lastMouseX = 0, lastMouseY = 0;
+
+// --- Lighting ---
+const hemiLight = new THREE.HemisphereLight(0x334466, 0x110022, 0.8);
+scene.add(hemiLight);
+const sunLight = new THREE.DirectionalLight(0xaaccff, 1.2);
+sunLight.position.set(8, 20, 10);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 0.5;
+sunLight.shadow.camera.far = 100;
+sunLight.shadow.camera.left = -40;
+sunLight.shadow.camera.right = 40;
+sunLight.shadow.camera.top = 40;
+sunLight.shadow.camera.bottom = -40;
+scene.add(sunLight);
+
+// --- CANNON world ---
+const world = new CANNON.World();
+world.gravity.set(0, -20, 0);
+world.broadphase = new CANNON.NaiveBroadphase();
+world.solver.iterations = 10;
+
+const physicsMaterial = new CANNON.ContactMaterial(
+  new CANNON.Material('ball'),
+  new CANNON.Material('platform'),
+  { friction: 0.4, restitution: 0.2 }
+);
+world.addContactMaterial(physicsMaterial);
+
+// --- Game state ---
+let currentLevel = 0;
+let orbsCollected = 0;
+let gameStarted = false;
+let gameWon = false;
+let checkpointPos = new CANNON.Vec3(0, 2, 0);
+let checkpointPlatIndex = 0;
+let lastTime = null;
+
+// Scene objects
+let ballMesh, ballBody;
+let platformMeshes = [], platformBodies = [];
+let orbMeshes = [], orbLights = [];
+let gateMesh, gateBody;
+let movingPlatformData = [];
+let orbCollected = [false, false, false];
+
+// --- Level definitions ---
+const levels = [
+  {
+    platforms: [
+      { pos: [0, 0, 0], size: [5, 0.5, 5], moving: false },
+      { pos: [8, 0, 0], size: [4, 0.5, 4], moving: false },
+      { pos: [15, 1, 0], size: [3, 0.5, 4], moving: false },
+      { pos: [22, 1, 2], size: [3, 0.5, 3], moving: false },
+      { pos: [28, 2, 0], size: [4, 0.5, 4], moving: false },
+      { pos: [36, 2, 0], size: [3, 0.5, 3], moving: false },
+      { pos: [43, 3, 0], size: [5, 0.5, 5], moving: false },
+    ],
+    orbs: [[8, 1.5, 0], [22, 2.5, 2], [36, 3.5, 0]],
+    gate: [43, 4, 0],
+    start: [0, 1.5, 0]
+  },
+  {
+    platforms: [
+      { pos: [0, 0, 0], size: [5, 0.5, 5], moving: false },
+      { pos: [8, 1, 0], size: [3, 0.5, 3], moving: true, axis: 'z', amp: 3, freq: 0.8 },
+      { pos: [16, 1, 0], size: [3, 0.5, 3], moving: false },
+      { pos: [24, 2, 0], size: [2.5, 0.5, 2.5], moving: true, axis: 'x', amp: 2, freq: 1.0 },
+      { pos: [31, 2, 0], size: [3, 0.5, 4], moving: false },
+      { pos: [39, 3, 0], size: [2.5, 0.5, 2.5], moving: true, axis: 'z', amp: 4, freq: 0.6 },
+      { pos: [47, 3, 0], size: [4, 0.5, 4], moving: false },
+      { pos: [55, 4, 0], size: [5, 0.5, 5], moving: false },
+    ],
+    orbs: [[8, 2.5, 0], [31, 3.5, 0], [47, 4.5, 0]],
+    gate: [55, 5, 0],
+    start: [0, 1.5, 0]
+  },
+  {
+    platforms: [
+      { pos: [0, 0, 0], size: [4, 0.5, 4], moving: false },
+      { pos: [7, 1, 0], size: [2.5, 0.5, 2.5], moving: true, axis: 'z', amp: 3.5, freq: 1.2 },
+      { pos: [14, 2, 0], size: [2, 0.5, 2], moving: true, axis: 'x', amp: 2.5, freq: 1.5 },
+      { pos: [21, 2, 0], size: [2.5, 0.5, 2.5], moving: false },
+      { pos: [28, 3, 0], size: [2, 0.5, 2], moving: true, axis: 'z', amp: 4, freq: 0.9 },
+      { pos: [35, 3, 3], size: [2.5, 0.5, 2.5], moving: false },
+      { pos: [41, 4, 3], size: [2, 0.5, 2], moving: true, axis: 'x', amp: 3, freq: 1.3 },
+      { pos: [48, 4, 0], size: [3, 0.5, 3], moving: false },
+      { pos: [55, 5, 0], size: [2.5, 0.5, 2.5], moving: true, axis: 'z', amp: 3, freq: 1.1 },
+      { pos: [62, 5, 0], size: [5, 0.5, 5], moving: false },
+    ],
+    orbs: [[14, 3.5, 0], [35, 4.5, 3], [55, 6.5, 0]],
+    gate: [62, 6, 0],
+    start: [0, 1.5, 0]
+  }
+];
+
+// --- Build level ---
+function buildLevel(idx) {
+  // Clear old objects
+  platformMeshes.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  platformBodies.forEach(b => world.remove(b));
+  orbMeshes.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  orbLights.forEach(l => scene.remove(l));
+  movingPlatformData = [];
+  if (gateMesh) { scene.remove(gateMesh); gateMesh.geometry.dispose(); gateMesh.material.dispose(); }
+  if (gateBody) world.remove(gateBody);
+  platformMeshes = []; platformBodies = [];
+  orbMeshes = []; orbLights = [];
+  orbCollected = [false, false, false];
+  orbsCollected = 0;
+
+  const lv = levels[idx];
+  checkpointPos.set(lv.start[0], lv.start[1] + 0.5, lv.start[2]);
+  checkpointPlatIndex = 0;
+
+  // Platforms
+  lv.platforms.forEach((pd, i) => {
+    const [px, py, pz] = pd.pos;
+    const [sw, sh, sd] = pd.size;
+
+    // Three mesh
+    const geo = new THREE.BoxGeometry(sw, sh, sd);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x1a2a3a, roughness: 0.7, metalness: 0.3,
+      emissive: 0x002244, emissiveIntensity: 0.15
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(px, py, pz);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    scene.add(mesh);
+    platformMeshes.push(mesh);
+
+    // Edges glow
+    const edges = new THREE.EdgesGeometry(geo);
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x00aaff, transparent: true, opacity: 0.4 });
+    const edgeMesh = new THREE.LineSegments(edges, edgeMat);
+    mesh.add(edgeMesh);
+
+    // Cannon body
+    const shape = new CANNON.Box(new CANNON.Vec3(sw / 2, sh / 2, sd / 2));
+    const body = new CANNON.Body({ mass: 0 });
+    body.addShape(shape);
+    body.position.set(px, py, pz);
+    world.addBody(body);
+    platformBodies.push(body);
+
+    // Moving platform data
+    if (pd.moving) {
+      movingPlatformData.push({ meshIdx: i, axis: pd.axis, amp: pd.amp, freq: pd.freq, basePos: [px, py, pz], t: Math.random() * Math.PI * 2 });
+    }
+  });
+
+  // Orbs
+  lv.orbs.forEach((orbPos, i) => {
+    const geo = new THREE.SphereGeometry(0.35, 16, 16);
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffaa00, emissiveIntensity: 0.8, metalness: 0.6, roughness: 0.2 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(orbPos[0], orbPos[1], orbPos[2]);
+    mesh.castShadow = false;
+    scene.add(mesh);
+    orbMeshes.push(mesh);
+
+    const light = new THREE.PointLight(0xffcc00, 1.5, 6);
+    light.position.set(orbPos[0], orbPos[1] - 0.5, orbPos[2]);
+    scene.add(light);
+    orbLights.push(light);
+  });
+
+  // Gate
+  const gateGeo = new THREE.BoxGeometry(1, 2.5, 1);
+  const gateMat = new THREE.MeshStandardMaterial({ color: 0x003300, emissive: 0x00ff44, emissiveIntensity: 0.6, transparent: true, opacity: 0.7 });
+  gateMesh = new THREE.Mesh(gateGeo, gateMat);
+  gateMesh.position.set(lv.gate[0], lv.gate[1] + 1, lv.gate[2]);
+  scene.add(gateMesh);
+
+  const gateShape = new CANNON.Box(new CANNON.Vec3(0.5, 1.25, 0.5));
+  gateBody = new CANNON.Body({ mass: 0, isTrigger: true });
+  gateBody.addShape(gateShape);
+  gateBody.position.set(lv.gate[0], lv.gate[1] + 1, lv.gate[2]);
+  world.addBody(gateBody);
+
+  // Ball
+  if (ballBody) world.remove(ballBody);
+  if (ballMesh) scene.remove(ballMesh);
+
+  const ballGeo = new THREE.SphereGeometry(0.5, 24, 24);
+  const ballMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, metalness: 0.8, roughness: 0.15, emissive: 0x003333, emissiveIntensity: 0.3 });
+  ballMesh = new THREE.Mesh(ballGeo, ballMat);
+  ballMesh.castShadow = true;
+  scene.add(ballMesh);
+
+  const ballShape = new CANNON.Sphere(0.5);
+  ballBody = new CANNON.Body({ mass: 1, linearDamping: 0.3, angularDamping: 0.4 });
+  ballBody.addShape(ballShape);
+  ballBody.position.set(lv.start[0], lv.start[1] + 1, lv.start[2]);
+  world.addBody(ballBody);
+
+  ballMesh.position.copy(ballBody.position);
+
+  updateHUD();
+}
+
+// --- Input ---
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') { e.preventDefault(); }
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+renderer.domElement.addEventListener('mousedown', e => { isDragging = true; lastMouseX = e.clientX; lastMouseY = e.clientY; });
+renderer.domElement.addEventListener('mouseup', () => { isDragging = false; });
+renderer.domElement.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  const dx = e.clientX - lastMouseX;
+  const dy = e.clientY - lastMouseY;
+  camAngleH -= dx * 0.008;
+  camAngleV = Math.max(0.1, Math.min(1.0, camAngleV + dy * 0.005));
+  lastMouseX = e.clientX; lastMouseY = e.clientY;
+});
+renderer.domElement.addEventListener('touchstart', e => {
+  isDragging = true;
+  lastMouseX = e.touches[0].clientX;
+  lastMouseY = e.touches[0].clientY;
+});
+renderer.domElement.addEventListener('touchend', () => { isDragging = false; });
+renderer.domElement.addEventListener('touchmove', e => {
+  if (!isDragging) return;
+  const dx = e.touches[0].clientX - lastMouseX;
+  const dy = e.touches[0].clientY - lastMouseY;
+  camAngleH -= dx * 0.008;
+  camAngleV = Math.max(0.1, Math.min(1.0, camAngleV + dy * 0.005));
+  lastMouseX = e.touches[0].clientX;
+  lastMouseY = e.touches[0].clientY;
+  e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- HUD helpers ---
+function updateHUD() {
+  document.getElementById('hud-level').textContent = currentLevel + 1;
+  document.getElementById('hud-orbs').textContent = orbsCollected + ' / 3';
+}
+
+// --- Respawn ---
+let flashTimeout = null;
+function respawn() {
+  const flashEl = document.getElementById('flash');
+  flashEl.style.background = 'rgba(255,0,0,0.4)';
+  clearTimeout(flashTimeout);
+  flashTimeout = setTimeout(() => { flashEl.style.background = 'rgba(255,0,0,0)'; }, 300);
+  ballBody.velocity.set(0, 0, 0);
+  ballBody.angularVelocity.set(0, 0, 0);
+  ballBody.position.set(checkpointPos.x, checkpointPos.y + 1, checkpointPos.z);
+}
+
+// --- Show overlay ---
+function showOverlay(title, msg, btnText, cb) {
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = `<h1>${title}</h1><p>${msg}</p><button id="ov-btn">${btnText}</button>`;
+  ov.style.display = 'flex';
+  document.getElementById('ov-btn').addEventListener('click', () => { ov.style.display = 'none'; cb(); });
+}
+
+function hideOverlay() { document.getElementById('overlay').style.display = 'none'; }
+
+// --- Level complete / game over ---
+function levelComplete() {
+  currentLevel++;
+  if (currentLevel >= levels.length) {
+    showOverlay('YOU WIN!', 'All 3 marble runs complete!', 'PLAY AGAIN', () => { currentLevel = 0; buildLevel(0); });
+  } else {
+    showOverlay(`LEVEL ${currentLevel} CLEAR!`, 'Rolling to the next challenge...', `LEVEL ${currentLevel + 1}`, () => { buildLevel(currentLevel); });
+  }
+}
+
+// --- Game loop ---
+let orbBobT = 0;
+let gatePulseT = 0;
+
+function animate(time) {
+  requestAnimationFrame(animate);
+  if (!gameStarted) { renderer.render(scene, camera); return; }
+
+  const dt = lastTime ? Math.min((time - lastTime) / 1000, 0.05) : 0.016;
+  lastTime = time;
+  orbBobT += dt;
+  gatePulseT += dt;
+
+  // Physics step
+  world.step(1 / 60, dt, 3);
+
+  // Apply forces
+  if (ballBody) {
+    const forceMag = 18;
+    // Camera-relative directions
+    const fwd = new CANNON.Vec3(-Math.sin(camAngleH), 0, -Math.cos(camAngleH));
+    const right = new CANNON.Vec3(Math.cos(camAngleH), 0, -Math.sin(camAngleH));
+
+    let fx = 0, fz = 0;
+    if (keys['KeyW'] || keys['ArrowUp'])    { fx += fwd.x; fz += fwd.z; }
+    if (keys['KeyS'] || keys['ArrowDown'])  { fx -= fwd.x; fz -= fwd.z; }
+    if (keys['KeyA'] || keys['ArrowLeft'])  { fx -= right.x; fz -= right.z; }
+    if (keys['KeyD'] || keys['ArrowRight']) { fx += right.x; fz += right.z; }
+
+    if (fx !== 0 || fz !== 0) {
+      const len = Math.sqrt(fx * fx + fz * fz);
+      ballBody.applyForce(new CANNON.Vec3(fx / len * forceMag, 0, fz / len * forceMag), ballBody.position);
+    }
+
+    // Hop
+    if (keys['Space'] && !keys['_spaceUsed']) {
+      keys['_spaceUsed'] = true;
+      ballBody.applyImpulse(new CANNON.Vec3(0, 7, 0), ballBody.position);
+    }
+    if (!keys['Space']) keys['_spaceUsed'] = false;
+
+    // Sync mesh
+    ballMesh.position.copy(ballBody.position);
+    ballMesh.quaternion.copy(ballBody.quaternion);
+
+    // Check fall
+    if (ballBody.position.y < -8) respawn();
+
+    // Checkpoint: check platform proximity
+    levels[currentLevel].platforms.forEach((pd, i) => {
+      const pm = platformMeshes[i];
+      if (!pm) return;
+      const dx = ballBody.position.x - pm.position.x;
+      const dy = ballBody.position.y - pm.position.y;
+      const dz = ballBody.position.z - pm.position.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist < 4 && i > checkpointPlatIndex) {
+        checkpointPlatIndex = i;
+        checkpointPos.set(pm.position.x, pm.position.y + 1, pm.position.z);
+      }
+    });
+
+    // Collect orbs
+    orbMeshes.forEach((om, i) => {
+      if (orbCollected[i]) return;
+      const dx = ballBody.position.x - om.position.x;
+      const dy = ballBody.position.y - om.position.y;
+      const dz = ballBody.position.z - om.position.z;
+      if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 1.2) {
+        orbCollected[i] = true;
+        orbsCollected++;
+        scene.remove(om);
+        scene.remove(orbLights[i]);
+        updateHUD();
+      }
+    });
+
+    // Check gate
+    if (orbsCollected >= 3) {
+      const gp = gateBody.position;
+      const dx = ballBody.position.x - gp.x;
+      const dy = ballBody.position.y - gp.y;
+      const dz = ballBody.position.z - gp.z;
+      if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 2) {
+        gameStarted = false;
+        setTimeout(levelComplete, 300);
+      }
+    }
+
+    // Moving platforms
+    movingPlatformData.forEach(mpd => {
+      mpd.t += dt;
+      const i = mpd.meshIdx;
+      const pm = platformMeshes[i];
+      const pb = platformBodies[i];
+      const [bx, by, bz] = mpd.basePos;
+      let nx = bx, ny = by, nz = bz;
+      const offset = Math.sin(mpd.t * mpd.freq) * mpd.amp;
+      if (mpd.axis === 'x') nx = bx + offset;
+      if (mpd.axis === 'z') nz = bz + offset;
+      pm.position.set(nx, ny, nz);
+      pb.position.set(nx, ny, nz);
+      pb.velocity.set(0, 0, 0);
+    });
+
+    // Orb bob animation
+    orbMeshes.forEach((om, i) => {
+      if (orbCollected[i]) return;
+      om.position.y = levels[currentLevel].orbs[i][1] + Math.sin(orbBobT * 2 + i * 2) * 0.2;
+      om.rotation.y += dt * 2;
+    });
+
+    // Gate pulse
+    if (gateMesh) {
+      gateMesh.material.emissiveIntensity = orbsCollected >= 3 ? 0.8 + 0.4 * Math.sin(gatePulseT * 4) : 0.3 + 0.15 * Math.sin(gatePulseT * 2);
+    }
+  }
+
+  // Camera follow
+  const ballPos = new THREE.Vector3(ballBody.position.x, ballBody.position.y, ballBody.position.z);
+  const camDist = 12;
+  const camHeight = camDist * Math.sin(camAngleV);
+  const camHDist = camDist * Math.cos(camAngleV);
+  const desiredCamPos = new THREE.Vector3(
+    ballPos.x + Math.sin(camAngleH) * camHDist,
+    ballPos.y + camHeight,
+    ballPos.z + Math.cos(camAngleH) * camHDist
+  );
+  camera.position.lerp(desiredCamPos, 0.1);
+  camTarget.lerp(ballPos, 0.1);
+  camera.lookAt(camTarget);
+
+  renderer.render(scene, camera);
+}
+
+// --- Start ---
+document.getElementById('start-btn').addEventListener('click', () => {
+  hideOverlay();
+  buildLevel(currentLevel);
+  gameStarted = true;
+  animate(0);
+});
+</script>
+</body>
+</html>

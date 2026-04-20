@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brick Storm — Kenneth D'Silva</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #060a12; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: monospace; }
+  #portfolio-link {
+    position: fixed; top: 24px; left: 24px; z-index: 100;
+    color: #00ffff; text-decoration: none; font-family: monospace; font-size: 13px;
+    background: rgba(0,0,0,0.7); padding: 6px 12px; border: 1px solid #00ffff33;
+    border-radius: 4px; transition: background 0.2s;
+  }
+  #portfolio-link:hover { background: rgba(0,255,255,0.1); }
+  #game-canvas { display: block; }
+</style>
+</head>
+<body>
+<a href="index.html" id="portfolio-link">← Portfolio</a>
+<canvas id="game-canvas" width="800" height="600"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.3.2/dist/pixi.min.js"></script>
+<script>
+const CW = 800, CH = 600;
+const { Engine, Render: MRender, Runner, Bodies, Body, World, Events, Vector } = Matter;
+
+// PixiJS App
+const app = new PIXI.Application({
+  view: document.getElementById('game-canvas'),
+  width: CW, height: CH,
+  backgroundColor: 0x060a12,
+  antialias: true
+});
+
+// Matter.js Engine
+const engine = Engine.create({ gravity: { x: 0, y: 0 } });
+const mWorld = engine.world;
+
+// Game state
+let state = 'splash'; // splash, playing, gameover, win
+let lives = 3;
+let score = 0;
+let level = 1;
+let highScore = parseInt(localStorage.getItem('brickStormHigh') || '0');
+let balls = [];
+let bricks = [];
+let powerUps = [];
+let paddleWidth = 110;
+let paddleTargetX = CW / 2;
+let ballOnPaddle = true;
+let baseBallSpeed = 7;
+let ballSpeed = 7;
+let paddleWidthTimer = 0;
+let slowTimer = 0;
+let particles = [];
+let mouseX = CW / 2;
+
+// Matter.js bodies
+let paddleBody, leftWall, rightWall, topWall;
+let mainBallBody = null;
+
+// PixiJS containers
+const bgLayer = new PIXI.Container();
+const gameLayer = new PIXI.Container();
+const uiLayer = new PIXI.Container();
+app.stage.addChild(bgLayer, gameLayer, uiLayer);
+
+// Graphics objects for pixi
+let paddleGfx, brickGfxMap = new Map(), ballGfxMap = new Map(), powerUpGfxMap = new Map();
+let particleGfxList = [];
+let hudScore, hudLevel, hudLives, hudMsg;
+let splashOverlay, gameOverOverlay;
+
+// --- Setup Matter.js walls ---
+function setupWalls() {
+  leftWall = Bodies.rectangle(-5, CH / 2, 10, CH, { isStatic: true, label: 'wall' });
+  rightWall = Bodies.rectangle(CW + 5, CH / 2, 10, CH, { isStatic: true, label: 'wall' });
+  topWall = Bodies.rectangle(CW / 2, -5, CW, 10, { isStatic: true, label: 'wall' });
+  World.add(mWorld, [leftWall, rightWall, topWall]);
+}
+
+// --- Paddle ---
+function createPaddle() {
+  paddleBody = Bodies.rectangle(CW / 2, CH - 40, paddleWidth, 14, {
+    isStatic: true, label: 'paddle', restitution: 1, friction: 0
+  });
+  World.add(mWorld, paddleBody);
+
+  paddleGfx = new PIXI.Graphics();
+  gameLayer.addChild(paddleGfx);
+  drawPaddle();
+}
+
+function drawPaddle() {
+  paddleGfx.clear();
+  const pw = paddleWidth;
+  const px = paddleBody.position.x - pw / 2;
+  const py = paddleBody.position.y - 7;
+  // Gradient effect via multiple rects
+  paddleGfx.beginFill(0x003355);
+  paddleGfx.drawRoundedRect(px, py, pw, 14, 4);
+  paddleGfx.endFill();
+  paddleGfx.lineStyle(2, 0x00ffff, 1);
+  paddleGfx.drawRoundedRect(px, py, pw, 14, 4);
+  paddleGfx.lineStyle(1, 0x80ffff, 0.6);
+  paddleGfx.moveTo(px + 4, py + 3);
+  paddleGfx.lineTo(px + pw - 4, py + 3);
+}
+
+// --- Ball ---
+function createBall(x, y, vx, vy) {
+  const b = Bodies.circle(x, y, 10, {
+    restitution: 1, friction: 0, frictionAir: 0, frictionStatic: 0,
+    label: 'ball', density: 0.001
+  });
+  Body.setVelocity(b, { x: vx, y: vy });
+  World.add(mWorld, b);
+  balls.push(b);
+
+  const gfx = new PIXI.Graphics();
+  gfx.beginFill(0x00ffff, 0.9);
+  gfx.drawCircle(0, 0, 10);
+  gfx.endFill();
+  gfx.lineStyle(2, 0xffffff, 0.7);
+  gfx.drawCircle(0, 0, 10);
+  // glow ring
+  gfx.lineStyle(4, 0x00ffff, 0.2);
+  gfx.drawCircle(0, 0, 14);
+  gameLayer.addChild(gfx);
+  ballGfxMap.set(b.id, gfx);
+  return b;
+}
+
+function removeBall(b) {
+  World.remove(mWorld, b);
+  const gfx = ballGfxMap.get(b.id);
+  if (gfx) { gameLayer.removeChild(gfx); gfx.destroy(); ballGfxMap.delete(b.id); }
+  balls = balls.filter(x => x !== b);
+}
+
+// --- Bricks ---
+const BRICK_W = 72, BRICK_H = 22, BRICK_MARGIN = 6;
+const COLS = 9, ROWS = 6;
+const GRID_X = (CW - (COLS * (BRICK_W + BRICK_MARGIN) - BRICK_MARGIN)) / 2;
+const GRID_Y = 80;
+
+function createBricks(levelNum) {
+  // Clear old
+  bricks.forEach(b => {
+    World.remove(mWorld, b.body);
+    if (b.gfx) { gameLayer.removeChild(b.gfx); b.gfx.destroy(); }
+  });
+  bricks = [];
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      // Level 2+: skip some bricks for tighter pattern
+      if (levelNum >= 2 && (row + col) % 3 === 0 && row > 1) continue;
+
+      const hp = row < 2 ? 3 : row < 4 ? 2 : 1;
+      const bx = GRID_X + col * (BRICK_W + BRICK_MARGIN) + BRICK_W / 2;
+      const by = GRID_Y + row * (BRICK_H + BRICK_MARGIN) + BRICK_H / 2;
+
+      const body = Bodies.rectangle(bx, by, BRICK_W, BRICK_H, {
+        isStatic: true, label: 'brick', restitution: 1, friction: 0
+      });
+      body.gameData = { hp, maxHp: hp, row, col };
+      World.add(mWorld, body);
+
+      const gfx = new PIXI.Graphics();
+      gameLayer.addChild(gfx);
+      const brickObj = { body, gfx, hp, maxHp: hp };
+      bricks.push(brickObj);
+      drawBrick(brickObj);
+    }
+  }
+}
+
+function drawBrick(b) {
+  b.gfx.clear();
+  const bx = b.body.position.x - BRICK_W / 2;
+  const by = b.body.position.y - BRICK_H / 2;
+  let fillColor, strokeColor;
+  if (b.hp === 3) { fillColor = 0x220005; strokeColor = 0xff2244; }
+  else if (b.hp === 2) { fillColor = 0x1a0d00; strokeColor = 0xff8800; }
+  else { fillColor = 0x001a1a; strokeColor = 0x00ffff; }
+
+  b.gfx.beginFill(fillColor);
+  b.gfx.drawRoundedRect(bx, by, BRICK_W, BRICK_H, 3);
+  b.gfx.endFill();
+  b.gfx.lineStyle(1.5, strokeColor, 1);
+  b.gfx.drawRoundedRect(bx, by, BRICK_W, BRICK_H, 3);
+  // HP indicator
+  for (let i = 0; i < b.hp; i++) {
+    b.gfx.beginFill(strokeColor, 0.6);
+    b.gfx.drawCircle(bx + 8 + i * 10, by + BRICK_H / 2, 3);
+    b.gfx.endFill();
+  }
+}
+
+// --- Power-ups ---
+function spawnPowerUp(x, y) {
+  const types = ['WIDE', 'MULTI', 'SLOW'];
+  const type = types[Math.floor(Math.random() * 3)];
+  const colors = { WIDE: 0x00ff88, MULTI: 0xff00ff, SLOW: 0xffff00 };
+
+  const gfx = new PIXI.Graphics();
+  gfx.beginFill(colors[type], 0.8);
+  gfx.drawCircle(0, 0, 10);
+  gfx.endFill();
+  gfx.lineStyle(2, 0xffffff, 0.9);
+  gfx.drawCircle(0, 0, 10);
+  const label = new PIXI.Text(type[0], { fontSize: 9, fill: 0xffffff, fontFamily: 'monospace' });
+  label.anchor.set(0.5);
+  gfx.addChild(label);
+  gfx.x = x; gfx.y = y;
+  gameLayer.addChild(gfx);
+  powerUps.push({ gfx, x, y, type, vy: 1.5 });
+}
+
+// --- Particles ---
+function spawnParticles(x, y, color) {
+  for (let i = 0; i < 10; i++) {
+    const gfx = new PIXI.Graphics();
+    gfx.beginFill(color, 1);
+    gfx.drawRect(-2, -2, 4, 4);
+    gfx.endFill();
+    gfx.x = x; gfx.y = y;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 4;
+    gameLayer.addChild(gfx);
+    particles.push({ gfx, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 40 });
+  }
+}
+
+// --- HUD ---
+function createHUD() {
+  hudScore = new PIXI.Text('SCORE: 0', { fontSize: 16, fill: 0x00ffff, fontFamily: 'monospace' });
+  hudScore.x = 16; hudScore.y = 14;
+  hudLevel = new PIXI.Text('LEVEL: 1', { fontSize: 16, fill: 0xff00ff, fontFamily: 'monospace' });
+  hudLevel.x = CW - 110; hudLevel.y = 14;
+  hudMsg = new PIXI.Text('CLICK TO LAUNCH', { fontSize: 18, fill: 0xffffff, fontFamily: 'monospace' });
+  hudMsg.anchor.set(0.5);
+  hudMsg.x = CW / 2; hudMsg.y = CH - 80;
+  uiLayer.addChild(hudScore, hudLevel, hudMsg);
+
+  // Lives circles
+  hudLives = [];
+  for (let i = 0; i < 3; i++) {
+    const g = new PIXI.Graphics();
+    g.beginFill(0xff2255);
+    g.drawCircle(0, 0, 7);
+    g.endFill();
+    g.x = 20 + i * 20; g.y = CH - 20;
+    uiLayer.addChild(g);
+    hudLives.push(g);
+  }
+}
+
+function updateHUD() {
+  hudScore.text = 'SCORE: ' + score;
+  hudLevel.text = 'LEVEL: ' + level;
+  for (let i = 0; i < 3; i++) {
+    hudLives[i].alpha = i < lives ? 1 : 0.15;
+  }
+  if (ballOnPaddle) {
+    hudMsg.text = 'CLICK / SPACE TO LAUNCH';
+    hudMsg.visible = true;
+  } else {
+    hudMsg.visible = false;
+  }
+}
+
+// --- Splash screen ---
+function showSplash() {
+  splashOverlay = new PIXI.Container();
+  const bg = new PIXI.Graphics();
+  bg.beginFill(0x000000, 0.85);
+  bg.drawRect(0, 0, CW, CH);
+  bg.endFill();
+  const title = new PIXI.Text('BRICK STORM', { fontSize: 56, fill: 0x00ffff, fontFamily: 'monospace', stroke: 0x003366, strokeThickness: 5 });
+  title.anchor.set(0.5); title.x = CW / 2; title.y = CH / 2 - 80;
+  const sub = new PIXI.Text('CLICK TO PLAY', { fontSize: 22, fill: 0xffffff, fontFamily: 'monospace' });
+  sub.anchor.set(0.5); sub.x = CW / 2; sub.y = CH / 2;
+  const hint = new PIXI.Text('← → PADDLE · MOUSE TO AIM', { fontSize: 14, fill: 0x888888, fontFamily: 'monospace' });
+  hint.anchor.set(0.5); hint.x = CW / 2; hint.y = CH / 2 + 40;
+  splashOverlay.addChild(bg, title, sub, hint);
+  uiLayer.addChild(splashOverlay);
+
+  let t = 0;
+  app.ticker.add(function blink() {
+    t += 0.05;
+    sub.alpha = 0.5 + 0.5 * Math.sin(t * 3);
+    if (state !== 'splash') app.ticker.remove(blink);
+  });
+}
+
+function hideSplash() {
+  if (splashOverlay) { uiLayer.removeChild(splashOverlay); splashOverlay.destroy(); splashOverlay = null; }
+}
+
+// --- Game over / win screen ---
+function showGameOver(win) {
+  const overlay = new PIXI.Container();
+  const bg = new PIXI.Graphics();
+  bg.beginFill(0x000000, 0.88);
+  bg.drawRect(0, 0, CW, CH);
+  bg.endFill();
+  overlay.addChild(bg);
+
+  const titleTxt = win ? 'YOU WIN!' : 'GAME OVER';
+  const titleColor = win ? 0x00ff88 : 0xff0055;
+  const title = new PIXI.Text(titleTxt, { fontSize: 52, fill: titleColor, fontFamily: 'monospace', stroke: 0x000000, strokeThickness: 5 });
+  title.anchor.set(0.5); title.x = CW / 2; title.y = CH / 2 - 90;
+
+  const sc = new PIXI.Text('SCORE: ' + score, { fontSize: 26, fill: 0xffffff, fontFamily: 'monospace' });
+  sc.anchor.set(0.5); sc.x = CW / 2; sc.y = CH / 2 - 30;
+  const hs = new PIXI.Text('BEST: ' + Math.max(score, highScore), { fontSize: 18, fill: 0x00ffff, fontFamily: 'monospace' });
+  hs.anchor.set(0.5); hs.x = CW / 2; hs.y = CH / 2 + 10;
+
+  const restartBtn = new PIXI.Text('[ RESTART ]', { fontSize: 24, fill: 0x00ffff, fontFamily: 'monospace', backgroundColor: 0x001133 });
+  restartBtn.anchor.set(0.5); restartBtn.x = CW / 2; restartBtn.y = CH / 2 + 70;
+  restartBtn.interactive = true; restartBtn.buttonMode = true;
+  restartBtn.on('pointerover', () => restartBtn.style.fill = 0xffffff);
+  restartBtn.on('pointerout', () => restartBtn.style.fill = 0x00ffff);
+  restartBtn.on('pointerdown', () => { resetGame(); });
+
+  overlay.addChild(title, sc, hs, restartBtn);
+  uiLayer.addChild(overlay);
+  gameOverOverlay = overlay;
+}
+
+// --- Physics event: collision ---
+Events.on(engine, 'collisionStart', (evt) => {
+  if (state !== 'playing') return;
+  evt.pairs.forEach(pair => {
+    const { bodyA, bodyB } = pair;
+    const ballBody = [bodyA, bodyB].find(b => b.label === 'ball');
+    const brickBody = [bodyA, bodyB].find(b => b.label === 'brick');
+    const paddleBody2 = [bodyA, bodyB].find(b => b.label === 'paddle');
+
+    if (ballBody && paddleBody2) {
+      // Speed up on paddle hit
+      ballSpeed = Math.min(ballSpeed + 0.4, 14);
+      // Add slight angle variation based on hit position
+      const hitPos = ballBody.position.x - paddleBody2.position.x;
+      const normalizedHit = hitPos / (paddleWidth / 2);
+      const angle = normalizedHit * 1.1; // -1.1 to 1.1 radians max
+      const speed = ballSpeed;
+      const vy = -Math.abs(Math.cos(angle)) * speed;
+      const vx = Math.sin(angle) * speed;
+      Body.setVelocity(ballBody, { x: vx, y: vy });
+    }
+
+    if (ballBody && brickBody) {
+      const brickObj = bricks.find(b => b.body === brickBody);
+      if (brickObj) {
+        brickObj.hp--;
+        brickBody.gameData.hp--;
+        if (brickObj.hp <= 0) {
+          score += 10;
+          if (score > highScore) { highScore = score; localStorage.setItem('brickStormHigh', highScore); }
+          spawnParticles(brickBody.position.x, brickBody.position.y,
+            brickObj.maxHp === 3 ? 0xff2244 : brickObj.maxHp === 2 ? 0xff8800 : 0x00ffff);
+          if (Math.random() < 0.2) spawnPowerUp(brickBody.position.x, brickBody.position.y);
+          World.remove(mWorld, brickBody);
+          gameLayer.removeChild(brickObj.gfx);
+          brickObj.gfx.destroy();
+          bricks = bricks.filter(b => b !== brickObj);
+          brickGfxMap.delete(brickBody.id);
+
+          // Check win
+          if (bricks.length === 0) {
+            setTimeout(nextLevel, 500);
+          }
+        } else {
+          drawBrick(brickObj);
+        }
+      }
+    }
+  });
+});
+
+function nextLevel() {
+  level++;
+  ballOnPaddle = true;
+  ballSpeed = 7 + level;
+  baseBallSpeed = 7 + level;
+  paddleWidth = 110;
+  paddleWidthTimer = 0;
+  slowTimer = 0;
+  powerUps.forEach(p => { gameLayer.removeChild(p.gfx); p.gfx.destroy(); });
+  powerUps = [];
+  balls.forEach(b => removeBall(b));
+  balls = [];
+  mainBallBody = null;
+  createBricks(level);
+
+  // Reset paddle
+  Body.setPosition(paddleBody, { x: CW / 2, y: CH - 40 });
+  Body.setSize(paddleBody, paddleWidth, 14);
+  paddleTargetX = CW / 2;
+  drawPaddle();
+
+  if (level > 3) {
+    state = 'win';
+    showGameOver(true);
+  }
+}
+
+function resetGame() {
+  if (gameOverOverlay) { uiLayer.removeChild(gameOverOverlay); gameOverOverlay.destroy(); gameOverOverlay = null; }
+  lives = 3;
+  score = 0;
+  level = 1;
+  ballSpeed = 7;
+  baseBallSpeed = 7;
+  ballOnPaddle = true;
+  paddleWidth = 110;
+  paddleWidthTimer = 0;
+  slowTimer = 0;
+  powerUps.forEach(p => { gameLayer.removeChild(p.gfx); p.gfx.destroy(); });
+  powerUps = [];
+  balls.forEach(b => removeBall(b));
+  balls = [];
+  mainBallBody = null;
+  particles.forEach(p => { gameLayer.removeChild(p.gfx); p.gfx.destroy(); });
+  particles = [];
+  bricks.forEach(b => {
+    World.remove(mWorld, b.body);
+    if (b.gfx) { gameLayer.removeChild(b.gfx); b.gfx.destroy(); }
+  });
+  bricks = [];
+
+  Body.setPosition(paddleBody, { x: CW / 2, y: CH - 40 });
+  paddleTargetX = CW / 2;
+  createBricks(level);
+  state = 'playing';
+  updateHUD();
+}
+
+function launchBall() {
+  if (!ballOnPaddle) return;
+  ballOnPaddle = false;
+  const angle = -Math.PI / 4 + (Math.random() - 0.5) * 0.3;
+  const vx = Math.cos(angle) * ballSpeed;
+  const vy = -Math.abs(Math.sin(angle)) * ballSpeed;
+  mainBallBody = createBall(paddleBody.position.x, paddleBody.position.y - 25, vx, vy);
+}
+
+// Input
+document.addEventListener('mousemove', (e) => {
+  const rect = app.view.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+});
+
+document.addEventListener('touchmove', (e) => {
+  const rect = app.view.getBoundingClientRect();
+  mouseX = e.touches[0].clientX - rect.left;
+  e.preventDefault();
+}, { passive: false });
+
+document.addEventListener('click', () => {
+  if (state === 'splash') {
+    state = 'playing';
+    hideSplash();
+    updateHUD();
+  } else if (state === 'playing' && ballOnPaddle) {
+    launchBall();
+  }
+});
+
+document.addEventListener('touchstart', () => {
+  if (state === 'splash') {
+    state = 'playing';
+    hideSplash();
+    updateHUD();
+  } else if (state === 'playing' && ballOnPaddle) {
+    launchBall();
+  }
+});
+
+const keysDown = {};
+document.addEventListener('keydown', e => {
+  keysDown[e.code] = true;
+  if (e.code === 'Space') {
+    if (state === 'splash') {
+      state = 'playing';
+      hideSplash();
+      updateHUD();
+    } else if (state === 'playing' && ballOnPaddle) {
+      launchBall();
+    }
+    e.preventDefault();
+  }
+});
+document.addEventListener('keyup', e => { keysDown[e.code] = false; });
+
+// --- Background ---
+function drawBackground() {
+  const bg = new PIXI.Graphics();
+  bg.beginFill(0x060a12);
+  bg.drawRect(0, 0, CW, CH);
+  bg.endFill();
+  // subtle grid
+  bg.lineStyle(1, 0x0a1020, 1);
+  for (let x = 0; x < CW; x += 40) { bg.moveTo(x, 0); bg.lineTo(x, CH); }
+  for (let y = 0; y < CH; y += 40) { bg.moveTo(0, y); bg.lineTo(CW, y); }
+  bgLayer.addChild(bg);
+}
+
+// --- Init ---
+drawBackground();
+setupWalls();
+createPaddle();
+createBricks(level);
+createHUD();
+showSplash();
+updateHUD();
+
+// --- Main loop ---
+let frameCount = 0;
+app.ticker.add((delta) => {
+  if (state !== 'playing') return;
+  frameCount++;
+
+  // Keyboard paddle movement
+  if (keysDown['ArrowLeft'] || keysDown['KeyA']) mouseX = Math.max(paddleWidth / 2, mouseX - 6);
+  if (keysDown['ArrowRight'] || keysDown['KeyD']) mouseX = Math.min(CW - paddleWidth / 2, mouseX + 6);
+
+  // Move paddle
+  const clampedX = Math.max(paddleWidth / 2, Math.min(CW - paddleWidth / 2, mouseX));
+  Body.setPosition(paddleBody, { x: clampedX, y: CH - 40 });
+
+  // Update paddle size for power-up
+  if (paddleWidthTimer > 0) {
+    paddleWidthTimer -= delta;
+    if (paddleWidthTimer <= 0) {
+      paddleWidth = 110;
+      Body.set(paddleBody, 'vertices', Bodies.rectangle(0, 0, paddleWidth, 14).vertices);
+      paddleWidthTimer = 0;
+    }
+  }
+
+  if (slowTimer > 0) {
+    slowTimer -= delta;
+    if (slowTimer <= 0) {
+      slowTimer = 0;
+    }
+  }
+
+  // Ball on paddle follows paddle
+  if (ballOnPaddle) {
+    drawPaddle();
+    updateHUD();
+    return;
+  }
+
+  // Engine step
+  Engine.update(engine, 1000 / 60 * delta);
+
+  // Enforce constant ball speeds
+  balls.forEach(b => {
+    const v = b.velocity;
+    const mag = Math.sqrt(v.x * v.x + v.y * v.y);
+    if (mag > 0.01) {
+      const targetSpeed = slowTimer > 0 ? ballSpeed * 0.7 : ballSpeed;
+      Body.setVelocity(b, { x: (v.x / mag) * targetSpeed, y: (v.y / mag) * targetSpeed });
+    }
+    // Ensure minimum y velocity to avoid horizontal loops
+    if (Math.abs(b.velocity.y) < 1.5) {
+      Body.setVelocity(b, { x: b.velocity.x, y: b.velocity.y < 0 ? -1.5 : 1.5 });
+    }
+  });
+
+  // Check ball below paddle
+  balls.forEach(b => {
+    if (b.position.y > CH + 20) {
+      removeBall(b);
+    }
+  });
+
+  if (balls.length === 0 && !ballOnPaddle) {
+    lives--;
+    updateHUD();
+    if (lives <= 0) {
+      state = 'gameover';
+      if (score > highScore) { highScore = score; localStorage.setItem('brickStormHigh', highScore); }
+      showGameOver(false);
+      return;
+    }
+    ballOnPaddle = true;
+    ballSpeed = baseBallSpeed;
+    mainBallBody = null;
+  }
+
+  // Sync PixiJS ball graphics to matter bodies
+  balls.forEach(b => {
+    const gfx = ballGfxMap.get(b.id);
+    if (gfx) { gfx.x = b.position.x; gfx.y = b.position.y; }
+  });
+
+  drawPaddle();
+
+  // Update power-ups
+  powerUps.forEach((p, i) => {
+    p.y += p.vy;
+    p.gfx.x = p.x;
+    p.gfx.y = p.y;
+    p.gfx.rotation += 0.05;
+
+    // Check catch by paddle
+    const px = paddleBody.position.x;
+    const py = paddleBody.position.y;
+    if (Math.abs(p.x - px) < paddleWidth / 2 + 10 && Math.abs(p.y - py) < 20) {
+      // Apply power-up
+      if (p.type === 'WIDE') {
+        paddleWidth = 150;
+        paddleWidthTimer = 8 * 60;
+      } else if (p.type === 'MULTI') {
+        if (balls.length > 0) {
+          const ref = balls[0];
+          createBall(ref.position.x + 5, ref.position.y, -ref.velocity.y, ref.velocity.x);
+          createBall(ref.position.x - 5, ref.position.y, ref.velocity.y, -ref.velocity.x);
+        }
+      } else if (p.type === 'SLOW') {
+        slowTimer = 5 * 60;
+      }
+      gameLayer.removeChild(p.gfx);
+      p.gfx.destroy();
+      powerUps.splice(i, 1);
+      return;
+    }
+    if (p.y > CH + 20) {
+      gameLayer.removeChild(p.gfx);
+      p.gfx.destroy();
+      powerUps.splice(i, 1);
+    }
+  });
+
+  // Update particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.gfx.x += p.vx;
+    p.gfx.y += p.vy;
+    p.vy += 0.1;
+    p.life--;
+    p.gfx.alpha = p.life / 40;
+    if (p.life <= 0) {
+      gameLayer.removeChild(p.gfx);
+      p.gfx.destroy();
+      particles.splice(i, 1);
+    }
+  }
+
+  updateHUD();
+});
+</script>
+</body>
+</html>
