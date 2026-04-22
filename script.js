@@ -365,24 +365,14 @@ class TextScramble {
 ══════════════════════════════════════════════════ */
 function animHero() {
   const nameEl = document.getElementById('hero-name');
-  /* Per-theme skew: Bebas Neue (condensed sans) handles aggressive skew well.
-     Wide serifs (Playfair, Marcellus, Fraunces) look best with gentle skew.
-     Monospace (Major Mono) somewhere in between.                              */
-  const theme = document.documentElement.getAttribute('data-theme') || 'enterprise';
-  const skewMap = { enterprise: -8, startup: -8, creative: -8, fintech: -8, saas: -8, luxury: -6, gaming: -8, sustainable: -6 };
-  const skew = skewMap[theme] || -6;
-  nameEl.querySelectorAll('.ln').forEach(line => {
-    const t = line.textContent;
-    line.innerHTML = t.split('').map(c => `<span class="ch" style="display:inline-block;opacity:0;transform:translateY(110%) skewX(${skew}deg)">${c === ' ' ? '&nbsp;' : c}</span>`).join('');
+  // Use CSS animations for better performance
+  const lines = nameEl.querySelectorAll('.ln');
+  lines.forEach((line, i) => {
+    line.style.animation = `slideUp 0.8s ease-out ${0.35 + i * 0.1}s forwards`;
   });
-  const allCh = [...nameEl.querySelectorAll('.ch')];
-  if (window.gsap) {
-    gsap.to(allCh, { y: 0, opacity: 1, skewX: 0, duration: .75, ease: 'power3.out', stagger: .032, delay: .35 });
-  } else {
-    allCh.forEach((c, i) => setTimeout(() => { c.style.opacity = '1'; c.style.transform = 'none'; c.style.transition = 'all .6s'; }, 350 + i * 35));
-  }
+
   const sub = document.getElementById('hero-sub');
-  setTimeout(() => new TextScramble(sub).setText('Magento and Shopify Developer'), 1350);
+  setTimeout(() => new TextScramble(sub).setText('Magento and Shopify Developer'), 1000);
 }
 
 /* ══════════════════════════════════════════════════
@@ -812,14 +802,17 @@ document.querySelectorAll('.g-tab').forEach(tab => {
   const cx = cv.getContext('2d');
   let W, H, pts = [];
   function setup() {
-    W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
-    H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
-    const n = Math.min(Math.floor(W * H / 14000), 55);
-    pts = Array.from({ length: n }, () => ({
-      x: Math.random() * W, y: Math.random() * H,
-      vx: (Math.random() - .5) * .45, vy: (Math.random() - .5) * .45,
-      r: 1 + Math.random() * 2
-    }));
+    // Defer layout queries to avoid forced reflows
+    requestAnimationFrame(() => {
+      W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
+      H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
+      const n = Math.min(Math.floor(W * H / 14000), 55);
+      pts = Array.from({ length: n }, () => ({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: (Math.random() - .5) * .45, vy: (Math.random() - .5) * .45,
+        r: 1 + Math.random() * 2
+      }));
+    });
   }
   function rgb() { return getComputedStyle(document.documentElement).getPropertyValue('--prgb').trim() || '15,118,110'; }
   let pt = 0;
@@ -862,15 +855,18 @@ document.querySelectorAll('.g-tab').forEach(tab => {
   const cx = cv.getContext('2d');
   let W, H, cols = [];
   function setup() {
-    W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
-    H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
-    const n = Math.floor(W / 55);
-    cols = Array.from({ length: n }, (_, i) => ({
+    // Defer layout queries to avoid forced reflows
+    requestAnimationFrame(() => {
+      W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
+      H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
+      const n = Math.floor(W / 55);
+      cols = Array.from({ length: n }, (_, i) => ({
       x: i * (W / n) + Math.random() * 18,
       maxH: H * (0.3 + Math.random() * 0.6),
       speed: .4 + Math.random() * .5,
       phase: Math.random() * Math.PI * 2
     }));
+    });
   }
   function rgb() { return getComputedStyle(document.documentElement).getPropertyValue('--prgb').trim() || '15,118,110'; }
   let t = 0, pt = 0;
@@ -901,8 +897,11 @@ document.querySelectorAll('.g-tab').forEach(tab => {
   const cx = cv.getContext('2d');
   let W, H;
   function setup() {
-    W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
-    H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
+    // Defer layout queries to avoid forced reflows
+    requestAnimationFrame(() => {
+      W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
+      H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
+    });
   }
   function rgb() { return getComputedStyle(document.documentElement).getPropertyValue('--prgb').trim() || '15,118,110'; }
   let t = 0, pt = 0;
@@ -934,8 +933,11 @@ document.querySelectorAll('.g-tab').forEach(tab => {
   const cx = cv.getContext('2d');
   let W, H;
   function setup() {
-    W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
-    H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
+    // Defer layout queries to avoid forced reflows
+    requestAnimationFrame(() => {
+      W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
+      H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
+    });
   }
   function rgb() { return getComputedStyle(document.documentElement).getPropertyValue('--prgb').trim() || '15,118,110'; }
   let t = 0, pt = 0;
@@ -966,7 +968,9 @@ document.querySelectorAll('.g-tab').forEach(tab => {
   const cx = cv.getContext('2d');
   let W, H, streams = [];
   function setup() {
-    W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
+    // Defer layout queries to avoid forced reflows
+    requestAnimationFrame(() => {
+      W = cv.width = cv.offsetWidth || cv.parentElement.clientWidth;
     H = cv.height = cv.offsetHeight || cv.parentElement.clientHeight;
     const n = Math.min(Math.ceil(W / 38), 50);
     streams = Array.from({ length: n }, () => ({
@@ -977,6 +981,7 @@ document.querySelectorAll('.g-tab').forEach(tab => {
       a: 0.035 + Math.random() * .055,
       w: 0.7 + Math.random() * .8
     }));
+    });
   }
   function rgb() { return getComputedStyle(document.documentElement).getPropertyValue('--prgb').trim() || '15,118,110'; }
   let pt = 0;
@@ -1043,16 +1048,8 @@ document.querySelectorAll('.g-tab').forEach(tab => {
 ══════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
   animHero();
-  // Delay GitHub API call to prioritize initial page load
-  if ('requestIdleCallback' in window) {
-    requestIdleCallback(() => fetchRepos(), { timeout: 2000 });
-  } else {
-    setTimeout(() => fetchRepos(), 100);
-  }
-  // Init first game
-  games.breaker.init();
-
-  // Initialize scroll-triggered animations
+  // Delay GitHub API call significantly to avoid blocking LCP
+  setTimeout(() => fetchRepos(), 3000);
   initScrollAnimations();
 });
 
