@@ -378,8 +378,9 @@ function animHero() {
 /* ══════════════════════════════════════════════════
    POPULATE STACK + WORK
 ══════════════════════════════════════════════════ */
-(function () {
+function populateStack() {
   const g = document.getElementById('stack-grid');
+  if (!g) return;
   TECH.forEach(t => {
     const el = document.createElement('div'); el.className = 'tc';
     const icon = t.icon
@@ -388,7 +389,7 @@ function animHero() {
     el.innerHTML = `${icon}<span class="tc-name">${t.name}</span><span class="tc-type">${t.type}</span>`;
     g.appendChild(el);
   });
-})();
+}
 
 function patBg(pat) {
   const stroke = `rgb(${curRgb})`;
@@ -796,7 +797,16 @@ document.querySelectorAll('.g-tab').forEach(tab => {
 ══════════════════════════════════════════════════ */
 
 /* ── About — particle constellation ── */
-(function () {
+/* ── Canvas Animations — Deferred until after critical path ── */
+function initCanvasAnimations() {
+  initAboutCanvas();
+  initStackCanvas();
+  initWorkCanvas();
+  initGamesCanvas();
+  initProjectsCanvas();
+}
+
+function initAboutCanvas() {
   const cv = document.getElementById('about-canvas');
   if (!cv) return;
   const cx = cv.getContext('2d');
@@ -846,10 +856,10 @@ document.querySelectorAll('.g-tab').forEach(tab => {
     });
   }
   setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
-})();
+}
 
 /* ── Stack — rising energy columns ── */
-(function () {
+function initStackCanvas() {
   const cv = document.getElementById('stack-canvas');
   if (!cv) return;
   const cx = cv.getContext('2d');
@@ -888,10 +898,10 @@ document.querySelectorAll('.g-tab').forEach(tab => {
     });
   }
   setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
-})();
+}
 
 /* ── Work — scrolling data grid with scan line ── */
-(function () {
+function initWorkCanvas() {
   const cv = document.getElementById('work-canvas');
   if (!cv) return;
   const cx = cv.getContext('2d');
@@ -924,10 +934,10 @@ document.querySelectorAll('.g-tab').forEach(tab => {
     cx.fillStyle = g; cx.fillRect(0, sy - 35, W, 70);
   }
   setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
-})();
+}
 
 /* ── Games — CRT scanlines + pixel noise ── */
-(function () {
+function initGamesCanvas() {
   const cv = document.getElementById('games-canvas');
   if (!cv) return;
   const cx = cv.getContext('2d');
@@ -959,10 +969,10 @@ document.querySelectorAll('.g-tab').forEach(tab => {
     }
   }
   setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
-})();
+}
 
 /* ── Projects — diagonal data streams ── */
-(function () {
+function initProjectsCanvas() {
   const cv = document.getElementById('projects-canvas');
   if (!cv) return;
   const cx = cv.getContext('2d');
@@ -1005,7 +1015,7 @@ document.querySelectorAll('.g-tab').forEach(tab => {
     });
   }
   setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
-})();
+}
 
 /* ── Contact — expanding concentric rings ── */
 (function () {
@@ -1043,13 +1053,25 @@ document.querySelectorAll('.g-tab').forEach(tab => {
   setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
 })();
 
+/* ── Games initialization — Deferred ── */
+function initGames() {
+  // Games initialization can be added here if needed
+  // Currently, games are initialized on demand by game selection
+}
+
 /* ══════════════════════════════════════════════════
    INIT
 ══════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
   animHero();
-  // Delay GitHub API call significantly to avoid blocking LCP
-  setTimeout(() => fetchRepos(), 3000);
+  // Initialize only critical path code
+  populateStack();
+  // Defer non-critical operations
+  setTimeout(() => {
+    fetchRepos();
+    initGames();
+    initCanvasAnimations();
+  }, 1500);
   initScrollAnimations();
 });
 
