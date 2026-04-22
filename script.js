@@ -857,7 +857,7 @@ function initAboutCanvas() {
       cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, Math.PI * 2); cx.fill();
     });
   }
-  setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
+  setup(); new ResizeObserver(() => setup()).observe(cv); requestAnimationFrame(draw);
 }
 
 /* ── Stack — rising energy columns ── */
@@ -899,7 +899,7 @@ function initStackCanvas() {
       cx.fillRect(c.x - 13, H - h, 26, h);
     });
   }
-  setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
+  setup(); new ResizeObserver(() => setup()).observe(cv); requestAnimationFrame(draw);
 }
 
 /* ── Work — scrolling data grid with scan line ── */
@@ -935,7 +935,7 @@ function initWorkCanvas() {
     g.addColorStop(0, `rgba(${r},0)`); g.addColorStop(.5, `rgba(${r},.048)`); g.addColorStop(1, `rgba(${r},0)`);
     cx.fillStyle = g; cx.fillRect(0, sy - 35, W, 70);
   }
-  setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
+  setup(); new ResizeObserver(() => setup()).observe(cv); requestAnimationFrame(draw);
 }
 
 /* ── Games — CRT scanlines + pixel noise ── */
@@ -970,7 +970,7 @@ function initGamesCanvas() {
       cx.fillRect(px, py, 2, 2);
     }
   }
-  setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
+  setup(); new ResizeObserver(() => setup()).observe(cv); requestAnimationFrame(draw);
 }
 
 /* ── Projects — diagonal data streams ── */
@@ -1016,7 +1016,7 @@ function initProjectsCanvas() {
       if (s.y > H + 60) { s.y = -60; s.x = Math.random() * W; }
     });
   }
-  setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
+  setup(); new ResizeObserver(() => setup()).observe(cv); requestAnimationFrame(draw);
 }
 
 /* ── Contact — expanding concentric rings ── */
@@ -1052,7 +1052,7 @@ function initProjectsCanvas() {
     for (let x = 0; x < W; x += GS) { cx.beginPath(); cx.moveTo(x, 0); cx.lineTo(x, H); cx.stroke(); }
     for (let y = 0; y < H; y += GS) { cx.beginPath(); cx.moveTo(0, y); cx.lineTo(W, y); cx.stroke(); }
   }
-  setup(); window.addEventListener('resize', setup); requestAnimationFrame(draw);
+  setup(); new ResizeObserver(() => setup()).observe(cv); requestAnimationFrame(draw);
 })();
 
 /* ── Games initialization — Deferred ── */
@@ -1070,11 +1070,14 @@ document.addEventListener('DOMContentLoaded', () => {
   populateStack();
   // Defer non-critical operations
   setTimeout(() => {
-    fetchRepos();
     initGames();
     initCanvasAnimations();
   }, 1500);
   initScrollAnimations();
+});
+
+window.addEventListener('load', () => {
+  fetchRepos();
 });
 
 /* ══════════════════════════════════════════════════
