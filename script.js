@@ -2,7 +2,7 @@
    DATA
 ══════════════════════════════════════════════════ */
 const TECH = [
-  { name: 'Magento', type: 'Platform', icon: 'magento', color: 'EE672F' },
+  { name: 'Magento', type: 'Platform', fallback: 'MG', color: 'EE672F' },
   { name: 'Shopify', type: 'Platform', icon: 'shopify', color: '7AB55C' },
   { name: 'Luma', type: 'Theme Stack', fallback: 'LU' },
   { name: 'Hyva', type: 'Theme Stack', fallback: 'HY' },
@@ -20,7 +20,7 @@ const TECH = [
   { name: 'Next.js', type: 'Framework', icon: 'nextdotjs', color: '111111' },
   { name: 'Fabric.js', type: 'Library', fallback: 'FJ' },
   { name: 'MySQL', type: 'Database', icon: 'mysql', color: '4479A1' },
-  { name: 'AWS', type: 'Infrastructure', icon: 'amazonaws', color: 'FF9900' },
+  { name: 'AWS', type: 'Infrastructure', fallback: 'AWS', color: 'FF9900' },
   { name: 'DigitalOcean', type: 'Infrastructure', icon: 'digitalocean', color: '0080FF' },
   { name: 'Apache', type: 'Server', icon: 'apache', color: 'D22128' },
   { name: 'Nginx', type: 'Server', icon: 'nginx', color: '009639' },
@@ -1043,7 +1043,12 @@ document.querySelectorAll('.g-tab').forEach(tab => {
 ══════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
   animHero();
-  fetchRepos();
+  // Delay GitHub API call to prioritize initial page load
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(() => fetchRepos(), { timeout: 2000 });
+  } else {
+    setTimeout(() => fetchRepos(), 100);
+  }
   // Init first game
   games.breaker.init();
 
