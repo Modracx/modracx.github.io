@@ -168,6 +168,7 @@ Object.entries(THEME_RGB).forEach(([name, rgb]) => {
   sw.className = 'mob-tswatch' + (savedTheme === name ? ' active' : '');
   sw.dataset.t = name;
   sw.style.background = `rgb(${rgb})`;
+  sw.setAttribute('aria-label', `Select ${name} theme`);
   sw.addEventListener('click', () => setTheme(name));
   mobRow.appendChild(sw);
 });
@@ -519,6 +520,7 @@ function updatePager() {
   for (let i = 1; i <= totalPages; i++) {
     const dot = document.createElement('button');
     dot.className = 'pg-dot' + (i === ghPage ? ' active' : '');
+    dot.setAttribute('aria-label', `Select page number ${i}`);
     dot.addEventListener('click', () => setPage(i));
     pages.appendChild(dot);
   }
