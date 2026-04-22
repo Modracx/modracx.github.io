@@ -1,474 +1,662 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Neon Rush — Kenneth D'Silva</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #050912; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: monospace; }
-  #portfolio-link {
-    position: fixed; top: 24px; left: 24px; z-index: 100;
-    color: #00ffff; text-decoration: none; font-family: monospace; font-size: 13px;
-    background: rgba(0,0,0,0.7); padding: 6px 12px; border: 1px solid #00ffff33;
-    border-radius: 4px; transition: background 0.2s;
-  }
-  #portfolio-link:hover { background: rgba(0,255,255,0.1); }
-  #game-container { position: relative; }
-  canvas { display: block; }
-</style>
-</head>
-<body>
-<a href="index.html" id="portfolio-link">← Portfolio</a>
-<div id="game-container"></div>
-<script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
-<script>
-const W = 900, H = 420;
-const GROUND_Y = 400;
-const GROUND_VISUAL_Y = 398;
-
-class BootScene extends Phaser.Scene {
-  constructor() { super('Boot'); }
-  preload() {
-    // Generate all textures programmatically
-  }
-  create() {
-    // Player texture - cyan glowing cube
-    let g = this.make.graphics({ x: 0, y: 0, add: false });
-    g.fillStyle(0x001a2e);
-    g.fillRect(0, 0, 28, 28);
-    g.lineStyle(2, 0x00ffff, 1);
-    g.strokeRect(1, 1, 26, 26);
-    g.fillStyle(0x00ffff, 0.3);
-    g.fillRect(2, 2, 24, 24);
-    g.lineStyle(1, 0x80ffff, 0.8);
-    g.lineBetween(2, 2, 26, 2);
-    g.lineBetween(2, 2, 2, 26);
-    g.generateTexture('player', 28, 28);
-    g.destroy();
-
-    // Obstacle textures - several sizes
-    const heights = [40, 80, 120, 160];
-    heights.forEach(h => {
-      let og = this.make.graphics({ x: 0, y: 0, add: false });
-      og.fillStyle(0x0a0a2a);
-      og.fillRect(0, 0, 36, h);
-      og.lineStyle(2, 0xff0066, 1);
-      og.strokeRect(1, 1, 34, h - 2);
-      og.fillStyle(0xff0066, 0.15);
-      og.fillRect(2, 2, 32, h - 4);
-      // glow lines
-      og.lineStyle(1, 0xff3388, 0.5);
-      og.lineBetween(8, 4, 8, h - 4);
-      og.lineBetween(28, 4, 28, h - 4);
-      og.generateTexture('obstacle_' + h, 36, h);
-      og.destroy();
-    });
-
-    // Coin texture
-    let cg = this.make.graphics({ x: 0, y: 0, add: false });
-    cg.fillStyle(0xffcc00, 1);
-    cg.fillCircle(8, 8, 8);
-    cg.fillStyle(0xffee88, 1);
-    cg.fillCircle(6, 6, 4);
-    cg.lineStyle(1, 0xffffff, 0.5);
-    cg.strokeCircle(8, 8, 7);
-    cg.generateTexture('coin', 16, 16);
-    cg.destroy();
-
-    // Heart texture
-    let hg = this.make.graphics({ x: 0, y: 0, add: false });
-    hg.fillStyle(0xff2255, 1);
-    hg.fillCircle(6, 5, 5);
-    hg.fillCircle(14, 5, 5);
-    hg.fillTriangle(1, 7, 19, 7, 10, 18);
-    hg.generateTexture('heart', 20, 19);
-    hg.destroy();
-
-    // Particle texture
-    let pg = this.make.graphics({ x: 0, y: 0, add: false });
-    pg.fillStyle(0x00ffff, 1);
-    pg.fillRect(0, 0, 4, 4);
-    pg.generateTexture('particle', 4, 4);
-    pg.destroy();
-
-    // Star texture
-    let sg = this.make.graphics({ x: 0, y: 0, add: false });
-    sg.fillStyle(0xffffff, 1);
-    sg.fillRect(0, 0, 2, 2);
-    sg.generateTexture('star', 2, 2);
-    sg.destroy();
-
-    this.scene.start('Game');
-  }
-}
-
-class GameScene extends Phaser.Scene {
-  constructor() { super('Game'); }
-
-  init() {
-    this.score = 0;
-    this.lives = 3;
-    this.speed = 320;
-    this.gameStarted = false;
-    this.gameOver = false;
-    this.jumpCount = 0;
-    this.lastScoreForSpeed = 0;
-    this.highScore = parseInt(localStorage.getItem('neonRushHigh') || '0');
-    this.coins = [];
-    this.obstacles = [];
-    this.coinScore = 0;
-    this.distScore = 0;
-  }
-
-  create() {
-    this.cameras.main.setBackgroundColor('#050912');
-
-    // Stars parallax layer 1 (slow)
-    this.stars1 = this.add.group();
-    for (let i = 0; i < 80; i++) {
-      let s = this.add.image(Phaser.Math.Between(0, W), Phaser.Math.Between(0, H - 60), 'star');
-      s.setAlpha(Phaser.Math.FloatBetween(0.2, 0.7));
-      this.stars1.add(s);
-    }
-
-    // Stars parallax layer 2 (fast)
-    this.stars2 = this.add.group();
-    for (let i = 0; i < 40; i++) {
-      let s = this.add.image(Phaser.Math.Between(0, W), Phaser.Math.Between(0, H - 60), 'star');
-      s.setAlpha(Phaser.Math.FloatBetween(0.4, 1.0));
-      s.setScale(1.5);
-      this.stars2.add(s);
-    }
-
-    // Grid ground effect
-    this.groundGraphics = this.add.graphics();
-    this.gridOffset = 0;
-    this.drawGround();
-
-    // Physics
-    this.physics.world.gravity.y = 1600;
-
-    // Ground platform (invisible static body)
-    this.ground = this.physics.add.staticGroup();
-    let groundBody = this.ground.create(W / 2, GROUND_Y + 10, null);
-    groundBody.setVisible(false);
-    groundBody.body.setSize(W * 3, 20);
-
-    // Player
-    this.player = this.physics.add.sprite(130, GROUND_Y - 28, 'player');
-    this.player.setOrigin(0, 1);
-    this.player.body.setSize(26, 26);
-    this.player.body.setOffset(1, 1);
-    this.physics.add.collider(this.player, this.ground, () => {
-      this.jumpCount = 0;
-    });
-
-    // Obstacle and coin groups
-    this.obstacleGroup = this.physics.add.staticGroup();
-    this.coinGroup = this.physics.add.group();
-
-    // Collisions
-    this.physics.add.collider(this.player, this.obstacleGroup, this.hitObstacle, null, this);
-    this.physics.add.overlap(this.player, this.coinGroup, this.collectCoin, null, this);
-
-    // HUD
-    this.scoreText = this.add.text(20, 16, 'SCORE: 0', {
-      fontSize: '18px', fill: '#00ffff', fontFamily: 'monospace',
-      stroke: '#003333', strokeThickness: 3
-    }).setDepth(10);
-
-    this.highScoreText = this.add.text(20, 38, 'BEST: ' + this.highScore, {
-      fontSize: '13px', fill: '#006666', fontFamily: 'monospace'
-    }).setDepth(10);
-
-    this.speedText = this.add.text(W - 20, 16, 'SPD: 320', {
-      fontSize: '16px', fill: '#ff00ff', fontFamily: 'monospace',
-      stroke: '#330033', strokeThickness: 3
-    }).setOrigin(1, 0).setDepth(10);
-
-    this.hearts = [];
-    for (let i = 0; i < 3; i++) {
-      let h = this.add.image(W - 20 - i * 26, 44, 'heart').setDepth(10).setOrigin(1, 0);
-      this.hearts.push(h);
-    }
-
-    // Input
-    this.cursors = this.input.keyboard.createCursorKeys();
-    this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-
-    this.input.on('pointerdown', () => { this.doJump(); });
-
-    // Spawn timers (start paused)
-    this.obstacleTimer = this.time.addEvent({
-      delay: 1800, callback: this.spawnObstacle, callbackScope: this, loop: true, paused: true
-    });
-    this.coinTimer = this.time.addEvent({
-      delay: 900, callback: this.spawnCoin, callbackScope: this, loop: true, paused: true
-    });
-    this.scoreTimer = this.time.addEvent({
-      delay: 100, callback: this.addDistScore, callbackScope: this, loop: true, paused: true
-    });
-
-    // Splash
-    this.splashGroup = this.add.group();
-    let overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.7).setDepth(20);
-    let title = this.add.text(W / 2, H / 2 - 60, 'NEON RUSH', {
-      fontSize: '52px', fill: '#00ffff', fontFamily: 'monospace',
-      stroke: '#003366', strokeThickness: 6
-    }).setOrigin(0.5).setDepth(21);
-    let sub = this.add.text(W / 2, H / 2, 'PRESS SPACE TO START', {
-      fontSize: '20px', fill: '#ffffff', fontFamily: 'monospace'
-    }).setOrigin(0.5).setDepth(21);
-    let hint = this.add.text(W / 2, H / 2 + 40, 'SPACE / UP / TAP — JUMP   (DOUBLE JUMP ALLOWED)', {
-      fontSize: '13px', fill: '#888888', fontFamily: 'monospace'
-    }).setOrigin(0.5).setDepth(21);
-    this.tweens.add({ targets: sub, alpha: 0, duration: 600, yoyo: true, repeat: -1 });
-    this.splashGroup.addMultiple([overlay, title, sub, hint]);
-
-    this.spaceKey.once('down', () => this.startGame());
-    this.input.once('pointerdown', () => this.startGame());
-
-    // Particle emitter
-    this.particles = this.add.particles(0, 0, 'particle', {
-      speed: { min: 80, max: 220 },
-      angle: { min: 0, max: 360 },
-      scale: { start: 1, end: 0 },
-      alpha: { start: 1, end: 0 },
-      lifespan: 500,
-      quantity: 0,
-      tint: [0x00ffff, 0xff00ff, 0xffff00]
-    });
-  }
-
-  startGame() {
-    if (this.gameStarted) return;
-    this.gameStarted = true;
-    this.splashGroup.destroy(true, true);
-    this.obstacleTimer.paused = false;
-    this.coinTimer.paused = false;
-    this.scoreTimer.paused = false;
-    this.spaceKey.on('down', () => this.doJump());
-    this.cursors.up.on('down', () => this.doJump());
-  }
-
-  doJump() {
-    if (!this.gameStarted || this.gameOver) return;
-    if (this.jumpCount < 2) {
-      this.player.body.setVelocityY(-740);
-      this.jumpCount++;
-      // jump flash
-      this.tweens.add({ targets: this.player, alpha: 0.5, duration: 60, yoyo: true });
-    }
-  }
-
-  addDistScore() {
-    if (!this.gameStarted || this.gameOver) return;
-    this.distScore += 1;
-    this.score = this.distScore + this.coinScore;
-
-    // Speed increase
-    if (this.score - this.lastScoreForSpeed >= 10) {
-      this.lastScoreForSpeed = this.score;
-      this.speed = Math.min(this.speed + 25, 750);
-    }
-
-    this.scoreText.setText('SCORE: ' + this.score);
-    this.speedText.setText('SPD: ' + Math.round(this.speed));
-
-    if (this.score > this.highScore) {
-      this.highScore = this.score;
-      localStorage.setItem('neonRushHigh', this.highScore);
-      this.highScoreText.setText('BEST: ' + this.highScore).setFill('#00ffff');
-    }
-  }
-
-  spawnObstacle() {
-    if (!this.gameStarted || this.gameOver) return;
-    const heights = [40, 80, 120, 160];
-    const h = Phaser.Utils.Array.GetRandom(heights);
-    let obs = this.obstacleGroup.create(W + 40, GROUND_Y - h, 'obstacle_' + h);
-    obs.setOrigin(0, 0);
-    obs.body.setSize(36, h);
-    obs.body.reset(W + 40, GROUND_Y - h);
-    this.obstacles.push(obs);
-  }
-
-  spawnCoin() {
-    if (!this.gameStarted || this.gameOver) return;
-    if (Math.random() < 0.4) {
-      let yPos = Phaser.Math.Between(GROUND_Y - 140, GROUND_Y - 40);
-      let coin = this.coinGroup.create(W + 60, yPos, 'coin');
-      coin.setOrigin(0.5, 0.5);
-      coin.body.allowGravity = false;
-      coin.body.setVelocityX(-this.speed);
-      this.coins.push(coin);
-    }
-  }
-
-  collectCoin(player, coin) {
-    coin.destroy();
-    this.coinScore += 10;
-    this.score = this.distScore + this.coinScore;
-    this.scoreText.setText('SCORE: ' + this.score);
-    // flash score text
-    this.tweens.add({ targets: this.scoreText, scaleX: 1.2, scaleY: 1.2, duration: 80, yoyo: true });
-  }
-
-  hitObstacle(player, obstacle) {
-    if (this.gameOver || this.player.getData('invincible')) return;
-    this.player.setData('invincible', true);
-
-    // Particle explosion
-    this.particles.emitParticleAt(this.player.x + 14, this.player.y - 14, 20);
-
-    // Screen shake
-    this.cameras.main.shake(300, 0.018);
-
-    this.lives--;
-    this.updateHearts();
-
-    if (this.lives <= 0) {
-      this.endGame();
-      return;
-    }
-
-    // Reset player position
-    this.player.setPosition(130, GROUND_Y - 60);
-    this.player.body.setVelocity(0, 0);
-    this.jumpCount = 0;
-
-    // Blink invincible
-    this.tweens.add({
-      targets: this.player, alpha: 0, duration: 100,
-      yoyo: true, repeat: 8,
-      onComplete: () => {
-        this.player.setAlpha(1);
-        this.player.setData('invincible', false);
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neon Rush — Kenneth D'Silva</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
       }
-    });
-  }
+      body {
+        background: #050912;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+        font-family: monospace;
+      }
+      #portfolio-link {
+        position: fixed;
+        top: 24px;
+        left: 24px;
+        z-index: 100;
+        color: #00ffff;
+        text-decoration: none;
+        font-family: monospace;
+        font-size: 13px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 6px 12px;
+        border: 1px solid #00ffff33;
+        border-radius: 4px;
+        transition: background 0.2s;
+      }
+      #portfolio-link:hover {
+        background: rgba(0, 255, 255, 0.1);
+      }
+      #game-container {
+        position: relative;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <a href="index.html" id="portfolio-link">← Portfolio</a>
+    <div id="game-container"></div>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+    <script>
+      const W = 900,
+        H = 420;
+      const GROUND_Y = 400;
+      const GROUND_VISUAL_Y = 398;
 
-  updateHearts() {
-    for (let i = 0; i < 3; i++) {
-      this.hearts[i].setAlpha(i < this.lives ? 1 : 0.15);
-    }
-  }
+      class BootScene extends Phaser.Scene {
+        constructor() {
+          super("Boot");
+        }
+        preload() {
+          // Generate all textures programmatically
+        }
+        create() {
+          // Player texture - cyan glowing cube
+          let g = this.make.graphics({ x: 0, y: 0, add: false });
+          g.fillStyle(0x001a2e);
+          g.fillRect(0, 0, 28, 28);
+          g.lineStyle(2, 0x00ffff, 1);
+          g.strokeRect(1, 1, 26, 26);
+          g.fillStyle(0x00ffff, 0.3);
+          g.fillRect(2, 2, 24, 24);
+          g.lineStyle(1, 0x80ffff, 0.8);
+          g.lineBetween(2, 2, 26, 2);
+          g.lineBetween(2, 2, 2, 26);
+          g.generateTexture("player", 28, 28);
+          g.destroy();
 
-  endGame() {
-    this.gameOver = true;
-    this.obstacleTimer.paused = true;
-    this.coinTimer.paused = true;
-    this.scoreTimer.paused = true;
+          // Obstacle textures - several sizes
+          const heights = [40, 80, 120, 160];
+          heights.forEach((h) => {
+            let og = this.make.graphics({ x: 0, y: 0, add: false });
+            og.fillStyle(0x0a0a2a);
+            og.fillRect(0, 0, 36, h);
+            og.lineStyle(2, 0xff0066, 1);
+            og.strokeRect(1, 1, 34, h - 2);
+            og.fillStyle(0xff0066, 0.15);
+            og.fillRect(2, 2, 32, h - 4);
+            // glow lines
+            og.lineStyle(1, 0xff3388, 0.5);
+            og.lineBetween(8, 4, 8, h - 4);
+            og.lineBetween(28, 4, 28, h - 4);
+            og.generateTexture("obstacle_" + h, 36, h);
+            og.destroy();
+          });
 
-    this.particles.emitParticleAt(this.player.x + 14, this.player.y - 14, 30);
-    this.player.setVisible(false);
+          // Coin texture
+          let cg = this.make.graphics({ x: 0, y: 0, add: false });
+          cg.fillStyle(0xffcc00, 1);
+          cg.fillCircle(8, 8, 8);
+          cg.fillStyle(0xffee88, 1);
+          cg.fillCircle(6, 6, 4);
+          cg.lineStyle(1, 0xffffff, 0.5);
+          cg.strokeCircle(8, 8, 7);
+          cg.generateTexture("coin", 16, 16);
+          cg.destroy();
 
-    this.time.delayedCall(400, () => {
-      let overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.85).setDepth(20);
-      let title = this.add.text(W / 2, H / 2 - 80, 'GAME OVER', {
-        fontSize: '48px', fill: '#ff0066', fontFamily: 'monospace',
-        stroke: '#330011', strokeThickness: 6
-      }).setOrigin(0.5).setDepth(21);
-      let sc = this.add.text(W / 2, H / 2 - 20, 'SCORE: ' + this.score, {
-        fontSize: '24px', fill: '#ffffff', fontFamily: 'monospace'
-      }).setOrigin(0.5).setDepth(21);
-      let hs = this.add.text(W / 2, H / 2 + 20, 'BEST: ' + this.highScore, {
-        fontSize: '18px', fill: '#00ffff', fontFamily: 'monospace'
-      }).setOrigin(0.5).setDepth(21);
-      let restartBtn = this.add.text(W / 2, H / 2 + 70, '[ RESTART ]', {
-        fontSize: '22px', fill: '#00ffff', fontFamily: 'monospace',
-        backgroundColor: '#001133', padding: { x: 16, y: 8 }
-      }).setOrigin(0.5).setDepth(21).setInteractive({ useHandCursor: true });
-      restartBtn.on('pointerover', () => restartBtn.setFill('#ffffff'));
-      restartBtn.on('pointerout', () => restartBtn.setFill('#00ffff'));
-      restartBtn.on('pointerdown', () => this.scene.restart());
-      this.tweens.add({ targets: restartBtn, alpha: 0.6, duration: 500, yoyo: true, repeat: -1 });
-    });
-  }
+          // Heart texture
+          let hg = this.make.graphics({ x: 0, y: 0, add: false });
+          hg.fillStyle(0xff2255, 1);
+          hg.fillCircle(6, 5, 5);
+          hg.fillCircle(14, 5, 5);
+          hg.fillTriangle(1, 7, 19, 7, 10, 18);
+          hg.generateTexture("heart", 20, 19);
+          hg.destroy();
 
-  drawGround() {
-    this.groundGraphics.clear();
-    // Neon ground line
-    this.groundGraphics.lineStyle(2, 0x00ffff, 1);
-    this.groundGraphics.lineBetween(0, GROUND_VISUAL_Y, W, GROUND_VISUAL_Y);
-    this.groundGraphics.lineStyle(1, 0x00ffff, 0.3);
-    this.groundGraphics.lineBetween(0, GROUND_VISUAL_Y + 2, W, GROUND_VISUAL_Y + 2);
+          // Particle texture
+          let pg = this.make.graphics({ x: 0, y: 0, add: false });
+          pg.fillStyle(0x00ffff, 1);
+          pg.fillRect(0, 0, 4, 4);
+          pg.generateTexture("particle", 4, 4);
+          pg.destroy();
 
-    // Grid lines
-    this.groundGraphics.lineStyle(1, 0x003344, 0.6);
-    const spacing = 60;
-    const offset = this.gridOffset % spacing;
-    // Vertical grid lines
-    for (let x = -offset; x < W + spacing; x += spacing) {
-      let progress = x / W;
-      this.groundGraphics.lineBetween(x, GROUND_VISUAL_Y, x + 40, H);
-    }
-    // Horizontal grid lines
-    for (let i = 0; i < 4; i++) {
-      let y = GROUND_VISUAL_Y + (H - GROUND_VISUAL_Y) * (i / 3);
-      this.groundGraphics.lineStyle(1, 0x003344, 0.3 - i * 0.07);
-      this.groundGraphics.lineBetween(0, y, W, y);
-    }
-  }
+          // Star texture
+          let sg = this.make.graphics({ x: 0, y: 0, add: false });
+          sg.fillStyle(0xffffff, 1);
+          sg.fillRect(0, 0, 2, 2);
+          sg.generateTexture("star", 2, 2);
+          sg.destroy();
 
-  update(time, delta) {
-    if (!this.gameStarted || this.gameOver) return;
+          this.scene.start("Game");
+        }
+      }
 
-    const dt = delta / 1000;
+      class GameScene extends Phaser.Scene {
+        constructor() {
+          super("Game");
+        }
 
-    // Scroll stars
-    this.stars1.getChildren().forEach(s => {
-      s.x -= 30 * dt;
-      if (s.x < -2) s.x = W + 2;
-    });
-    this.stars2.getChildren().forEach(s => {
-      s.x -= 70 * dt;
-      if (s.x < -2) s.x = W + 2;
-    });
+        init() {
+          this.score = 0;
+          this.lives = 3;
+          this.speed = 320;
+          this.gameStarted = false;
+          this.gameOver = false;
+          this.jumpCount = 0;
+          this.lastScoreForSpeed = 0;
+          this.highScore = parseInt(
+            localStorage.getItem("neonRushHigh") || "0",
+          );
+          this.coins = [];
+          this.obstacles = [];
+          this.coinScore = 0;
+          this.distScore = 0;
+        }
 
-    // Scroll grid
-    this.gridOffset += this.speed * dt;
-    this.drawGround();
+        create() {
+          this.cameras.main.setBackgroundColor("#050912");
 
-    // Move obstacles
-    this.obstacleGroup.getChildren().forEach(obs => {
-      obs.x -= this.speed * dt;
-      obs.body.reset(obs.x, obs.y);
-      if (obs.x < -50) obs.destroy();
-    });
+          // Stars parallax layer 1 (slow)
+          this.stars1 = this.add.group();
+          for (let i = 0; i < 80; i++) {
+            let s = this.add.image(
+              Phaser.Math.Between(0, W),
+              Phaser.Math.Between(0, H - 60),
+              "star",
+            );
+            s.setAlpha(Phaser.Math.FloatBetween(0.2, 0.7));
+            this.stars1.add(s);
+          }
 
-    // Move coins
-    this.coinGroup.getChildren().forEach(coin => {
-      coin.body.setVelocityX(-this.speed);
-      if (coin.x < -20) coin.destroy();
-    });
+          // Stars parallax layer 2 (fast)
+          this.stars2 = this.add.group();
+          for (let i = 0; i < 40; i++) {
+            let s = this.add.image(
+              Phaser.Math.Between(0, W),
+              Phaser.Math.Between(0, H - 60),
+              "star",
+            );
+            s.setAlpha(Phaser.Math.FloatBetween(0.4, 1.0));
+            s.setScale(1.5);
+            this.stars2.add(s);
+          }
 
-    // Player glow pulse
-    const pulse = 0.85 + 0.15 * Math.sin(time * 0.005);
-    this.player.setAlpha(this.player.getData('invincible') ? this.player.alpha : pulse);
+          // Grid ground effect
+          this.groundGraphics = this.add.graphics();
+          this.gridOffset = 0;
+          this.drawGround();
 
-    // Ground check - ensure jump count reset
-    if (this.player.body.blocked.down) {
-      this.jumpCount = 0;
-    }
-  }
-}
+          // Physics
+          this.physics.world.gravity.y = 1600;
 
-const config = {
-  type: Phaser.AUTO,
-  width: W,
-  height: H,
-  parent: 'game-container',
-  backgroundColor: '#050912',
-  physics: {
-    default: 'arcade',
-    arcade: { gravity: { y: 1600 }, debug: false }
-  },
-  scene: [BootScene, GameScene]
-};
+          // Ground platform (invisible static body)
+          this.ground = this.physics.add.staticGroup();
+          let groundBody = this.ground.create(W / 2, GROUND_Y + 10, null);
+          groundBody.setVisible(false);
+          groundBody.body.setSize(W * 3, 20);
 
-const game = new Phaser.Game(config);
-</script>
-</body>
+          // Player
+          this.player = this.physics.add.sprite(130, GROUND_Y - 28, "player");
+          this.player.setOrigin(0, 1);
+          this.player.body.setSize(26, 26);
+          this.player.body.setOffset(1, 1);
+          this.physics.add.collider(this.player, this.ground, () => {
+            this.jumpCount = 0;
+          });
+
+          // Obstacle and coin groups
+          this.obstacleGroup = this.physics.add.staticGroup();
+          this.coinGroup = this.physics.add.group();
+
+          // Collisions
+          this.physics.add.collider(
+            this.player,
+            this.obstacleGroup,
+            this.hitObstacle,
+            null,
+            this,
+          );
+          this.physics.add.overlap(
+            this.player,
+            this.coinGroup,
+            this.collectCoin,
+            null,
+            this,
+          );
+
+          // HUD
+          this.scoreText = this.add
+            .text(20, 16, "SCORE: 0", {
+              fontSize: "18px",
+              fill: "#00ffff",
+              fontFamily: "monospace",
+              stroke: "#003333",
+              strokeThickness: 3,
+            })
+            .setDepth(10);
+
+          this.highScoreText = this.add
+            .text(20, 38, "BEST: " + this.highScore, {
+              fontSize: "13px",
+              fill: "#006666",
+              fontFamily: "monospace",
+            })
+            .setDepth(10);
+
+          this.speedText = this.add
+            .text(W - 20, 16, "SPD: 320", {
+              fontSize: "16px",
+              fill: "#ff00ff",
+              fontFamily: "monospace",
+              stroke: "#330033",
+              strokeThickness: 3,
+            })
+            .setOrigin(1, 0)
+            .setDepth(10);
+
+          this.hearts = [];
+          for (let i = 0; i < 3; i++) {
+            let h = this.add
+              .image(W - 20 - i * 26, 44, "heart")
+              .setDepth(10)
+              .setOrigin(1, 0);
+            this.hearts.push(h);
+          }
+
+          // Input
+          this.cursors = this.input.keyboard.createCursorKeys();
+          this.spaceKey = this.input.keyboard.addKey(
+            Phaser.Input.Keyboard.KeyCodes.SPACE,
+          );
+
+          this.input.on("pointerdown", () => {
+            this.doJump();
+          });
+
+          // Spawn timers (start paused)
+          this.obstacleTimer = this.time.addEvent({
+            delay: 1800,
+            callback: this.spawnObstacle,
+            callbackScope: this,
+            loop: true,
+            paused: true,
+          });
+          this.coinTimer = this.time.addEvent({
+            delay: 900,
+            callback: this.spawnCoin,
+            callbackScope: this,
+            loop: true,
+            paused: true,
+          });
+          this.scoreTimer = this.time.addEvent({
+            delay: 100,
+            callback: this.addDistScore,
+            callbackScope: this,
+            loop: true,
+            paused: true,
+          });
+
+          // Splash
+          this.splashGroup = this.add.group();
+          let overlay = this.add
+            .rectangle(W / 2, H / 2, W, H, 0x000000, 0.7)
+            .setDepth(20);
+          let title = this.add
+            .text(W / 2, H / 2 - 60, "NEON RUSH", {
+              fontSize: "52px",
+              fill: "#00ffff",
+              fontFamily: "monospace",
+              stroke: "#003366",
+              strokeThickness: 6,
+            })
+            .setOrigin(0.5)
+            .setDepth(21);
+          let sub = this.add
+            .text(W / 2, H / 2, "PRESS SPACE TO START", {
+              fontSize: "20px",
+              fill: "#ffffff",
+              fontFamily: "monospace",
+            })
+            .setOrigin(0.5)
+            .setDepth(21);
+          let hint = this.add
+            .text(
+              W / 2,
+              H / 2 + 40,
+              "SPACE / UP / TAP — JUMP   (DOUBLE JUMP ALLOWED)",
+              {
+                fontSize: "13px",
+                fill: "#888888",
+                fontFamily: "monospace",
+              },
+            )
+            .setOrigin(0.5)
+            .setDepth(21);
+          this.tweens.add({
+            targets: sub,
+            alpha: 0,
+            duration: 600,
+            yoyo: true,
+            repeat: -1,
+          });
+          this.splashGroup.addMultiple([overlay, title, sub, hint]);
+
+          this.spaceKey.once("down", () => this.startGame());
+          this.input.once("pointerdown", () => this.startGame());
+
+          // Particle emitter
+          this.particles = this.add.particles(0, 0, "particle", {
+            speed: { min: 80, max: 220 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 1, end: 0 },
+            alpha: { start: 1, end: 0 },
+            lifespan: 500,
+            quantity: 0,
+            tint: [0x00ffff, 0xff00ff, 0xffff00],
+          });
+        }
+
+        startGame() {
+          if (this.gameStarted) return;
+          this.gameStarted = true;
+          this.splashGroup.destroy(true, true);
+          this.obstacleTimer.paused = false;
+          this.coinTimer.paused = false;
+          this.scoreTimer.paused = false;
+          this.spaceKey.on("down", () => this.doJump());
+          this.cursors.up.on("down", () => this.doJump());
+        }
+
+        doJump() {
+          if (!this.gameStarted || this.gameOver) return;
+          if (this.jumpCount < 2) {
+            this.player.body.setVelocityY(-740);
+            this.jumpCount++;
+            // jump flash
+            this.tweens.add({
+              targets: this.player,
+              alpha: 0.5,
+              duration: 60,
+              yoyo: true,
+            });
+          }
+        }
+
+        addDistScore() {
+          if (!this.gameStarted || this.gameOver) return;
+          this.distScore += 1;
+          this.score = this.distScore + this.coinScore;
+
+          // Speed increase
+          if (this.score - this.lastScoreForSpeed >= 10) {
+            this.lastScoreForSpeed = this.score;
+            this.speed = Math.min(this.speed + 25, 750);
+          }
+
+          this.scoreText.setText("SCORE: " + this.score);
+          this.speedText.setText("SPD: " + Math.round(this.speed));
+
+          if (this.score > this.highScore) {
+            this.highScore = this.score;
+            localStorage.setItem("neonRushHigh", this.highScore);
+            this.highScoreText
+              .setText("BEST: " + this.highScore)
+              .setFill("#00ffff");
+          }
+        }
+
+        spawnObstacle() {
+          if (!this.gameStarted || this.gameOver) return;
+          const heights = [40, 80, 120, 160];
+          const h = Phaser.Utils.Array.GetRandom(heights);
+          let obs = this.obstacleGroup.create(
+            W + 40,
+            GROUND_Y - h,
+            "obstacle_" + h,
+          );
+          obs.setOrigin(0, 0);
+          obs.body.setSize(36, h);
+          obs.body.reset(W + 40, GROUND_Y - h);
+          this.obstacles.push(obs);
+        }
+
+        spawnCoin() {
+          if (!this.gameStarted || this.gameOver) return;
+          if (Math.random() < 0.4) {
+            let yPos = Phaser.Math.Between(GROUND_Y - 140, GROUND_Y - 40);
+            let coin = this.coinGroup.create(W + 60, yPos, "coin");
+            coin.setOrigin(0.5, 0.5);
+            coin.body.allowGravity = false;
+            coin.body.setVelocityX(-this.speed);
+            this.coins.push(coin);
+          }
+        }
+
+        collectCoin(player, coin) {
+          coin.destroy();
+          this.coinScore += 10;
+          this.score = this.distScore + this.coinScore;
+          this.scoreText.setText("SCORE: " + this.score);
+          // flash score text
+          this.tweens.add({
+            targets: this.scoreText,
+            scaleX: 1.2,
+            scaleY: 1.2,
+            duration: 80,
+            yoyo: true,
+          });
+        }
+
+        hitObstacle(player, obstacle) {
+          if (this.gameOver || this.player.getData("invincible")) return;
+          this.player.setData("invincible", true);
+
+          // Particle explosion
+          this.particles.emitParticleAt(
+            this.player.x + 14,
+            this.player.y - 14,
+            20,
+          );
+
+          // Screen shake
+          this.cameras.main.shake(300, 0.018);
+
+          this.lives--;
+          this.updateHearts();
+
+          if (this.lives <= 0) {
+            this.endGame();
+            return;
+          }
+
+          // Reset player position
+          this.player.setPosition(130, GROUND_Y - 60);
+          this.player.body.setVelocity(0, 0);
+          this.jumpCount = 0;
+
+          // Blink invincible
+          this.tweens.add({
+            targets: this.player,
+            alpha: 0,
+            duration: 100,
+            yoyo: true,
+            repeat: 8,
+            onComplete: () => {
+              this.player.setAlpha(1);
+              this.player.setData("invincible", false);
+            },
+          });
+        }
+
+        updateHearts() {
+          for (let i = 0; i < 3; i++) {
+            this.hearts[i].setAlpha(i < this.lives ? 1 : 0.15);
+          }
+        }
+
+        endGame() {
+          this.gameOver = true;
+          this.obstacleTimer.paused = true;
+          this.coinTimer.paused = true;
+          this.scoreTimer.paused = true;
+
+          this.particles.emitParticleAt(
+            this.player.x + 14,
+            this.player.y - 14,
+            30,
+          );
+          this.player.setVisible(false);
+
+          this.time.delayedCall(400, () => {
+            let overlay = this.add
+              .rectangle(W / 2, H / 2, W, H, 0x000000, 0.85)
+              .setDepth(20);
+            let title = this.add
+              .text(W / 2, H / 2 - 80, "GAME OVER", {
+                fontSize: "48px",
+                fill: "#ff0066",
+                fontFamily: "monospace",
+                stroke: "#330011",
+                strokeThickness: 6,
+              })
+              .setOrigin(0.5)
+              .setDepth(21);
+            let sc = this.add
+              .text(W / 2, H / 2 - 20, "SCORE: " + this.score, {
+                fontSize: "24px",
+                fill: "#ffffff",
+                fontFamily: "monospace",
+              })
+              .setOrigin(0.5)
+              .setDepth(21);
+            let hs = this.add
+              .text(W / 2, H / 2 + 20, "BEST: " + this.highScore, {
+                fontSize: "18px",
+                fill: "#00ffff",
+                fontFamily: "monospace",
+              })
+              .setOrigin(0.5)
+              .setDepth(21);
+            let restartBtn = this.add
+              .text(W / 2, H / 2 + 70, "[ RESTART ]", {
+                fontSize: "22px",
+                fill: "#00ffff",
+                fontFamily: "monospace",
+                backgroundColor: "#001133",
+                padding: { x: 16, y: 8 },
+              })
+              .setOrigin(0.5)
+              .setDepth(21)
+              .setInteractive({ useHandCursor: true });
+            restartBtn.on("pointerover", () => restartBtn.setFill("#ffffff"));
+            restartBtn.on("pointerout", () => restartBtn.setFill("#00ffff"));
+            restartBtn.on("pointerdown", () => this.scene.restart());
+            this.tweens.add({
+              targets: restartBtn,
+              alpha: 0.6,
+              duration: 500,
+              yoyo: true,
+              repeat: -1,
+            });
+          });
+        }
+
+        drawGround() {
+          this.groundGraphics.clear();
+          // Neon ground line
+          this.groundGraphics.lineStyle(2, 0x00ffff, 1);
+          this.groundGraphics.lineBetween(
+            0,
+            GROUND_VISUAL_Y,
+            W,
+            GROUND_VISUAL_Y,
+          );
+          this.groundGraphics.lineStyle(1, 0x00ffff, 0.3);
+          this.groundGraphics.lineBetween(
+            0,
+            GROUND_VISUAL_Y + 2,
+            W,
+            GROUND_VISUAL_Y + 2,
+          );
+
+          // Grid lines
+          this.groundGraphics.lineStyle(1, 0x003344, 0.6);
+          const spacing = 60;
+          const offset = this.gridOffset % spacing;
+          // Vertical grid lines
+          for (let x = -offset; x < W + spacing; x += spacing) {
+            let progress = x / W;
+            this.groundGraphics.lineBetween(x, GROUND_VISUAL_Y, x + 40, H);
+          }
+          // Horizontal grid lines
+          for (let i = 0; i < 4; i++) {
+            let y = GROUND_VISUAL_Y + (H - GROUND_VISUAL_Y) * (i / 3);
+            this.groundGraphics.lineStyle(1, 0x003344, 0.3 - i * 0.07);
+            this.groundGraphics.lineBetween(0, y, W, y);
+          }
+        }
+
+        update(time, delta) {
+          if (!this.gameStarted || this.gameOver) return;
+
+          const dt = delta / 1000;
+
+          // Scroll stars
+          this.stars1.getChildren().forEach((s) => {
+            s.x -= 30 * dt;
+            if (s.x < -2) s.x = W + 2;
+          });
+          this.stars2.getChildren().forEach((s) => {
+            s.x -= 70 * dt;
+            if (s.x < -2) s.x = W + 2;
+          });
+
+          // Scroll grid
+          this.gridOffset += this.speed * dt;
+          this.drawGround();
+
+          // Move obstacles
+          this.obstacleGroup.getChildren().forEach((obs) => {
+            obs.x -= this.speed * dt;
+            obs.body.reset(obs.x, obs.y);
+            if (obs.x < -50) obs.destroy();
+          });
+
+          // Move coins
+          this.coinGroup.getChildren().forEach((coin) => {
+            coin.body.setVelocityX(-this.speed);
+            if (coin.x < -20) coin.destroy();
+          });
+
+          // Player glow pulse
+          const pulse = 0.85 + 0.15 * Math.sin(time * 0.005);
+          this.player.setAlpha(
+            this.player.getData("invincible") ? this.player.alpha : pulse,
+          );
+
+          // Ground check - ensure jump count reset
+          if (this.player.body.blocked.down) {
+            this.jumpCount = 0;
+          }
+        }
+      }
+
+      const config = {
+        type: Phaser.AUTO,
+        width: W,
+        height: H,
+        parent: "game-container",
+        backgroundColor: "#050912",
+        physics: {
+          default: "arcade",
+          arcade: { gravity: { y: 1600 }, debug: false },
+        },
+        scene: [BootScene, GameScene],
+      };
+
+      const game = new Phaser.Game(config);
+    </script>
+  </body>
 </html>
