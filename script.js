@@ -272,10 +272,11 @@ Object.entries(THEME_RGB).forEach(([name, rgb]) => {
   if (!el) return;
   const LINES = [
     'available.for_work --now',
-    'specialization --magento --shopify',
+    'specialization --magento --shopify --ecommerce',
+    'focus --performance --seo --integrations',
     'location --india --remote_ok',
     'contact kd.xtrm@gmail.com',
-    'open_to new_challenges',
+    'open_to --freelance --contract --team_roles',
   ];
   let li = 0, ci = 0, typing = true, wait = 0;
   function tick() {
@@ -373,7 +374,7 @@ function animHero() {
   });
 
   const sub = document.getElementById('hero-sub');
-  setTimeout(() => new TextScramble(sub).setText('Magento and Shopify Developer'), 1000);
+  setTimeout(() => new TextScramble(sub).setText('Revenue-focused Magento and Shopify engineer'), 1000);
 }
 
 /* ══════════════════════════════════════════════════
