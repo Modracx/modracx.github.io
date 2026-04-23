@@ -1,16 +1,23 @@
-const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const prefersReducedMotion =
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function on(target, eventName, handler, options) {
+  if (!target || typeof target.addEventListener !== "function") return;
+  target.addEventListener(eventName, handler, options);
+}
 
 function initNav() {
   const toggle = document.getElementById("nav-toggle");
   const nav = document.getElementById("site-nav");
   if (toggle && nav) {
-    toggle.addEventListener("click", () => {
+    on(toggle, "click", () => {
       const open = nav.classList.toggle("open");
       toggle.setAttribute("aria-expanded", String(open));
       document.body.classList.toggle("nav-open", open);
     });
     nav.querySelectorAll("a").forEach((link) => {
-      link.addEventListener("click", () => {
+      on(link, "click", () => {
         nav.classList.remove("open");
         document.body.classList.remove("nav-open");
         toggle.setAttribute("aria-expanded", "false");
@@ -26,7 +33,7 @@ function initNav() {
   const header = document.getElementById("site-header");
   const onScroll = () => header?.classList.toggle("scrolled", window.scrollY > 24);
   onScroll();
-  window.addEventListener("scroll", onScroll, { passive: true });
+  on(window, "scroll", onScroll, { passive: true });
 }
 
 function initReveal() {
@@ -55,7 +62,7 @@ function initFilters() {
   const cards = document.querySelectorAll(".case-card");
   if (!buttons.length || !cards.length) return;
   buttons.forEach((button) => {
-    button.addEventListener("click", () => {
+    on(button, "click", () => {
       const filter = button.dataset.filter;
       buttons.forEach((btn) => btn.classList.toggle("active", btn === button));
       cards.forEach((card) => {
@@ -69,7 +76,7 @@ function initFilters() {
 function initContactForm() {
   const form = document.getElementById("contact-form");
   if (!form) return;
-  form.addEventListener("submit", (event) => {
+  on(form, "submit", (event) => {
     event.preventDefault();
     const data = new FormData(form);
     const subject = encodeURIComponent(
@@ -150,12 +157,12 @@ function initAscii() {
   if (prefersReducedMotion) draw();
   else requestAnimationFrame(draw);
 
-  window.addEventListener("resize", rebuild);
-  window.addEventListener("mousemove", (event) => {
+  on(window, "resize", rebuild);
+  on(window, "mousemove", (event) => {
     mouse.x = event.clientX;
     mouse.y = event.clientY;
   });
-  window.addEventListener("mouseleave", () => {
+  on(window, "mouseleave", () => {
     mouse.x = -1000;
     mouse.y = -1000;
   });
@@ -240,12 +247,12 @@ async function initThreeScenes() {
     group.add(stars);
 
     const mouse = { x: 0, y: 0 };
-    host.addEventListener("mousemove", (event) => {
+    on(host, "mousemove", (event) => {
       const bounds = host.getBoundingClientRect();
       mouse.x = ((event.clientX - bounds.left) / bounds.width - 0.5) * 1.4;
       mouse.y = ((event.clientY - bounds.top) / bounds.height - 0.5) * 1.4;
     });
-    host.addEventListener("mouseleave", () => {
+    on(host, "mouseleave", () => {
       mouse.x = 0;
       mouse.y = 0;
     });
@@ -262,7 +269,7 @@ async function initThreeScenes() {
     });
   };
 
-  window.addEventListener("resize", resize);
+  on(window, "resize", resize);
   resize();
 
   const animate = (time) => {
@@ -283,9 +290,17 @@ async function initThreeScenes() {
   else requestAnimationFrame(animate);
 }
 
-initNav();
-initReveal();
-initFilters();
-initContactForm();
-initAscii();
-initThreeScenes();
+function boot() {
+  initNav();
+  initReveal();
+  initFilters();
+  initContactForm();
+  initAscii();
+  initThreeScenes();
+}
+
+if (document.readyState === "loading") {
+  on(document, "DOMContentLoaded", boot, { once: true });
+} else {
+  boot();
+}
