@@ -12,9 +12,9 @@
   window.addEventListener("scroll", onScroll, { passive: true });
 
   nav.querySelectorAll(".nav-link").forEach((link) => {
-    const current = window.location.pathname.replace(/\/$/, "") || "/index.html";
+    const current = window.location.pathname.replace(/\/$/, "") || "/";
     const target = new URL(link.href, window.location.origin).pathname.replace(/\/$/, "");
-    if (current === target || (current === "/" && target === "/index.html")) {
+    if (current === target || (current === "/" && target === "/")) {
       link.classList.add("active");
     }
   });
