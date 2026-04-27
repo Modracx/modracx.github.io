@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hex File Viewer — Free Online Tool | MODRACX</title>
+  <meta name="description" content="Inspect raw bytes of any file with a hex dump viewer." />
+  <meta property="og:title" content="Hex File Viewer — Free Online Tool | MODRACX" />
+  <meta property="og:description" content="Inspect raw bytes of any file with a hex dump viewer." />
+  <meta property="og:url" content="https://modracx.github.io/tools/hex-viewer.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://modracx.github.io/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Hex File Viewer — Free Online Tool | MODRACX" />
+  <meta name="twitter:description" content="Inspect raw bytes of any file with a hex dump viewer." />
+  <link rel="canonical" href="https://modracx.github.io/tools/hex-viewer.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../style.min.css" />
+  <link rel="stylesheet" href="assets/tools.css" />
+  <style>
+    .hex-output {
+      font-family:var(--font-mono); font-size:13px; line-height:1.9;
+      background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+      padding:12px 14px; overflow-x:auto; white-space:pre; color:var(--text);
+      max-height:520px; overflow-y:auto;
+    }
+    .hex-offset { color:#569cd6; user-select:none; }
+    .hex-byte   { color:var(--text); }
+    .hex-zero   { color:var(--text-subtle); }
+    .hex-ascii  { color:var(--success); }
+    .hex-dot    { color:var(--text-subtle); }
+    .hex-sep    { color:var(--border-hover); user-select:none; }
+    .search-highlight { background:rgba(255,200,0,.3); border-radius:2px; }
+    .file-info-bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
+    .file-badge { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:12px; font-family:var(--font-mono); }
+    .truncation-warn { background:rgba(210,153,34,.1); border:1px solid rgba(210,153,34,.3); color:var(--warning); border-radius:var(--radius); padding:8px 12px; font-size:12px; margin-bottom:10px; }
+    .empty-state { text-align:center; padding:60px; color:var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="site-bg-grid" aria-hidden="true"></div>
+    <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="MODRACX Home">
+        <span class="nav-logo-symbol">//</span>
+        <span class="nav-logo-name">MODRACX</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="/" class="nav-link">Home</a></li>
+        <li><a href="/services.html" class="nav-link">Services</a></li>
+        <li><a href="/work.html" class="nav-link">Work</a></li>
+        <li><a href="/about.html" class="nav-link">About</a></li>
+        <li><a href="/contact.html" class="nav-link">Contact</a></li>
+        <li><a href="/tools/" class="nav-link active">Tools</a></li>
+      </ul>
+      <a href="/contact.html#project-form" class="btn-primary nav-cta">Start a Project <span aria-hidden="true">→</span></a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </nav>
+  <main class="tool-page" style="max-width:1100px">
+    <div class="tool-header">
+      <nav class="tool-breadcrumb" aria-label="Breadcrumb"><a href="/tools/">← All Tools</a></nav>
+      <h1>Hex File Viewer</h1>
+      <p>View any file as a classic hex dump with offset, hex bytes, and ASCII representation.</p>
+    </div>
+
+    <div class="card">
+      <div class="grid-2">
+        <div class="form-group" style="margin:0">
+          <label>Select File</label>
+          <input type="file" id="fileInput" style="font-family:var(--font);padding:8px">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Search (hex or ASCII)</label>
+          <div style="display:flex;gap:6px">
+            <input type="search" id="searchInput" placeholder="e.g. 48 65 6c or Hello">
+            <button class="btn btn-secondary" id="searchBtn">Find</button>
+          </div>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:12px;margin-bottom:0">
+        <label>Display Limit</label>
+        <select id="limitSelect">
+          <option value="4096">First 4 KB</option>
+          <option value="16384">First 16 KB</option>
+          <option value="65536">First 64 KB</option>
+          <option value="262144">First 256 KB</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="fileInfoBar" class="file-info-bar" style="display:none"></div>
+    <div id="truncationWarn" class="truncation-warn" style="display:none"></div>
+    <div id="hexOutput" class="hex-output" style="display:none"></div>
+    <div id="emptyState" class="card"><div class="empty-state"><div style="margin-top:8px">Select a file to view its hex dump</div></div></div>
+  </main>
+  <script src="assets/utils.js"></script>
+  <script>
+let rawBytes = null;
+let fileName = "";
+let fileSize = 0;
+let displayLimit = 4096;
+let searchTerm = "";
+
+const fileInput     = document.getElementById("fileInput");
+const searchInput   = document.getElementById("searchInput");
+const searchBtn     = document.getElementById("searchBtn");
+const limitSelect   = document.getElementById("limitSelect");
+const hexOutput     = document.getElementById("hexOutput");
+const fileInfoBar   = document.getElementById("fileInfoBar");
+const truncWarn     = document.getElementById("truncationWarn");
+const emptyState    = document.getElementById("emptyState");
+
+fileInput.addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  fileName = file.name;
+  fileSize = file.size;
+  const buf = await readFileAsArrayBuffer(file);
+  rawBytes = new Uint8Array(buf);
+  render();
+});
+
+limitSelect.addEventListener("change", () => { displayLimit = parseInt(limitSelect.value); if (rawBytes) render(); });
+searchBtn.addEventListener("click", () => { searchTerm = searchInput.value.trim(); if (rawBytes) render(); });
+searchInput.addEventListener("keydown", e => { if (e.key === "Enter") { searchTerm = searchInput.value.trim(); if (rawBytes) render(); } });
+
+function guessType(name) {
+  const ext = name.split(".").pop().toLowerCase();
+  const types = { pdf:"application/pdf", png:"image/png", jpg:"image/jpeg", gif:"image/gif", zip:"application/zip", db:"application/x-sqlite3", sqlite:"application/x-sqlite3", exe:"application/x-executable", mp3:"audio/mpeg", mp4:"video/mp4", html:"text/html", txt:"text/plain", js:"text/javascript", json:"application/json", xml:"application/xml" };
+  return types[ext] || "application/octet-stream";
+}
+
+function parseSearch(term) {
+  if (!term) return null;
+  // Try hex pattern: "48 65 6c"
+  const hexPattern = term.split(/\s+/).map(h => parseInt(h,16));
+  if (hexPattern.every(n => !isNaN(n) && n >= 0 && n <= 255)) {
+    return new Uint8Array(hexPattern);
+  }
+  // ASCII
+  return new TextEncoder().encode(term);
+}
+
+function findOccurrences(data, pattern, limit) {
+  const positions = new Set();
+  if (!pattern || !pattern.length) return positions;
+  const sl = pattern.length;
+  const max = Math.min(data.length, limit);
+  outer: for (let i = 0; i <= max - sl; i++) {
+    for (let j = 0; j < sl; j++) { if (data[i+j] !== pattern[j]) continue outer; }
+    for (let j = 0; j < sl; j++) positions.add(i+j);
+  }
+  return positions;
+}
+
+function render() {
+  emptyState.style.display = "none";
+  hexOutput.style.display = "";
+  fileInfoBar.style.display = "flex";
+
+  const bytes = rawBytes.slice(0, displayLimit);
+  const limited = rawBytes.length > displayLimit;
+
+  // File info
+  const type = guessType(fileName);
+  fileInfoBar.innerHTML = `
+    <span class="file-badge">${escapeHtml(fileName)}</span>
+    <span class="file-badge">${formatBytes(fileSize)}</span>
+    <span class="file-badge">${escapeHtml(type)}</span>
+    <span class="file-badge">${rawBytes.length.toLocaleString()} bytes</span>
+  `;
+
+  truncWarn.style.display = limited ? "" : "none";
+  if (limited) truncWarn.textContent = `⚠ File is ${formatBytes(fileSize)} — displaying first ${formatBytes(displayLimit)} only. Increase limit above if needed.`;
+
+  const pattern = parseSearch(searchTerm);
+  const highlights = findOccurrences(bytes, pattern, displayLimit);
+
+  // Build hex dump
+  const lines = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    const chunk = bytes.slice(i, Math.min(i + 16, bytes.length));
+    const offset = i.toString(16).padStart(8,"0");
+
+    let hexPart = "";
+    let asciiPart = "";
+
+    for (let j = 0; j < 16; j++) {
+      if (j === 8) hexPart += " ";
+      if (j < chunk.length) {
+        const byte = chunk[j];
+        const byteHex = byte.toString(16).padStart(2,"0");
+        const isHL = highlights.has(i + j);
+        const isZero = byte === 0;
+        if (isHL) hexPart += `\x00HL${byteHex}\x00`;
+        else if (isZero) hexPart += `\x00ZR${byteHex}\x00`;
+        else hexPart += byteHex;
+        hexPart += " ";
+
+        if (byte >= 0x20 && byte <= 0x7E) {
+          const ch = String.fromCharCode(byte);
+          asciiPart += isHL ? `\x00HL${ch}\x00` : ch;
+        } else {
+          asciiPart += `\x00DOT.\x00`;
+        }
+      } else {
+        hexPart += "   ";
+        asciiPart += " ";
+      }
+    }
+
+    lines.push({ offset, hex: hexPart.trimEnd(), ascii: asciiPart });
+  }
+
+  // Render as HTML
+  let html = "";
+  lines.forEach(line => {
+    const off = `<span class="hex-offset">${escapeHtml(line.offset)}</span>`;
+    const hexHTML = renderSegment(line.hex);
+    const asciiHTML = renderAscii(line.ascii);
+    html += `${off}  <span class="hex-sep">|</span> ${hexHTML} <span class="hex-sep">|</span> ${asciiHTML}<br>`;
+  });
+
+  hexOutput.innerHTML = html;
+}
+
+function renderSegment(hex) {
+  // parse \x00TAG...\x00 markers
+  return hex.replace(/\x00HL([^\x00]+)\x00/g, (_, m) => `<span class="search-highlight hex-byte">${escapeHtml(m)}</span>`)
+            .replace(/\x00ZR([^\x00]+)\x00/g, (_, m) => `<span class="hex-zero">${m}</span>`)
+            .replace(/[^\s<]/g, m => `<span class="hex-byte">${m}</span>`);
+}
+
+function renderAscii(ascii) {
+  return ascii.replace(/\x00HL([^\x00]+)\x00/g, (_, m) => `<span class="search-highlight hex-ascii">${escapeHtml(m)}</span>`)
+              .replace(/\x00DOT\.\x00/g, `<span class="hex-dot">.</span>`)
+              .replace(/[^\s<]/g, m => `<span class="hex-ascii">${escapeHtml(m)}</span>`);
+}
+
+function escapeHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  </script>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <p class="section-kicker">Kenneth D'Silva</p>
+        <p>Magento &amp; Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems with global availability.</p>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Pages</p>
+        <a href="/services.html">Services</a>
+        <a href="/work.html">Work</a>
+        <a href="/about.html">About</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/tools/">Tools</a>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Connect</p>
+        <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="mailto:kd.xtrm@gmail.com">Email</a>
+      </div>
+      <div class="footer-legal">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved.</p>
+        <p class="status-indicator">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-V3EQ13T6K4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-V3EQ13T6K4');
+  </script>
+  <script>
+    (function(){
+      const nav = document.getElementById('nav');
+      window.addEventListener('scroll', function(){ nav.classList.toggle('scrolled', window.scrollY > 20); }, { passive: true });
+      const toggle = document.querySelector('.nav-toggle');
+      const links = document.querySelector('.nav-links');
+      if (toggle) toggle.addEventListener('click', function(){
+        const open = document.body.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', open);
+      });
+    })();
+  </script>
+</body>
+</html>

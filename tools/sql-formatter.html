@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL Formatter — Free Online Tool | MODRACX</title>
+  <meta name="description" content="Format and pretty-print SQL queries with proper indentation and keyword casing." />
+  <meta property="og:title" content="SQL Formatter — Free Online Tool | MODRACX" />
+  <meta property="og:description" content="Format and pretty-print SQL queries with proper indentation and keyword casing." />
+  <meta property="og:url" content="https://modracx.github.io/tools/sql-formatter.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://modracx.github.io/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="SQL Formatter — Free Online Tool | MODRACX" />
+  <meta name="twitter:description" content="Format and pretty-print SQL queries with proper indentation and keyword casing." />
+  <link rel="canonical" href="https://modracx.github.io/tools/sql-formatter.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../style.min.css" />
+  <link rel="stylesheet" href="assets/tools.css" />
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="site-bg-grid" aria-hidden="true"></div>
+    <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="MODRACX Home">
+        <span class="nav-logo-symbol">//</span>
+        <span class="nav-logo-name">MODRACX</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="/" class="nav-link">Home</a></li>
+        <li><a href="/services.html" class="nav-link">Services</a></li>
+        <li><a href="/work.html" class="nav-link">Work</a></li>
+        <li><a href="/about.html" class="nav-link">About</a></li>
+        <li><a href="/contact.html" class="nav-link">Contact</a></li>
+        <li><a href="/tools/" class="nav-link active">Tools</a></li>
+      </ul>
+      <a href="/contact.html#project-form" class="btn-primary nav-cta">Start a Project <span aria-hidden="true">→</span></a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </nav>
+  <main class="tool-page">
+    <div class="tool-header">
+      <nav class="tool-breadcrumb" aria-label="Breadcrumb"><a href="/tools/">← All Tools</a></nav>
+      <h1>SQL Formatter</h1>
+      <p>Format and beautify SQL queries with keyword uppercasing, proper indentation, and subquery support.</p>
+    </div>
+
+    <div class="card">
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+        <div class="btn-group">
+          <button class="btn btn-primary" id="btn-format">Format SQL</button>
+          <button class="btn btn-secondary" id="btn-minify">Minify</button>
+          <button class="btn btn-secondary" id="btn-clear">Clear</button>
+        </div>
+        <div class="form-group" style="margin:0;min-width:160px;">
+          <label>Dialect (visual)</label>
+          <select id="dialect">
+            <option value="mysql">MySQL</option>
+            <option value="postgresql">PostgreSQL</option>
+            <option value="sqlite">SQLite</option>
+            <option value="mssql">MSSQL</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin:0;min-width:160px;">
+          <label>Indentation</label>
+          <select id="indent-sel">
+            <option value="2">2 Spaces</option>
+            <option value="4">4 Spaces</option>
+            <option value="tab">Tab</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>SQL Input</label>
+        <textarea id="sql-input" rows="10" placeholder="SELECT u.id, u.name, o.total FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.active = 1 AND o.total > 100 ORDER BY o.total DESC LIMIT 10"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:10px;">
+        <div class="section-title">Formatted Output</div>
+        <div class="btn-group">
+          <button class="btn btn-sm btn-secondary" id="btn-copy">Copy</button>
+          <button class="btn btn-sm btn-secondary" id="btn-download">Download .sql</button>
+        </div>
+      </div>
+      <div class="output-wrap">
+        <textarea id="sql-output" rows="14" placeholder="Formatted SQL will appear here..." readonly></textarea>
+      </div>
+      <div id="sql-stats" class="text-muted" style="font-size:12px;margin-top:6px;"></div>
+    </div>
+  </main>
+
+  <script src="assets/utils.js"></script>
+  <script>
+    const KEYWORDS_NEWLINE = [
+      'SELECT', 'DISTINCT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'HAVING',
+      'LIMIT', 'OFFSET', 'UNION ALL', 'UNION', 'INTERSECT', 'EXCEPT',
+      'INSERT INTO', 'INSERT', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'DELETE',
+      'CREATE TABLE', 'CREATE INDEX', 'CREATE VIEW', 'CREATE', 'DROP TABLE', 'DROP',
+      'ALTER TABLE', 'ALTER',
+      'FULL OUTER JOIN', 'FULL JOIN', 'LEFT OUTER JOIN', 'LEFT JOIN',
+      'RIGHT OUTER JOIN', 'RIGHT JOIN', 'CROSS JOIN', 'INNER JOIN', 'JOIN',
+      'ON', 'USING'
+    ];
+
+    const KEYWORDS_INDENT = ['AND', 'OR'];
+
+    const ALL_KEYWORDS = [
+      'SELECT', 'DISTINCT', 'AS', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN',
+      'IS NULL', 'IS NOT NULL', 'LIKE', 'BETWEEN', 'EXISTS',
+      'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'OFFSET',
+      'UNION ALL', 'UNION', 'INTERSECT', 'EXCEPT',
+      'INSERT INTO', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'DELETE',
+      'CREATE TABLE', 'CREATE INDEX', 'CREATE VIEW', 'CREATE', 'DROP TABLE', 'DROP',
+      'ALTER TABLE', 'ALTER', 'ADD', 'MODIFY', 'COLUMN',
+      'JOIN', 'INNER JOIN', 'LEFT JOIN', 'LEFT OUTER JOIN', 'RIGHT JOIN', 'RIGHT OUTER JOIN',
+      'FULL JOIN', 'FULL OUTER JOIN', 'CROSS JOIN',
+      'ON', 'USING', 'NULL', 'TRUE', 'FALSE', 'ASC', 'DESC',
+      'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'IF',
+      'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'COALESCE', 'NULLIF',
+      'PRIMARY KEY', 'FOREIGN KEY', 'REFERENCES', 'UNIQUE', 'INDEX',
+      'DEFAULT', 'NOT NULL', 'AUTO_INCREMENT', 'AUTOINCREMENT', 'SERIAL',
+      'CONSTRAINT', 'CHECK', 'CASCADE',
+      'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION',
+      'WITH', 'RECURSIVE'
+    ];
+
+    function getIndentStr() {
+      const v = document.getElementById('indent-sel').value;
+      return v === 'tab' ? '\t' : ' '.repeat(parseInt(v));
+    }
+
+    function tokenize(sql) {
+      const tokens = [];
+      let i = 0;
+      while (i < sql.length) {
+        // Skip whitespace
+        if (/\s/.test(sql[i])) { i++; continue; }
+
+        // Single-line comment
+        if (sql[i] === '-' && sql[i+1] === '-') {
+          let j = i;
+          while (j < sql.length && sql[j] !== '\n') j++;
+          tokens.push({ type: 'comment', val: sql.substring(i, j) });
+          i = j; continue;
+        }
+
+        // Multi-line comment
+        if (sql[i] === '/' && sql[i+1] === '*') {
+          let j = i + 2;
+          while (j < sql.length && !(sql[j] === '*' && sql[j+1] === '/')) j++;
+          tokens.push({ type: 'comment', val: sql.substring(i, j + 2) });
+          i = j + 2; continue;
+        }
+
+        // String literals
+        if (sql[i] === "'" || sql[i] === '"' || sql[i] === '`') {
+          const q = sql[i];
+          let j = i + 1, s = q;
+          while (j < sql.length) {
+            if (sql[j] === q && sql[j+1] === q) { s += q + q; j += 2; }
+            else if (sql[j] === q) { s += q; j++; break; }
+            else if (sql[j] === '\\') { s += sql[j] + sql[j+1]; j += 2; }
+            else { s += sql[j++]; }
+          }
+          tokens.push({ type: 'string', val: s });
+          i = j; continue;
+        }
+
+        // Numbers
+        if (/[0-9]/.test(sql[i]) || (sql[i] === '-' && /[0-9]/.test(sql[i+1]))) {
+          let j = i;
+          if (sql[j] === '-') j++;
+          while (j < sql.length && /[0-9\.]/.test(sql[j])) j++;
+          tokens.push({ type: 'number', val: sql.substring(i, j) });
+          i = j; continue;
+        }
+
+        // Operators/punctuation
+        const twoChar = sql.substring(i, i+2);
+        if (['<>', '<=', '>=', '!=', '::', '||'].includes(twoChar)) {
+          tokens.push({ type: 'op', val: twoChar }); i += 2; continue;
+        }
+        if ('(),;=<>+-*/%'.includes(sql[i])) {
+          tokens.push({ type: 'punct', val: sql[i] }); i++; continue;
+        }
+
+        // Word/identifier
+        let j = i;
+        while (j < sql.length && /[\w\$\.]/.test(sql[j])) j++;
+        if (j === i) { tokens.push({ type: 'other', val: sql[i] }); i++; continue; }
+        tokens.push({ type: 'word', val: sql.substring(i, j) });
+        i = j;
+      }
+      return tokens;
+    }
+
+    function upperKeywords(tokens) {
+      // Build sorted keyword list (longer first for multi-word)
+      const sorted = [...ALL_KEYWORDS].sort((a,b) => b.split(' ').length - a.split(' ').length || b.length - a.length);
+      // Try to match multi-word keywords
+      const result = [...tokens];
+      for (let i = 0; i < result.length; i++) {
+        if (result[i].type !== 'word') continue;
+        for (const kw of sorted) {
+          const words = kw.split(' ');
+          if (words.length === 1) {
+            if (result[i].val.toUpperCase() === kw) {
+              result[i] = { ...result[i], val: kw };
+              break;
+            }
+          } else {
+            // Check multi-word
+            let match = true;
+            for (let w = 0; w < words.length; w++) {
+              if (!result[i+w] || result[i+w].type !== 'word' || result[i+w].val.toUpperCase() !== words[w]) {
+                match = false; break;
+              }
+            }
+            if (match) {
+              const merged = words.join(' ');
+              result.splice(i, words.length, { type: 'keyword', val: merged });
+              break;
+            }
+          }
+        }
+        if (result[i].type === 'word' && ALL_KEYWORDS.includes(result[i].val.toUpperCase())) {
+          result[i] = { type: 'keyword', val: result[i].val.toUpperCase() };
+        }
+      }
+      return result;
+    }
+
+    function formatSQL(sql) {
+      const indentStr = getIndentStr();
+      const tokens = upperKeywords(tokenize(sql));
+      let output = '';
+      let depth = 0;
+      let lineStart = true;
+
+      function newLine(extraIndent = 0) {
+        output += '\n' + indentStr.repeat(depth + extraIndent);
+        lineStart = true;
+      }
+
+      function emit(text) {
+        if (!lineStart) output += ' ';
+        output += text;
+        lineStart = false;
+      }
+
+      for (let i = 0; i < tokens.length; i++) {
+        const tok = tokens[i];
+        const val = tok.val;
+
+        if (tok.type === 'comment') { newLine(); output += val; newLine(); continue; }
+
+        if (tok.type === 'punct') {
+          if (val === '(') {
+            // Check if next non-space token is SELECT (subquery)
+            let j = i + 1;
+            while (j < tokens.length && tokens[j].type === 'comment') j++;
+            if (j < tokens.length && tokens[j].val === 'SELECT') {
+              emit('(');
+              depth++;
+              newLine();
+            } else {
+              emit('(');
+            }
+          } else if (val === ')') {
+            // Check if we increased depth for subquery
+            const prevDepth = depth > 0 ? depth - 1 : 0;
+            if (depth > 0) {
+              depth--;
+              newLine();
+            }
+            output += ')';
+            lineStart = false;
+          } else if (val === ',') {
+            output += ',';
+            newLine();
+          } else if (val === ';') {
+            output += ';';
+            newLine();
+            output += '\n';
+          } else {
+            emit(val);
+          }
+          continue;
+        }
+
+        // Keywords that get their own line
+        if (tok.type === 'keyword' || tok.type === 'word') {
+          const upper = val.toUpperCase();
+
+          if (KEYWORDS_NEWLINE.includes(upper)) {
+            if (output.length > 0 && !lineStart) newLine();
+            emit(upper);
+            continue;
+          }
+
+          if (KEYWORDS_INDENT.includes(upper)) {
+            newLine(1);
+            emit(upper);
+            continue;
+          }
+
+          // CASE/WHEN/THEN/ELSE/END
+          if (upper === 'CASE') { emit(upper); depth++; continue; }
+          if (upper === 'END') { depth = Math.max(0, depth - 1); newLine(); emit(upper); continue; }
+          if (['WHEN', 'THEN', 'ELSE'].includes(upper)) { newLine(); emit(upper); continue; }
+        }
+
+        emit(val);
+      }
+
+      return output.trim();
+    }
+
+    function doFormat() {
+      const input = document.getElementById('sql-input').value.trim();
+      if (!input) return;
+      const formatted = formatSQL(input);
+      document.getElementById('sql-output').value = formatted;
+      const kws = (formatted.match(/\b(SELECT|FROM|WHERE|JOIN|GROUP BY|ORDER BY|HAVING|LIMIT)\b/gi) || []).length;
+      document.getElementById('sql-stats').textContent = `${input.split(';').filter(s=>s.trim()).length} statement(s), ${kws} keyword(s)`;
+      showToast('SQL formatted', 'success');
+    }
+
+    function doMinify() {
+      const input = document.getElementById('sql-input').value.trim();
+      if (!input) return;
+      const minified = input.replace(/\s+/g, ' ').trim();
+      document.getElementById('sql-output').value = minified;
+      showToast(`Minified: ${input.length} → ${minified.length} chars`, 'info');
+    }
+
+    document.getElementById('btn-format').addEventListener('click', doFormat);
+    document.getElementById('btn-minify').addEventListener('click', doMinify);
+    document.getElementById('btn-clear').addEventListener('click', () => {
+      document.getElementById('sql-input').value = '';
+      document.getElementById('sql-output').value = '';
+      document.getElementById('sql-stats').textContent = '';
+    });
+
+    document.getElementById('btn-copy').addEventListener('click', () => {
+      copyToClipboard(document.getElementById('sql-output').value, document.getElementById('btn-copy'));
+    });
+    document.getElementById('btn-download').addEventListener('click', () => {
+      const c = document.getElementById('sql-output').value;
+      if (c) downloadText('query.sql', c, 'text/plain');
+    });
+
+    document.getElementById('sql-input').addEventListener('input', debounce(doFormat, 600));
+    document.getElementById('indent-sel').addEventListener('change', doFormat);
+  </script>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <p class="section-kicker">Kenneth D'Silva</p>
+        <p>Magento &amp; Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems with global availability.</p>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Pages</p>
+        <a href="/services.html">Services</a>
+        <a href="/work.html">Work</a>
+        <a href="/about.html">About</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/tools/">Tools</a>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Connect</p>
+        <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="mailto:kd.xtrm@gmail.com">Email</a>
+      </div>
+      <div class="footer-legal">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved.</p>
+        <p class="status-indicator">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-V3EQ13T6K4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-V3EQ13T6K4');
+  </script>
+  <script>
+    (function(){
+      const nav = document.getElementById('nav');
+      window.addEventListener('scroll', function(){ nav.classList.toggle('scrolled', window.scrollY > 20); }, { passive: true });
+      const toggle = document.querySelector('.nav-toggle');
+      const links = document.querySelector('.nav-links');
+      if (toggle) toggle.addEventListener('click', function(){
+        const open = document.body.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', open);
+      });
+    })();
+  </script>
+</body>
+</html>

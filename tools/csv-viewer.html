@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CSV Viewer — Free Online Tool | MODRACX</title>
+  <meta name="description" content="Preview and convert CSV files, change delimiters, and export data." />
+  <meta property="og:title" content="CSV Viewer — Free Online Tool | MODRACX" />
+  <meta property="og:description" content="Preview and convert CSV files, change delimiters, and export data." />
+  <meta property="og:url" content="https://modracx.github.io/tools/csv-viewer.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://modracx.github.io/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="CSV Viewer — Free Online Tool | MODRACX" />
+  <meta name="twitter:description" content="Preview and convert CSV files, change delimiters, and export data." />
+  <link rel="canonical" href="https://modracx.github.io/tools/csv-viewer.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../style.min.css" />
+  <link rel="stylesheet" href="assets/tools.css" />
+  <style>
+    .csv-table-wrap { overflow-x:auto; max-height:500px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); }
+    .csv-table { border-collapse:collapse; width:100%; font-size:12px; }
+    .csv-table th { background:var(--surface-2); padding:8px 12px; text-align:left; border-bottom:2px solid var(--border); white-space:nowrap; position:sticky; top:0; z-index:1; font-size:11px; text-transform:uppercase; letter-spacing:.3px; color:var(--text-muted); }
+    .csv-table th.sorted-asc::after { content: ' ↑'; color:var(--primary); }
+    .csv-table th.sorted-desc::after { content: ' ↓'; color:var(--primary); }
+    .csv-table th { cursor:pointer; user-select:none; }
+    .csv-table th:hover { color:var(--text); }
+    .csv-table td { padding:6px 12px; border-bottom:1px solid var(--border); white-space:nowrap; max-width:300px; overflow:hidden; text-overflow:ellipsis; }
+    .csv-table tr:hover td { background:var(--surface-2); }
+    .row-num { color:var(--text-subtle); font-family:var(--font-mono); font-size:11px; }
+    .csv-table tr.filtered-out { display:none; }
+    .highlight { background:rgba(124,58,237,0.2); border-radius:2px; }
+    .drop-zone { border:2px dashed var(--border); border-radius:var(--radius-lg); padding:32px; text-align:center; cursor:pointer; transition:border-color .2s; }
+    .drop-zone:hover, .drop-zone.drag-over { border-color:var(--primary); background:var(--primary-light); }
+    .drop-zone input[type=file] { display:none; }
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="site-bg-grid" aria-hidden="true"></div>
+    <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="MODRACX Home">
+        <span class="nav-logo-symbol">//</span>
+        <span class="nav-logo-name">MODRACX</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="/" class="nav-link">Home</a></li>
+        <li><a href="/services.html" class="nav-link">Services</a></li>
+        <li><a href="/work.html" class="nav-link">Work</a></li>
+        <li><a href="/about.html" class="nav-link">About</a></li>
+        <li><a href="/contact.html" class="nav-link">Contact</a></li>
+        <li><a href="/tools/" class="nav-link active">Tools</a></li>
+      </ul>
+      <a href="/contact.html#project-form" class="btn-primary nav-cta">Start a Project <span aria-hidden="true">→</span></a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </nav>
+  <main class="tool-page" style="max-width:1400px;">
+    <div class="tool-header">
+      <nav class="tool-breadcrumb" aria-label="Breadcrumb"><a href="/tools/">← All Tools</a></nav>
+      <h1>CSV Viewer</h1>
+      <p>Parse and visualize CSV files as an interactive table. Supports search, sort, and export.</p>
+    </div>
+
+    <div class="card">
+      <div class="grid-2" style="gap:16px;">
+        <div>
+          <div class="form-group">
+            <label>Paste CSV</label>
+            <textarea id="csv-paste" rows="6" placeholder="Paste CSV data here..."></textarea>
+          </div>
+          <button class="btn btn-primary" id="btn-parse-paste">Parse CSV</button>
+        </div>
+        <div>
+          <label style="display:block;margin-bottom:8px;">Or Drop / Upload File</label>
+          <div class="drop-zone" id="drop-zone">
+                        <div style="color:var(--text-muted);font-size:14px;">Drop CSV file here or click to upload</div>
+            <input type="file" id="file-input" accept=".csv,.tsv,.txt">
+          </div>
+        </div>
+      </div>
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;margin-top:16px;align-items:flex-end;">
+        <div class="form-group" style="margin:0;min-width:160px;">
+          <label>Delimiter</label>
+          <select id="delim-sel">
+            <option value="auto">Auto-detect</option>
+            <option value=",">Comma (,)</option>
+            <option value=";">Semicolon (;)</option>
+            <option value="	">Tab (\t)</option>
+            <option value="|">Pipe (|)</option>
+          </select>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-size:13px;color:var(--text);margin-bottom:6px;">
+          <input type="checkbox" id="has-header" checked> First row is header
+        </label>
+        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+          <label>Search / Filter Rows</label>
+          <input type="text" id="search-input" placeholder="Filter rows...">
+        </div>
+      </div>
+    </div>
+
+    <div id="stats-bar" class="card" style="display:none;">
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;">
+        <div id="stats-text" class="text-muted" style="font-size:13px;"></div>
+        <div class="btn-group">
+          <button class="btn btn-sm btn-secondary" id="btn-download-json">Download JSON</button>
+          <button class="btn btn-sm btn-secondary" id="btn-download-tsv">Download TSV</button>
+          <button class="btn btn-sm btn-secondary" id="btn-download-csv">Download CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="table-container" style="display:none;">
+      <div class="csv-table-wrap">
+        <table class="csv-table" id="csv-table">
+          <thead id="csv-thead"></thead>
+          <tbody id="csv-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script src="assets/utils.js"></script>
+  <script>
+    let parsedData = { headers: [], rows: [] };
+    let sortCol = -1, sortDir = 1;
+
+    function detectDelim(text) {
+      const line = text.split('\n')[0];
+      const counts = { ',': 0, ';': 0, '\t': 0, '|': 0 };
+      for (const c of line) if (c in counts) counts[c]++;
+      return Object.entries(counts).sort((a,b) => b[1]-a[1])[0][0];
+    }
+
+    function parseCSV(text, delim) {
+      const rows = [];
+      let i = 0;
+      while (i <= text.length) {
+        const row = [];
+        while (i <= text.length) {
+          if (i >= text.length || text[i] === '\n') { i++; break; }
+          if (text[i] === '\r') { i++; if (text[i] === '\n') i++; break; }
+          if (text[i] === '"') {
+            i++; let field = '';
+            while (i < text.length) {
+              if (text[i] === '"' && text[i+1] === '"') { field += '"'; i += 2; }
+              else if (text[i] === '"') { i++; break; }
+              else { field += text[i++]; }
+            }
+            row.push(field);
+            if (i < text.length && text[i] === delim) i++;
+          } else {
+            let field = '';
+            while (i < text.length && text[i] !== delim && text[i] !== '\n' && text[i] !== '\r') field += text[i++];
+            row.push(field);
+            if (i < text.length && text[i] === delim) i++;
+          }
+        }
+        if (row.length > 1 || (row.length === 1 && row[0] !== '')) rows.push(row);
+      }
+      return rows;
+    }
+
+    function render(headers, rows) {
+      parsedData = { headers, rows };
+      sortCol = -1; sortDir = 1;
+      renderTable(headers, rows);
+    }
+
+    function renderTable(headers, rows) {
+      const hasHeader = document.getElementById('has-header').checked;
+      const thead = document.getElementById('csv-thead');
+      const tbody = document.getElementById('csv-tbody');
+
+      // Header
+      let headHtml = '<tr><th class="row-num">#</th>';
+      headers.forEach((h, i) => {
+        const sc = sortCol === i ? (sortDir === 1 ? 'sorted-asc' : 'sorted-desc') : '';
+        headHtml += `<th class="${sc}" data-col="${i}">${escapeHtml(h)}</th>`;
+      });
+      headHtml += '</tr>';
+      thead.innerHTML = headHtml;
+
+      // Attach sort listeners
+      thead.querySelectorAll('th[data-col]').forEach(th => {
+        th.addEventListener('click', () => {
+          const col = parseInt(th.dataset.col);
+          if (sortCol === col) sortDir = -sortDir;
+          else { sortCol = col; sortDir = 1; }
+          sortAndRender();
+        });
+      });
+
+      // Rows
+      tbody.innerHTML = rows.map((row, ri) => {
+        return '<tr>' + `<td class="row-num">${ri + 1}</td>` +
+          headers.map((_, ci) => `<td title="${escapeHtml(row[ci] || '')}">${escapeHtml(row[ci] || '')}</td>`).join('') +
+          '</tr>';
+      }).join('');
+
+      document.getElementById('table-container').style.display = 'block';
+      document.getElementById('stats-bar').style.display = 'block';
+      updateStats(rows.length, headers.length);
+      applySearch();
+    }
+
+    function sortAndRender() {
+      if (sortCol < 0) { renderTable(parsedData.headers, parsedData.rows); return; }
+      const sorted = [...parsedData.rows].sort((a, b) => {
+        const av = a[sortCol] || '', bv = b[sortCol] || '';
+        const an = parseFloat(av), bn = parseFloat(bv);
+        if (!isNaN(an) && !isNaN(bn)) return (an - bn) * sortDir;
+        return av.localeCompare(bv) * sortDir;
+      });
+      renderTable(parsedData.headers, sorted);
+    }
+
+    function updateStats(rows, cols) {
+      document.getElementById('stats-text').textContent = `${rows} rows × ${cols} columns`;
+    }
+
+    function applySearch() {
+      const q = document.getElementById('search-input').value.toLowerCase();
+      const rows = document.getElementById('csv-tbody').querySelectorAll('tr');
+      let visible = 0;
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        if (!q || text.includes(q)) { row.classList.remove('filtered-out'); visible++; }
+        else row.classList.add('filtered-out');
+      });
+      document.getElementById('stats-text').textContent =
+        q ? `Showing ${visible} of ${parsedData.rows.length} rows × ${parsedData.headers.length} columns`
+          : `${parsedData.rows.length} rows × ${parsedData.headers.length} columns`;
+    }
+
+    function doParse(text) {
+      if (!text.trim()) return;
+      let delim = document.getElementById('delim-sel').value;
+      if (delim === 'auto') delim = detectDelim(text);
+      const all = parseCSV(text, delim);
+      if (!all.length) { showToast('No data found', 'error'); return; }
+      const hasHeader = document.getElementById('has-header').checked;
+      let headers, rows;
+      if (hasHeader && all.length > 1) {
+        headers = all[0]; rows = all.slice(1);
+      } else {
+        const maxCols = Math.max(...all.map(r => r.length));
+        headers = Array.from({length: maxCols}, (_, i) => `Column ${i+1}`);
+        rows = all;
+      }
+      // Normalize row lengths
+      rows = rows.map(r => {
+        const arr = [...r];
+        while (arr.length < headers.length) arr.push('');
+        return arr.slice(0, headers.length);
+      });
+      render(headers, rows);
+    }
+
+    document.getElementById('btn-parse-paste').addEventListener('click', () => {
+      doParse(document.getElementById('csv-paste').value);
+    });
+
+    document.getElementById('csv-paste').addEventListener('keydown', e => {
+      if (e.ctrlKey && e.key === 'Enter') doParse(document.getElementById('csv-paste').value);
+    });
+
+    // File upload
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', async e => {
+      e.preventDefault(); dropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file) { const text = await readFileAsText(file); document.getElementById('csv-paste').value = text; doParse(text); }
+    });
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files[0];
+      if (file) { const text = await readFileAsText(file); document.getElementById('csv-paste').value = text; doParse(text); }
+    });
+
+    document.getElementById('search-input').addEventListener('input', debounce(applySearch, 200));
+    document.getElementById('delim-sel').addEventListener('change', () => doParse(document.getElementById('csv-paste').value));
+    document.getElementById('has-header').addEventListener('change', () => doParse(document.getElementById('csv-paste').value));
+
+    // Downloads
+    document.getElementById('btn-download-json').addEventListener('click', () => {
+      const objs = parsedData.rows.map(row => {
+        const obj = {};
+        parsedData.headers.forEach((h, i) => obj[h] = row[i] || '');
+        return obj;
+      });
+      downloadText('data.json', JSON.stringify(objs, null, 2), 'application/json');
+    });
+
+    document.getElementById('btn-download-tsv').addEventListener('click', () => {
+      const lines = [parsedData.headers.join('\t'), ...parsedData.rows.map(r => r.join('\t'))];
+      downloadText('data.tsv', lines.join('\n'), 'text/tab-separated-values');
+    });
+
+    document.getElementById('btn-download-csv').addEventListener('click', () => {
+      function csvEsc(v) {
+        const s = String(v || '');
+        return (s.includes(',') || s.includes('"') || s.includes('\n')) ? `"${s.replace(/"/g,'""')}"` : s;
+      }
+      const lines = [parsedData.headers.map(csvEsc).join(','), ...parsedData.rows.map(r => r.map(csvEsc).join(','))];
+      downloadText('data.csv', lines.join('\n'), 'text/csv');
+    });
+  </script>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <p class="section-kicker">Kenneth D'Silva</p>
+        <p>Magento &amp; Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems with global availability.</p>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Pages</p>
+        <a href="/services.html">Services</a>
+        <a href="/work.html">Work</a>
+        <a href="/about.html">About</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/tools/">Tools</a>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Connect</p>
+        <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="mailto:kd.xtrm@gmail.com">Email</a>
+      </div>
+      <div class="footer-legal">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved.</p>
+        <p class="status-indicator">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-V3EQ13T6K4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-V3EQ13T6K4');
+  </script>
+  <script>
+    (function(){
+      const nav = document.getElementById('nav');
+      window.addEventListener('scroll', function(){ nav.classList.toggle('scrolled', window.scrollY > 20); }, { passive: true });
+      const toggle = document.querySelector('.nav-toggle');
+      const links = document.querySelector('.nav-links');
+      if (toggle) toggle.addEventListener('click', function(){
+        const open = document.body.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', open);
+      });
+    })();
+  </script>
+</body>
+</html>

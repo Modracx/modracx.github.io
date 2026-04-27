@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Microphone Visualizer — Free Online Tool | MODRACX</title>
+  <meta name="description" content="" />
+  <meta property="og:title" content="Microphone Visualizer — Free Online Tool | MODRACX" />
+  <meta property="og:description" content="" />
+  <meta property="og:url" content="https://modracx.github.io/tools/mic-visualizer.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://modracx.github.io/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Microphone Visualizer — Free Online Tool | MODRACX" />
+  <meta name="twitter:description" content="" />
+  <link rel="canonical" href="https://modracx.github.io/tools/mic-visualizer.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../style.min.css" />
+  <link rel="stylesheet" href="assets/tools.css" />
+  <style>
+    .canvas-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+    @media(max-width:600px) { .canvas-row { grid-template-columns:1fr; } }
+    .viz-wrap { background:#000; border-radius:var(--radius); overflow:hidden; }
+    .viz-wrap canvas { display:block; width:100%; height:160px; }
+    .viz-label { padding:6px 10px; font-size:11px; color:var(--text-muted); background:var(--surface-2); text-transform:uppercase; letter-spacing:.4px; }
+    .volume-bar-wrap { background:var(--surface-2); border-radius:var(--radius); height:20px; overflow:hidden; margin-top:8px; }
+    .volume-bar { height:100%; background:linear-gradient(90deg,var(--success),#f0a500,var(--error)); width:0%; transition:width .05s; }
+    .status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; background:var(--text-muted); }
+    .status-dot.active { background:var(--success); box-shadow:0 0 6px var(--success); }
+    .status-dot.recording { background:var(--error); animation:blink 1s infinite; }
+    @keyframes blink { 0%,100%{opacity:1}50%{opacity:.2} }
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="site-bg-grid" aria-hidden="true"></div>
+    <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="MODRACX Home">
+        <span class="nav-logo-symbol">//</span>
+        <span class="nav-logo-name">MODRACX</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="/" class="nav-link">Home</a></li>
+        <li><a href="/services.html" class="nav-link">Services</a></li>
+        <li><a href="/work.html" class="nav-link">Work</a></li>
+        <li><a href="/about.html" class="nav-link">About</a></li>
+        <li><a href="/contact.html" class="nav-link">Contact</a></li>
+        <li><a href="/tools/" class="nav-link active">Tools</a></li>
+      </ul>
+      <a href="/contact.html#project-form" class="btn-primary nav-cta">Start a Project <span aria-hidden="true">→</span></a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </nav>
+  <main class="tool-page">
+    <div class="tool-header">
+      <nav class="tool-breadcrumb" aria-label="Breadcrumb"><a href="/tools/">← All Tools</a></nav>
+      <h1>Microphone Visualizer</h1>
+      <p>Real-time waveform and frequency spectrum visualization using the Web Audio API.</p>
+    </div>
+
+    <div class="card">
+      <div class="row" style="align-items:flex-end;flex-wrap:wrap">
+        <div class="col form-group" style="margin:0">
+          <label>Visualization Color</label>
+          <input type="color" id="colorPicker" value="#7c3aed">
+        </div>
+        <div class="col form-group" style="margin:0">
+          <label>FFT Size</label>
+          <select id="fftSize">
+            <option value="512">512 (fast)</option>
+            <option value="1024" selected>1024 (balanced)</option>
+            <option value="2048">2048 (detailed)</option>
+            <option value="4096">4096 (high res)</option>
+          </select>
+        </div>
+        <div class="col btn-group" style="margin:0;align-self:flex-end">
+          <button class="btn btn-primary" id="startBtn">Start/button>
+          <button class="btn btn-danger" id="stopBtn" disabled>⏹ Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="flex-center" style="margin-bottom:12px">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText" style="font-size:13px;color:var(--text-muted)">Microphone not started</span>
+      </div>
+      <div class="canvas-row">
+        <div class="viz-wrap">
+          <canvas id="waveCanvas"></canvas>
+          <div class="viz-label">Waveform (Time Domain)</div>
+        </div>
+        <div class="viz-wrap">
+          <canvas id="freqCanvas"></canvas>
+          <div class="viz-label">Frequency Spectrum</div>
+        </div>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label>Volume Level</label>
+        <div class="volume-bar-wrap">
+          <div class="volume-bar" id="volumeBar"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Record Audio</div>
+      <div class="flex-between" style="flex-wrap:wrap;gap:8px">
+        <div class="flex-center" style="gap:10px">
+          <button class="btn btn-secondary" id="recBtn" disabled>⏺ Record</button>
+          <button class="btn btn-secondary" id="stopRecBtn" disabled>⏹ Stop</button>
+          <button class="btn btn-primary" id="downloadBtn" disabled>⬇ Download WebM</button>
+        </div>
+        <div class="flex-center" style="gap:6px">
+          <span class="status-dot" id="recDot"></span>
+          <span id="recStatus" style="font-size:12px;color:var(--text-muted)">Not recording</span>
+          <span id="recTimer" style="font-family:var(--font-mono);font-size:12px;color:var(--primary)"></span>
+        </div>
+      </div>
+      <div id="audioPlayback" style="margin-top:10px;display:none">
+        <audio id="audioEl" controls style="width:100%;border-radius:var(--radius);margin-top:6px"></audio>
+      </div>
+    </div>
+  </main>
+  <script src="assets/utils.js"></script>
+  <script>
+let audioCtx = null, analyser = null, source = null, stream = null;
+let animId = null;
+let vizColor = "#7c3aed";
+let mediaRecorder = null;
+let recChunks = [];
+let recBlob = null;
+let recStart = null;
+let recTimer = null;
+let isRunning = false;
+
+const waveCanvas = document.getElementById("waveCanvas");
+const freqCanvas = document.getElementById("freqCanvas");
+const waveCtx    = waveCanvas.getContext("2d");
+const freqCtx    = freqCanvas.getContext("2d");
+const statusDot  = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+const volumeBar  = document.getElementById("volumeBar");
+const colorPicker= document.getElementById("colorPicker");
+const fftSizeEl  = document.getElementById("fftSize");
+const startBtn   = document.getElementById("startBtn");
+const stopBtn    = document.getElementById("stopBtn");
+const recBtn     = document.getElementById("recBtn");
+const stopRecBtn = document.getElementById("stopRecBtn");
+const downloadBtn= document.getElementById("downloadBtn");
+const recDot     = document.getElementById("recDot");
+const recStatus  = document.getElementById("recStatus");
+const recTimerEl = document.getElementById("recTimer");
+const audioEl    = document.getElementById("audioEl");
+const audioPlayback = document.getElementById("audioPlayback");
+
+function resizeCanvas(canvas) {
+  canvas.width = canvas.offsetWidth * devicePixelRatio;
+  canvas.height = canvas.offsetHeight * devicePixelRatio;
+}
+
+colorPicker.addEventListener("input", e => vizColor = e.target.value);
+
+startBtn.addEventListener("click", async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = parseInt(fftSizeEl.value);
+    analyser.smoothingTimeConstant = 0.8;
+    source = audioCtx.createMediaStreamSource(stream);
+    source.connect(analyser);
+
+    isRunning = true;
+    statusDot.classList.add("active");
+    statusText.textContent = "Microphone active";
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    recBtn.disabled = false;
+
+    resizeCanvas(waveCanvas);
+    resizeCanvas(freqCanvas);
+    draw();
+    showToast("Microphone started", "success");
+  } catch(e) {
+    showToast("Microphone error: " + e.message, "error");
+  }
+});
+
+stopBtn.addEventListener("click", () => {
+  isRunning = false;
+  if (animId) cancelAnimationFrame(animId);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+  statusDot.classList.remove("active","recording");
+  statusText.textContent = "Stopped";
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  recBtn.disabled = true;
+  volumeBar.style.width = "0%";
+  // Clear canvases
+  waveCtx.clearRect(0,0,waveCanvas.width,waveCanvas.height);
+  freqCtx.clearRect(0,0,freqCanvas.width,freqCanvas.height);
+});
+
+fftSizeEl.addEventListener("change", () => { if (analyser) { analyser.fftSize = parseInt(fftSizeEl.value); } });
+
+function draw() {
+  if (!isRunning) return;
+  animId = requestAnimationFrame(draw);
+
+  const bufLen = analyser.frequencyBinCount;
+  const timeData = new Uint8Array(bufLen);
+  const freqData = new Uint8Array(bufLen);
+  analyser.getByteTimeDomainData(timeData);
+  analyser.getByteFrequencyData(freqData);
+
+  const WW = waveCanvas.width, WH = waveCanvas.height;
+  const FW = freqCanvas.width, FH = freqCanvas.height;
+
+  // Waveform
+  waveCtx.fillStyle = "#000";
+  waveCtx.fillRect(0,0,WW,WH);
+  waveCtx.lineWidth = 2 * devicePixelRatio;
+  waveCtx.strokeStyle = vizColor;
+  waveCtx.shadowColor = vizColor;
+  waveCtx.shadowBlur = 8;
+  waveCtx.beginPath();
+  const sliceW = WW / bufLen;
+  let x = 0;
+  for (let i = 0; i < bufLen; i++) {
+    const v = timeData[i] / 128.0;
+    const y = (v * WH) / 2;
+    i === 0 ? waveCtx.moveTo(x,y) : waveCtx.lineTo(x,y);
+    x += sliceW;
+  }
+  waveCtx.lineTo(WW, WH/2);
+  waveCtx.stroke();
+  waveCtx.shadowBlur = 0;
+
+  // Frequency bars
+  freqCtx.fillStyle = "#000";
+  freqCtx.fillRect(0,0,FW,FH);
+  const barW = (FW / bufLen) * 2.5;
+  let bx = 0;
+  for (let i = 0; i < bufLen; i++) {
+    const barH = (freqData[i] / 255) * FH;
+    const hue = (i / bufLen) * 120; // green→yellow→red gradient
+    freqCtx.fillStyle = vizColor;
+    // Gradient bar
+    const grad = freqCtx.createLinearGradient(0, FH, 0, FH - barH);
+    grad.addColorStop(0, vizColor + "cc");
+    grad.addColorStop(1, vizColor + "ff");
+    freqCtx.fillStyle = grad;
+    freqCtx.fillRect(bx, FH - barH, barW, barH);
+    bx += barW + 1;
+    if (bx > FW) break;
+  }
+
+  // Volume meter (RMS)
+  let sum = 0;
+  for (let i = 0; i < timeData.length; i++) { const v = (timeData[i] - 128) / 128; sum += v * v; }
+  const rms = Math.sqrt(sum / timeData.length);
+  volumeBar.style.width = Math.min(100, rms * 300) + "%";
+}
+
+// Recording
+recBtn.addEventListener("click", () => {
+  if (!stream) return;
+  recChunks = [];
+  const mt = ["audio/webm;codecs=opus","audio/webm"].find(t => MediaRecorder.isTypeSupported(t)) || "";
+  mediaRecorder = new MediaRecorder(stream, mt ? { mimeType:mt } : {});
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    clearInterval(recTimer);
+    recBlob = new Blob(recChunks, { type:"audio/webm" });
+    audioEl.src = URL.createObjectURL(recBlob);
+    audioPlayback.style.display = "";
+    downloadBtn.disabled = false;
+    recDot.classList.remove("recording");
+    recStatus.textContent = "Recorded — " + formatBytes(recBlob.size);
+    recTimerEl.textContent = "";
+    recBtn.disabled = false;
+    stopRecBtn.disabled = true;
+  };
+  mediaRecorder.start(500);
+  recStart = Date.now();
+  recTimer = setInterval(() => {
+    const s = Math.floor((Date.now()-recStart)/1000);
+    recTimerEl.textContent = String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");
+  },500);
+  recDot.classList.add("recording");
+  recStatus.textContent = "Recording…";
+  recBtn.disabled = true;
+  stopRecBtn.disabled = false;
+  downloadBtn.disabled = true;
+});
+
+stopRecBtn.addEventListener("click", () => { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); });
+downloadBtn.addEventListener("click", () => { if (recBlob) downloadBlob(recBlob, "mic-recording-" + Date.now() + ".webm"); });
+
+window.addEventListener("resize", () => { if (isRunning) { resizeCanvas(waveCanvas); resizeCanvas(freqCanvas); } });
+  </script>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <p class="section-kicker">Kenneth D'Silva</p>
+        <p>Magento &amp; Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems with global availability.</p>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Pages</p>
+        <a href="/services.html">Services</a>
+        <a href="/work.html">Work</a>
+        <a href="/about.html">About</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/tools/">Tools</a>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Connect</p>
+        <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="mailto:kd.xtrm@gmail.com">Email</a>
+      </div>
+      <div class="footer-legal">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved.</p>
+        <p class="status-indicator">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-V3EQ13T6K4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-V3EQ13T6K4');
+  </script>
+  <script>
+    (function(){
+      const nav = document.getElementById('nav');
+      window.addEventListener('scroll', function(){ nav.classList.toggle('scrolled', window.scrollY > 20); }, { passive: true });
+      const toggle = document.querySelector('.nav-toggle');
+      const links = document.querySelector('.nav-links');
+      if (toggle) toggle.addEventListener('click', function(){
+        const open = document.body.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', open);
+      });
+    })();
+  </script>
+</body>
+</html>
