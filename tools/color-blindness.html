@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Color Blindness Simulator — Free Online Tool | MODRACX</title>
+  <meta name="description" content="Preview color palettes under 8 types of color blindness for accessibility testing." />
+  <meta property="og:title" content="Color Blindness Simulator — Free Online Tool | MODRACX" />
+  <meta property="og:description" content="Preview color palettes under 8 types of color blindness for accessibility testing." />
+  <meta property="og:url" content="https://modracx.github.io/tools/color-blindness.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://modracx.github.io/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Color Blindness Simulator — Free Online Tool | MODRACX" />
+  <meta name="twitter:description" content="Preview color palettes under 8 types of color blindness for accessibility testing." />
+  <link rel="canonical" href="https://modracx.github.io/tools/color-blindness.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../style.min.css" />
+  <link rel="stylesheet" href="assets/tools.css" />
+  <style>
+    .swatch-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-top: 16px; }
+    @media(max-width:640px){ .swatch-grid { grid-template-columns: repeat(2,1fr); } }
+    .cb-swatch { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+    .cb-color { height: 70px; }
+    .cb-label { padding: 8px; font-size: 11px; font-weight: 600; text-align: center; background: var(--surface-2); color: var(--text-muted); }
+    .drop-zone { border: 2px dashed var(--border); border-radius: var(--radius-lg); padding: 40px; text-align: center; cursor: pointer; transition: all .2s; margin-bottom: 16px; }
+    .drop-zone:hover, .drop-zone.drag-over { border-color: var(--primary); background: var(--primary-light); }
+    .drop-zone-icon { font-size: 36px; margin-bottom: 8px; }
+    canvas { max-width: 100%; border-radius: var(--radius); display: block; }
+    .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+    .img-cb-item { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .img-cb-item canvas { width: 100%; }
+    .img-cb-label { padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface-2); text-align: center; }
+    .color-pick-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .color-pick-row input[type=color] { width: 52px; height: 40px; }
+    .color-pick-row input[type=text] { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="site-bg-grid" aria-hidden="true"></div>
+    <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="MODRACX Home">
+        <span class="nav-logo-symbol">//</span>
+        <span class="nav-logo-name">MODRACX</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="/" class="nav-link">Home</a></li>
+        <li><a href="/services.html" class="nav-link">Services</a></li>
+        <li><a href="/work.html" class="nav-link">Work</a></li>
+        <li><a href="/about.html" class="nav-link">About</a></li>
+        <li><a href="/contact.html" class="nav-link">Contact</a></li>
+        <li><a href="/tools/" class="nav-link active">Tools</a></li>
+      </ul>
+      <a href="/contact.html#project-form" class="btn-primary nav-cta">Start a Project <span aria-hidden="true">→</span></a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </nav>
+  <main class="tool-page">
+    <div class="tool-header">
+      <nav class="tool-breadcrumb" aria-label="Breadcrumb"><a href="/tools/">← All Tools</a></nav>
+      <h1>Color Blindness Simulator</h1>
+      <p>Simulate how colors appear under various types of color vision deficiency.</p>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Single Color Simulation</div>
+      <div class="color-pick-row">
+        <input type="color" id="colorPicker" value="#e84393">
+        <input type="text" id="colorText" value="#e84393" placeholder="#e84393">
+      </div>
+      <div class="swatch-grid" id="swatchGrid"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Image Simulation</div>
+      <div class="drop-zone" id="dropZone">
+                <div style="font-weight:600;margin-bottom:4px">Drop image here or click to upload</div>
+        <div class="text-muted">Applies all 8 simulations to your image</div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+      </div>
+      <div id="imgResults"></div>
+    </div>
+  </main>
+  <script src="assets/utils.js"></script>
+  <script>
+    // Machado et al. 2009 color blindness simulation matrices
+    const CB_MATRICES = {
+      'Normal':         [[1,0,0],[0,1,0],[0,0,1]],
+      'Protanopia':     [[0.1121,0.8853,-0.0005],[0.1127,0.8897,-0.0003],[-0.0002,0.0008,0.9994]],
+      'Deuteranopia':   [[0.2956,0.7048,-0.0004],[0.2992,0.7021,-0.0013],[-0.0001,0.0052,0.9948]],
+      'Tritanopia':     [[1.0000,0.1472,-0.1473],[0.0000,0.8722,0.1280],[0.0000,0.8134,0.1869]],
+      'Protanomaly':    [[0.4580,0.5420,-0.0000],[0.1145,0.8855,0.0000],[0.0000,0.0000,1.0000]],
+      'Deuteranomaly':  [[0.5472,0.4528,0.0000],[0.1000,0.9000,0.0000],[0.0000,0.0000,1.0000]],
+      'Tritanomaly':    [[1.0000,0.0947,-0.0947],[0.0000,0.9316,0.0684],[0.0000,0.5239,0.4761]],
+      'Achromatopsia':  [[0.299,0.587,0.114],[0.299,0.587,0.114],[0.299,0.587,0.114]],
+    };
+
+    function applyMatrix(r,g,b, m) {
+      return {
+        r: Math.min(255,Math.max(0,Math.round(m[0][0]*r+m[0][1]*g+m[0][2]*b))),
+        g: Math.min(255,Math.max(0,Math.round(m[1][0]*r+m[1][1]*g+m[1][2]*b))),
+        b: Math.min(255,Math.max(0,Math.round(m[2][0]*r+m[2][1]*g+m[2][2]*b))),
+      };
+    }
+
+    function hexToRgb(hex) {
+      hex=hex.replace('#','');
+      if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
+      const n=parseInt(hex,16);
+      return {r:(n>>16)&255,g:(n>>8)&255,b:n&255};
+    }
+    function rgbToHex({r,g,b}) { return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join(''); }
+
+    function updateSwatches() {
+      const rgb = hexToRgb(document.getElementById('colorPicker').value);
+      const grid = document.getElementById('swatchGrid');
+      grid.innerHTML = Object.entries(CB_MATRICES).map(([name, m]) => {
+        const sim = applyMatrix(rgb.r, rgb.g, rgb.b, m);
+        const hex = rgbToHex(sim);
+        return `<div class="cb-swatch">
+          <div class="cb-color" style="background:${hex}"></div>
+          <div class="cb-label">${name}<br><span style="font-size:10px;color:var(--text-subtle)">${hex}</span></div>
+        </div>`;
+      }).join('');
+    }
+
+    document.getElementById('colorPicker').addEventListener('input', e => {
+      document.getElementById('colorText').value = e.target.value;
+      updateSwatches();
+    });
+    document.getElementById('colorText').addEventListener('input', e => {
+      let v = e.target.value.trim();
+      if(!/^#/.test(v)) v='#'+v;
+      if(/^#[0-9a-fA-F]{6}$/.test(v)) {
+        document.getElementById('colorPicker').value = v;
+        updateSwatches();
+      }
+    });
+    updateSwatches();
+
+    // Image simulation
+    function applyMatrixToImageData(imageData, m) {
+      const d = new Uint8ClampedArray(imageData.data);
+      for(let i=0;i<d.length;i+=4) {
+        const r=d[i],g=d[i+1],b=d[i+2];
+        const sim=applyMatrix(r,g,b,m);
+        d[i]=sim.r; d[i+1]=sim.g; d[i+2]=sim.b;
+      }
+      return new ImageData(d, imageData.width, imageData.height);
+    }
+
+    function processImage(img) {
+      const results = document.getElementById('imgResults');
+      results.innerHTML = '<div class="img-grid" id="imgGrid"></div>';
+      const grid = document.getElementById('imgGrid');
+      const MAX = 300;
+      const scale = Math.min(1, MAX/Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.round(img.naturalWidth*scale);
+      const h = Math.round(img.naturalHeight*scale);
+
+      Object.entries(CB_MATRICES).forEach(([name, m]) => {
+        const offscreen = document.createElement('canvas');
+        offscreen.width=w; offscreen.height=h;
+        const ctx=offscreen.getContext('2d');
+        ctx.drawImage(img,0,0,w,h);
+        const id = ctx.getImageData(0,0,w,h);
+        const sim = applyMatrixToImageData(id,m);
+        ctx.putImageData(sim,0,0);
+
+        const wrap = document.createElement('div');
+        wrap.className='img-cb-item';
+        wrap.innerHTML=`<div class="img-cb-label">${name}</div>`;
+        wrap.appendChild(offscreen);
+        grid.appendChild(wrap);
+      });
+    }
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    dropZone.addEventListener('click', ()=>fileInput.click());
+    dropZone.addEventListener('dragover', e=>{e.preventDefault();dropZone.classList.add('drag-over');});
+    dropZone.addEventListener('dragleave', ()=>dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e=>{
+      e.preventDefault(); dropZone.classList.remove('drag-over');
+      const file=e.dataTransfer.files[0];
+      if(file&&file.type.startsWith('image/')) loadFile(file);
+    });
+    fileInput.addEventListener('change', ()=>{ if(fileInput.files[0]) loadFile(fileInput.files[0]); });
+
+    function loadFile(file) {
+      readFileAsDataURL(file).then(url=>{
+        const img=new Image();
+        img.onload=()=>processImage(img);
+        img.src=url;
+      });
+    }
+  </script>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <p class="section-kicker">Kenneth D'Silva</p>
+        <p>Magento &amp; Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems with global availability.</p>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Pages</p>
+        <a href="/services.html">Services</a>
+        <a href="/work.html">Work</a>
+        <a href="/about.html">About</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/tools/">Tools</a>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Connect</p>
+        <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="mailto:kd.xtrm@gmail.com">Email</a>
+      </div>
+      <div class="footer-legal">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved.</p>
+        <p class="status-indicator">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-V3EQ13T6K4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-V3EQ13T6K4');
+  </script>
+  <script>
+    (function(){
+      const nav = document.getElementById('nav');
+      window.addEventListener('scroll', function(){ nav.classList.toggle('scrolled', window.scrollY > 20); }, { passive: true });
+      const toggle = document.querySelector('.nav-toggle');
+      const links = document.querySelector('.nav-links');
+      if (toggle) toggle.addEventListener('click', function(){
+        const open = document.body.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', open);
+      });
+    })();
+  </script>
+</body>
+</html>

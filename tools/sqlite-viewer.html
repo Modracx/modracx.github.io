@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQLite Viewer — Free Online Tool | MODRACX</title>
+  <meta name="description" content="Load and browse SQLite .db files in the browser using sql.js WASM." />
+  <meta property="og:title" content="SQLite Viewer — Free Online Tool | MODRACX" />
+  <meta property="og:description" content="Load and browse SQLite .db files in the browser using sql.js WASM." />
+  <meta property="og:url" content="https://modracx.github.io/tools/sqlite-viewer.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://modracx.github.io/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="SQLite Viewer — Free Online Tool | MODRACX" />
+  <meta name="twitter:description" content="Load and browse SQLite .db files in the browser using sql.js WASM." />
+  <link rel="canonical" href="https://modracx.github.io/tools/sqlite-viewer.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../style.min.css" />
+  <link rel="stylesheet" href="assets/tools.css" />
+  <style>
+    .layout { display:grid; grid-template-columns:220px 1fr; gap:16px; }
+    @media(max-width:700px) { .layout { grid-template-columns:1fr; } }
+    .sidebar { display:flex; flex-direction:column; gap:8px; }
+    .table-list { list-style:none; display:flex; flex-direction:column; gap:2px; }
+    .table-list li { padding:8px 12px; border-radius:var(--radius-sm); cursor:pointer; font-size:13px; font-family:var(--font-mono); display:flex; align-items:center; justify-content:space-between; transition:all var(--transition); border:1px solid transparent; }
+    .table-list li:hover { background:var(--surface-2); border-color:var(--border); }
+    .table-list li.active { background:var(--primary-light); border-color:var(--primary); color:var(--text); }
+    .table-count { font-size:10px; color:var(--text-muted); background:var(--surface-2); padding:1px 6px; border-radius:10px; }
+    .table-list li.active .table-count { background:rgba(255,255,255,.1); }
+    .main-panel { display:flex; flex-direction:column; gap:12px; }
+    .query-area { display:flex; gap:8px; align-items:flex-start; }
+    .query-area textarea { font-family:var(--font-mono); flex:1; min-height:80px; resize:vertical; }
+    .pagination { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-muted); flex-wrap:wrap; }
+    .schema-wrap { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; font-family:var(--font-mono); font-size:12px; white-space:pre-wrap; color:var(--text-muted); max-height:200px; overflow:auto; }
+    .result-info { font-size:12px; color:var(--text-muted); margin-bottom:6px; }
+    .empty-sidebar { padding:20px 12px; text-align:center; color:var(--text-muted); font-size:13px; }
+    .loading-msg { padding:40px; text-align:center; color:var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="site-bg-grid" aria-hidden="true"></div>
+    <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="MODRACX Home">
+        <span class="nav-logo-symbol">//</span>
+        <span class="nav-logo-name">MODRACX</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="/" class="nav-link">Home</a></li>
+        <li><a href="/services.html" class="nav-link">Services</a></li>
+        <li><a href="/work.html" class="nav-link">Work</a></li>
+        <li><a href="/about.html" class="nav-link">About</a></li>
+        <li><a href="/contact.html" class="nav-link">Contact</a></li>
+        <li><a href="/tools/" class="nav-link active">Tools</a></li>
+      </ul>
+      <a href="/contact.html#project-form" class="btn-primary nav-cta">Start a Project <span aria-hidden="true">→</span></a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </nav>
+  <main class="tool-page" style="max-width:1200px">
+    <div class="tool-header">
+      <nav class="tool-breadcrumb" aria-label="Breadcrumb"><a href="/tools/">← All Tools</a></nav>
+      <h1>SQLite Viewer</h1>
+      <p>Open any <code>.db</code> or <code>.sqlite</code> file and browse tables or run SQL queries — fully client-side.</p>
+    </div>
+
+    <div class="card">
+      <div class="flex-between" style="flex-wrap:wrap;gap:8px">
+        <div class="form-group" style="margin:0;flex:1">
+          <label>SQLite File</label>
+          <input type="file" id="fileInput" accept=".db,.sqlite,.sqlite3" style="font-family:var(--font);padding:8px">
+        </div>
+        <div id="dbInfo" style="font-size:12px;color:var(--text-muted);align-self:flex-end;padding-bottom:2px"></div>
+      </div>
+      <div id="loadMsg" class="alert alert-info" style="margin-top:10px;display:none">Loading sql.js WASM…</div>
+      <div id="errMsg" class="alert alert-error" style="margin-top:10px;display:none"></div>
+    </div>
+
+    <div id="mainLayout" class="layout" style="display:none">
+      <div class="sidebar">
+        <div class="card" style="margin:0;padding:12px">
+          <div class="section-title">Tables</div>
+          <ul class="table-list" id="tableList"><li class="empty-sidebar">No file loaded</li></ul>
+        </div>
+      </div>
+
+      <div class="main-panel">
+        <div class="card" style="margin:0">
+          <div class="section-title">SQL Query</div>
+          <div class="query-area">
+            <textarea id="queryInput" placeholder="SELECT * FROM table_name LIMIT 100;"></textarea>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <button class="btn btn-primary" id="runBtn">▶ Run</button>
+              <button class="btn btn-secondary" id="clearBtn">Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="schemaCard" class="card" style="margin:0;display:none">
+          <div class="flex-between" style="margin-bottom:8px">
+            <div class="section-title" style="margin:0">Schema — <span id="schemaTableName"></span></div>
+          </div>
+          <div class="schema-wrap" id="schemaContent"></div>
+        </div>
+
+        <div id="resultsCard" class="card" style="margin:0;display:none">
+          <div class="result-info" id="resultInfo"></div>
+          <div class="table-wrap" style="max-height:500px;overflow:auto">
+            <table id="resultTable"><thead id="resultHead"></thead><tbody id="resultBody"></tbody></table>
+          </div>
+          <div class="pagination" style="margin-top:12px" id="pagination"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.min.js"></script>
+  <script src="assets/utils.js"></script>
+  <script>
+let SQL = null;
+let db = null;
+let currentTable = null;
+let currentPage = 0;
+const PAGE_SIZE = 50;
+let currentTotalRows = 0;
+let sqlLoaded = false;
+
+const fileInput   = document.getElementById("fileInput");
+const tableList   = document.getElementById("tableList");
+const queryInput  = document.getElementById("queryInput");
+const runBtn      = document.getElementById("runBtn");
+const clearBtn    = document.getElementById("clearBtn");
+const mainLayout  = document.getElementById("mainLayout");
+const loadMsg     = document.getElementById("loadMsg");
+const errMsg      = document.getElementById("errMsg");
+const dbInfo      = document.getElementById("dbInfo");
+const resultsCard = document.getElementById("resultsCard");
+const schemaCard  = document.getElementById("schemaCard");
+
+async function loadSQL() {
+  if (sqlLoaded) return;
+  loadMsg.style.display = "";
+  loadMsg.textContent = "Loading sql.js WASM…";
+  SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${f}` });
+  sqlLoaded = true;
+  loadMsg.style.display = "none";
+}
+
+fileInput.addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  errMsg.style.display = "none";
+  try {
+    await loadSQL();
+    const buf = await readFileAsArrayBuffer(file);
+    if (db) db.close();
+    db = new SQL.Database(new Uint8Array(buf));
+    dbInfo.textContent = file.name + " · " + formatBytes(file.size);
+    loadTables();
+    mainLayout.style.display = "grid";
+    showToast("Database loaded!", "success");
+  } catch(e) {
+    errMsg.textContent = "Error: " + e.message;
+    errMsg.style.display = "";
+  }
+});
+
+function loadTables() {
+  const result = db.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+  tableList.innerHTML = "";
+  if (!result.length || !result[0].values.length) {
+    tableList.innerHTML = '<li class="empty-sidebar">No tables found</li>';
+    return;
+  }
+  result[0].values.forEach(row => {
+    const name = row[0];
+    let count = "?";
+    try { const r = db.exec(`SELECT COUNT(*) FROM "${name}"`); count = r[0].values[0][0]; } catch(e) {}
+    const li = document.createElement("li");
+    li.innerHTML = `<span>${escapeHtml(name)}</span><span class="table-count">${count}</span>`;
+    li.title = name;
+    li.onclick = () => { currentTable = name; selectTable(name); document.querySelectorAll(".table-list li").forEach(x=>x.classList.remove("active")); li.classList.add("active"); };
+    tableList.appendChild(li);
+  });
+}
+
+function selectTable(name) {
+  queryInput.value = `SELECT * FROM "${name}" LIMIT ${PAGE_SIZE};`;
+  showSchema(name);
+  currentPage = 0;
+  loadTableData(name, 0);
+}
+
+function showSchema(name) {
+  try {
+    const r = db.exec(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${name.replace(/'/g,"''")}'`);
+    if (r.length && r[0].values.length) {
+      document.getElementById("schemaContent").textContent = r[0].values[0][0];
+      document.getElementById("schemaTableName").textContent = name;
+      schemaCard.style.display = "";
+    }
+  } catch(e) {}
+}
+
+function loadTableData(name, page) {
+  const offset = page * PAGE_SIZE;
+  let total = 0;
+  try { const r = db.exec(`SELECT COUNT(*) FROM "${name}"`); total = r[0].values[0][0]; } catch(e) {}
+  currentTotalRows = total;
+  try {
+    const result = db.exec(`SELECT * FROM "${name}" LIMIT ${PAGE_SIZE} OFFSET ${offset}`);
+    renderResults(result, total, page, name);
+  } catch(e) {
+    showError(e.message);
+  }
+}
+
+function renderResults(result, total, page, tableName) {
+  resultsCard.style.display = "";
+  const head = document.getElementById("resultHead");
+  const body = document.getElementById("resultBody");
+  const info = document.getElementById("resultInfo");
+  const pag  = document.getElementById("pagination");
+  head.innerHTML = "";
+  body.innerHTML = "";
+  pag.innerHTML = "";
+
+  if (!result.length) {
+    info.textContent = "Query returned 0 rows.";
+    return;
+  }
+
+  const cols = result[0].columns;
+  const rows = result[0].values;
+  const offset = page * PAGE_SIZE;
+
+  info.textContent = `Showing rows ${offset+1}–${Math.min(offset+rows.length, total)} of ${total.toLocaleString()} total`;
+
+  const tr = document.createElement("tr");
+  cols.forEach(c => { tr.innerHTML += `<th>${escapeHtml(String(c))}</th>`; });
+  head.appendChild(tr);
+
+  rows.forEach(row => {
+    const tr = document.createElement("tr");
+    row.forEach(cell => {
+      const td = document.createElement("td");
+      if (cell === null) { td.innerHTML = '<span style="color:var(--text-subtle);font-style:italic">NULL</span>'; }
+      else { td.textContent = String(cell); if (String(cell).length > 80) td.title = String(cell); }
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+
+  // Pagination
+  if (total > PAGE_SIZE) {
+    const totalPages = Math.ceil(total / PAGE_SIZE);
+    const prevBtn = document.createElement("button");
+    prevBtn.className = "btn btn-sm btn-secondary"; prevBtn.textContent = "← Prev";
+    prevBtn.disabled = page === 0;
+    prevBtn.onclick = () => { currentPage--; loadTableData(tableName || currentTable, currentPage); };
+
+    const nextBtn = document.createElement("button");
+    nextBtn.className = "btn btn-sm btn-secondary"; nextBtn.textContent = "Next →";
+    nextBtn.disabled = page >= totalPages - 1;
+    nextBtn.onclick = () => { currentPage++; loadTableData(tableName || currentTable, currentPage); };
+
+    pag.appendChild(prevBtn);
+    pag.innerHTML += `<span>Page ${page+1} / ${totalPages}</span>`;
+    pag.appendChild(nextBtn);
+  }
+}
+
+function showError(msg) {
+  resultsCard.style.display = "";
+  document.getElementById("resultInfo").textContent = "Error: " + msg;
+  document.getElementById("resultHead").innerHTML = "";
+  document.getElementById("resultBody").innerHTML = "";
+  document.getElementById("pagination").innerHTML = "";
+}
+
+runBtn.addEventListener("click", () => {
+  if (!db) return;
+  const sql = queryInput.value.trim();
+  if (!sql) return;
+  schemaCard.style.display = "none";
+  try {
+    const result = db.exec(sql);
+    renderResults(result, result.length ? result[0].values.length : 0, 0, null);
+    const rows = result.length ? result[0].values.length : 0;
+    document.getElementById("resultInfo").textContent = `Query OK — ${rows} row(s) returned`;
+  } catch(e) {
+    showError(e.message);
+  }
+});
+
+clearBtn.addEventListener("click", () => { queryInput.value = ""; });
+
+function escapeHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  </script>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <p class="section-kicker">Kenneth D'Silva</p>
+        <p>Magento &amp; Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems with global availability.</p>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Pages</p>
+        <a href="/services.html">Services</a>
+        <a href="/work.html">Work</a>
+        <a href="/about.html">About</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/tools/">Tools</a>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Connect</p>
+        <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="mailto:kd.xtrm@gmail.com">Email</a>
+      </div>
+      <div class="footer-legal">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved.</p>
+        <p class="status-indicator">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-V3EQ13T6K4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-V3EQ13T6K4');
+  </script>
+  <script>
+    (function(){
+      const nav = document.getElementById('nav');
+      window.addEventListener('scroll', function(){ nav.classList.toggle('scrolled', window.scrollY > 20); }, { passive: true });
+      const toggle = document.querySelector('.nav-toggle');
+      const links = document.querySelector('.nav-links');
+      if (toggle) toggle.addEventListener('click', function(){
+        const open = document.body.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', open);
+      });
+    })();
+  </script>
+</body>
+</html>

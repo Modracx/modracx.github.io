@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Docker Run → Compose — Free Online Tool | MODRACX</title>
+  <meta name="description" content="" />
+  <meta property="og:title" content="Docker Run → Compose — Free Online Tool | MODRACX" />
+  <meta property="og:description" content="" />
+  <meta property="og:url" content="https://modracx.github.io/tools/docker-to-compose.html" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://modracx.github.io/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Docker Run → Compose — Free Online Tool | MODRACX" />
+  <meta name="twitter:description" content="" />
+  <link rel="canonical" href="https://modracx.github.io/tools/docker-to-compose.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../style.min.css" />
+  <link rel="stylesheet" href="assets/tools.css" />
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="site-bg-grid" aria-hidden="true"></div>
+    <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="MODRACX Home">
+        <span class="nav-logo-symbol">//</span>
+        <span class="nav-logo-name">MODRACX</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="/" class="nav-link">Home</a></li>
+        <li><a href="/services.html" class="nav-link">Services</a></li>
+        <li><a href="/work.html" class="nav-link">Work</a></li>
+        <li><a href="/about.html" class="nav-link">About</a></li>
+        <li><a href="/contact.html" class="nav-link">Contact</a></li>
+        <li><a href="/tools/" class="nav-link active">Tools</a></li>
+      </ul>
+      <a href="/contact.html#project-form" class="btn-primary nav-cta">Start a Project <span aria-hidden="true">→</span></a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </nav>
+  <main class="tool-page">
+    <div class="tool-header">
+      <nav class="tool-breadcrumb" aria-label="Breadcrumb"><a href="/tools/">← All Tools</a></nav>
+      <h1>Docker Run → Compose Converter</h1>
+      <p>Paste a <code>docker run</code> command and get a ready-to-use <code>docker-compose.yml</code>.</p>
+    </div>
+
+    <div class="card">
+      <div class="form-group">
+        <label>docker run command</label>
+        <textarea id="dockerInput" rows="5" placeholder="docker run -d --name myapp -p 8080:80 -e NODE_ENV=production -v /data:/app/data --restart unless-stopped nginx:latest"></textarea>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="convert()">Convert</button>
+        <button class="btn btn-secondary" onclick="loadExample()">Example</button>
+        <button class="btn btn-secondary" onclick="clearAll()">Clear</button>
+      </div>
+    </div>
+
+    <div id="results" style="display:none">
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:12px">
+          <div class="section-title" style="margin:0">docker-compose.yml</div>
+          <div class="btn-group">
+            <button class="btn btn-primary btn-sm" onclick="copyOutput()">Copy</button>
+            <button class="btn btn-secondary btn-sm" onclick="downloadOutput()">Download .yml</button>
+          </div>
+        </div>
+        <div class="output-wrap">
+          <pre class="output" id="composeOutput" style="white-space:pre;overflow-x:auto"></pre>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-title">Parsed Flags</div>
+        <div id="parsedFlags"></div>
+      </div>
+    </div>
+    <div id="errorMsg"></div>
+  </main>
+  <script src="assets/utils.js"></script>
+  <script>
+    function tokenize(cmd) {
+      const tokens = [];
+      let i = 0, cur = '';
+      while (i < cmd.length) {
+        const c = cmd[i];
+        if (c === '"' || c === "'") {
+          const q = c; i++;
+          while (i < cmd.length && cmd[i] !== q) { if (cmd[i]==='\\' && i+1<cmd.length) { i++; cur+=cmd[i]; } else cur+=cmd[i]; i++; }
+          i++;
+        } else if (c === '\\' && i+1 < cmd.length && cmd[i+1] === '\n') {
+          i += 2;
+        } else if (/\s/.test(c)) {
+          if (cur) tokens.push(cur); cur=''; i++;
+        } else {
+          cur += c; i++;
+        }
+      }
+      if (cur) tokens.push(cur);
+      return tokens;
+    }
+
+    function parseDockerRun(cmd) {
+      const tokens = tokenize(cmd.replace(/\\\s*\n\s*/g,' ').trim());
+      // Remove 'docker' and 'run' at start
+      let idx = 0;
+      if (tokens[idx] === 'docker') idx++;
+      if (tokens[idx] === 'run') idx++;
+
+      const result = {
+        image: null, name: null, ports: [], volumes: [], environment: [],
+        network: null, restart: null, detach: false, remove: false,
+        labels: [], memory: null, cpus: null, workdir: null, user: null,
+        entrypoint: null, capAdd: [], capDrop: [], tty: false, interactive: false,
+        command: []
+      };
+
+      const flags1 = new Set(['-d','--detach','-it','-ti','-i','--interactive','-t','--tty','--rm','--privileged']);
+      const flags2 = new Set(['-p','--publish','-v','--volume','-e','--env','--name','--network',
+        '--restart','--memory','-m','--cpus','-w','--workdir','--user','-u',
+        '--entrypoint','--cap-add','--cap-drop','--label','-l','--hostname','--platform']);
+
+      while (idx < tokens.length) {
+        const t = tokens[idx];
+        if (t.startsWith('--') && t.includes('=')) {
+          const eq = t.indexOf('=');
+          const flag = t.slice(0, eq);
+          const val  = t.slice(eq+1);
+          handleFlag(result, flag, val);
+          idx++;
+        } else if (t === '-d' || t === '--detach') { result.detach = true; idx++; }
+        else if (t === '--rm') { result.remove = true; idx++; }
+        else if (t === '-t' || t === '--tty') { result.tty = true; idx++; }
+        else if (t === '-i' || t === '--interactive') { result.interactive = true; idx++; }
+        else if (t === '-it' || t === '-ti') { result.tty = true; result.interactive = true; idx++; }
+        else if (flags2.has(t) && idx+1 < tokens.length) {
+          handleFlag(result, t, tokens[idx+1]);
+          idx += 2;
+        } else if (t.startsWith('-')) {
+          idx++; // skip unknown
+        } else {
+          // image or command
+          if (!result.image) { result.image = t; }
+          else { result.command.push(t); }
+          idx++;
+        }
+      }
+      return result;
+    }
+
+    function handleFlag(r, flag, val) {
+      if (flag === '-p' || flag === '--publish') r.ports.push(val);
+      else if (flag === '-v' || flag === '--volume') r.volumes.push(val);
+      else if (flag === '-e' || flag === '--env') r.environment.push(val);
+      else if (flag === '--name') r.name = val;
+      else if (flag === '--network') r.network = val;
+      else if (flag === '--restart') r.restart = val;
+      else if (flag === '--memory' || flag === '-m') r.memory = val;
+      else if (flag === '--cpus') r.cpus = val;
+      else if (flag === '-w' || flag === '--workdir') r.workdir = val;
+      else if (flag === '--user' || flag === '-u') r.user = val;
+      else if (flag === '--entrypoint') r.entrypoint = val;
+      else if (flag === '--cap-add') r.capAdd.push(val);
+      else if (flag === '--cap-drop') r.capDrop.push(val);
+      else if (flag === '--label' || flag === '-l') r.labels.push(val);
+    }
+
+    function yamlStr(s) {
+      if (/[:#\[\]{}|>&*!,?`@%'"\\]/.test(s) || s.includes('\n') || s.trim() !== s) {
+        return `"${s.replace(/\\/g,'\\\\').replace(/"/g,'\\"')}"`;
+      }
+      return s;
+    }
+
+    function toCompose(r) {
+      const svcName = r.name || (r.image ? r.image.split('/').pop().split(':')[0].replace(/[^a-z0-9_-]/g,'_') : 'app');
+      const lines = ['services:', `  ${svcName}:`];
+      lines.push(`    image: ${yamlStr(r.image || 'IMAGE')}`);
+      if (r.name) lines.push(`    container_name: ${yamlStr(r.name)}`);
+      if (r.restart) lines.push(`    restart: ${r.restart}`);
+      if (r.detach === false && (r.tty || r.interactive)) {
+        if (r.tty) lines.push(`    tty: true`);
+        if (r.interactive) lines.push(`    stdin_open: true`);
+      }
+      if (r.ports.length) {
+        lines.push('    ports:');
+        r.ports.forEach(p => lines.push(`      - "${p}"`));
+      }
+      if (r.volumes.length) {
+        lines.push('    volumes:');
+        r.volumes.forEach(v => lines.push(`      - ${yamlStr(v)}`));
+      }
+      if (r.environment.length) {
+        lines.push('    environment:');
+        r.environment.forEach(e => {
+          if (e.includes('=')) {
+            const [k,...rest] = e.split('=');
+            lines.push(`      - ${k}=${rest.join('=')}`);
+          } else {
+            lines.push(`      - ${e}`);
+          }
+        });
+      }
+      if (r.labels.length) {
+        lines.push('    labels:');
+        r.labels.forEach(l => {
+          if (l.includes('=')) { const [k,...v] = l.split('='); lines.push(`      - "${k}=${v.join('=')}"`); }
+          else lines.push(`      - "${l}"`);
+        });
+      }
+      if (r.capAdd.length) { lines.push('    cap_add:'); r.capAdd.forEach(c => lines.push(`      - ${c}`)); }
+      if (r.capDrop.length) { lines.push('    cap_drop:'); r.capDrop.forEach(c => lines.push(`      - ${c}`)); }
+      if (r.network) {
+        lines.push('    networks:');
+        lines.push(`      - ${r.network}`);
+      }
+      if (r.user) lines.push(`    user: "${r.user}"`);
+      if (r.workdir) lines.push(`    working_dir: ${yamlStr(r.workdir)}`);
+      if (r.entrypoint) lines.push(`    entrypoint: ${yamlStr(r.entrypoint)}`);
+      if (r.command.length) {
+        if (r.command.length === 1) {
+          lines.push(`    command: ${yamlStr(r.command[0])}`);
+        } else {
+          lines.push('    command:');
+          r.command.forEach(c => lines.push(`      - ${yamlStr(c)}`));
+        }
+      }
+      const deploy = [];
+      if (r.memory) deploy.push(`      memory: ${r.memory}`);
+      if (r.cpus) deploy.push(`      cpus: "${r.cpus}"`);
+      if (deploy.length) {
+        lines.push('    deploy:');
+        lines.push('      resources:');
+        lines.push('        limits:');
+        deploy.forEach(l => lines.push(l));
+      }
+      if (r.network) {
+        lines.push('');
+        lines.push('networks:');
+        lines.push(`  ${r.network}:`);
+        lines.push('    external: true');
+      }
+      return lines.join('\n');
+    }
+
+    let lastOutput = '';
+
+    function convert() {
+      const errEl = document.getElementById('errorMsg');
+      errEl.innerHTML = '';
+      const cmd = document.getElementById('dockerInput').value.trim();
+      if (!cmd) { errEl.innerHTML = '<div class="alert alert-error">Please enter a docker run command</div>'; return; }
+      try {
+        const parsed = parseDockerRun(cmd);
+        if (!parsed.image) throw new Error('Could not detect image name from command');
+        lastOutput = toCompose(parsed);
+        document.getElementById('composeOutput').textContent = lastOutput;
+        renderParsed(parsed);
+        document.getElementById('results').style.display = '';
+      } catch(e) {
+        document.getElementById('results').style.display = 'none';
+        errEl.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+      }
+    }
+
+    function renderParsed(r) {
+      const rows = [
+        ['Image', r.image || '(not found)'],
+        ['Container Name', r.name || '(auto)'],
+        ['Ports', r.ports.join(', ') || 'none'],
+        ['Volumes', r.volumes.join(', ') || 'none'],
+        ['Environment', r.environment.join(', ') || 'none'],
+        ['Network', r.network || 'default'],
+        ['Restart Policy', r.restart || 'no'],
+        ['Detach (-d)', r.detach ? 'yes' : 'no'],
+        ['Remove (--rm)', r.remove ? 'yes' : 'no'],
+        ['Memory', r.memory || 'unlimited'],
+        ['CPUs', r.cpus || 'unlimited'],
+        ['Working Dir', r.workdir || 'default'],
+        ['User', r.user || 'default'],
+        ['Entrypoint', r.entrypoint || 'default'],
+        ['Cap Add', r.capAdd.join(', ') || 'none'],
+        ['Cap Drop', r.capDrop.join(', ') || 'none'],
+        ['Command', r.command.join(' ') || '(image default)'],
+      ];
+      document.getElementById('parsedFlags').innerHTML = rows.map(([k,v]) =>
+        `<div class="info-row"><span class="info-key">${k}</span><span class="info-val">${v}</span></div>`
+      ).join('');
+    }
+
+    function copyOutput() { copyToClipboard(lastOutput, event.currentTarget); }
+    function downloadOutput() { downloadText('docker-compose.yml', lastOutput); }
+    function clearAll() {
+      document.getElementById('dockerInput').value='';
+      document.getElementById('results').style.display='none';
+      document.getElementById('errorMsg').innerHTML='';
+    }
+
+    function loadExample() {
+      document.getElementById('dockerInput').value =
+        'docker run -d \\\n  --name webapp \\\n  -p 8080:80 \\\n  -p 8443:443 \\\n  -e NODE_ENV=production \\\n  -e DATABASE_URL=postgres://user:pass@db:5432/mydb \\\n  -v /host/data:/app/data \\\n  -v /host/logs:/app/logs \\\n  --network mynet \\\n  --restart unless-stopped \\\n  --memory 512m \\\n  --cpus 0.5 \\\n  -w /app \\\n  --user 1000:1000 \\\n  myrepo/myapp:latest npm start';
+      convert();
+    }
+  </script>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <p class="section-kicker">Kenneth D'Silva</p>
+        <p>Magento &amp; Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems with global availability.</p>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Pages</p>
+        <a href="/services.html">Services</a>
+        <a href="/work.html">Work</a>
+        <a href="/about.html">About</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/tools/">Tools</a>
+      </div>
+      <div class="footer-section">
+        <p class="footer-section-title">Connect</p>
+        <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="mailto:kd.xtrm@gmail.com">Email</a>
+      </div>
+      <div class="footer-legal">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved.</p>
+        <p class="status-indicator">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-V3EQ13T6K4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-V3EQ13T6K4');
+  </script>
+  <script>
+    (function(){
+      const nav = document.getElementById('nav');
+      window.addEventListener('scroll', function(){ nav.classList.toggle('scrolled', window.scrollY > 20); }, { passive: true });
+      const toggle = document.querySelector('.nav-toggle');
+      const links = document.querySelector('.nav-links');
+      if (toggle) toggle.addEventListener('click', function(){
+        const open = document.body.classList.toggle('menu-open');
+        toggle.setAttribute('aria-expanded', open);
+      });
+    })();
+  </script>
+</body>
+</html>
