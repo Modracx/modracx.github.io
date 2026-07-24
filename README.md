@@ -9,10 +9,30 @@ contact pathways in a clear and polished format. It highlights experience in
 Magento, Shopify, frontend development, custom business systems, performance,
 SEO, and long-term website maintenance.
 
-The site is structured as a lightweight static portfolio with hand-authored
-HTML, modular source CSS and JavaScript, and minified production assets. Its
-goal is to communicate both technical depth and professional credibility while
-remaining fast, accessible, and easy to maintain.
+The site is a hand-authored static portfolio — no build step, no dependencies.
+Five HTML pages load four stylesheets and five scripts directly:
+
+```
+css/  tokens · base · atmosphere · components
+js/   particles · atmosphere · pathway · scroll · ui
+```
+
+The visual direction is "The Atlas of the Realm": a night-sky star chart where
+each area of work is a ward on the map, strung along a constellation spine that
+draws itself as you scroll. A canvas particle system reacts to the pointer —
+motes drift toward a resting cursor, scatter from a moving one, stream toward a
+held one, and link into constellations with their neighbours.
+
+Every atmospheric layer is decorative and hidden from assistive technology, and
+the whole ambient system stands down under `prefers-reduced-motion`. The content
+works without JavaScript: ward cards are ordinary links to their sections, and
+the project brief falls back to a plain mail link.
+
+See [docs/brand-guidelines.md](docs/brand-guidelines.md) and
+[design-system/modracx-portfolio/MASTER.md](design-system/modracx-portfolio/MASTER.md)
+for the tokens and patterns.
+
+To preview locally: `python3 -m http.server 8000`.
 
 ## Copyright and Usage
 
