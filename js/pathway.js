@@ -2,7 +2,7 @@
    PathwayRenderer — the constellation spine.
    Threads a curve through every .waypoint inside [data-spine], then draws
    that curve in as the reader descends. Waypoints ignite when reached.
-   Optimized to cache bounding geometry and prevent forced reflows during scroll.
+   Mobile optimized to prevent SVG re-rasterization & GPU hanging during scroll.
    ========================================================================== */
 
 (function () {
@@ -25,11 +25,12 @@
   var hostHeight = 0;
   var hostWidth = 0;
   var cachedMarks = [];
+  var isMobile = false;
 
-  // The line reaches a waypoint at the same moment that waypoint ignites.
   var LINE_AT = 0.75;
 
   function build() {
+    isMobile = (window.innerWidth || 0) < 768;
     var scrollY = window.scrollY || window.pageYOffset;
     var box = host.getBoundingClientRect();
     hostTop = box.top + scrollY;
@@ -42,7 +43,7 @@
       return {
         el: mark,
         x: m.left + m.width / 2 - box.left,
-        sway: (i % 2 === 0 ? -1 : 1) * Math.min(box.width * 0.16, 150),
+        sway: (i % 2 === 0 ? -1 : 1) * Math.min(box.width * (isMobile ? 0.08 : 0.16), 120),
         y: markTop,
         relTop: markTop
       };
@@ -65,8 +66,15 @@
 
     firstY = cachedMarks[0].y;
     lastY = cachedMarks[cachedMarks.length - 1].y;
-    length = path.getTotalLength();
-    path.style.strokeDasharray = length;
+
+    if (isMobile) {
+      // On mobile, keep the path static to avoid costly SVG stroke-dashoffset repaints during momentum scroll
+      path.style.strokeDasharray = "none";
+      path.style.strokeDashoffset = "0";
+    } else {
+      length = path.getTotalLength();
+      path.style.strokeDasharray = length;
+    }
     draw();
   }
 
@@ -82,10 +90,13 @@
     var scrollY = window.scrollY || window.pageYOffset;
     var view = window.innerHeight;
     var currentBoxTop = hostTop - scrollY;
-    var span = lastY - firstY;
-    var travelled = view * LINE_AT - currentBoxTop - firstY;
-    var p = span > 0 ? Math.max(0, Math.min(1, travelled / span)) : 1;
-    path.style.strokeDashoffset = (length * (1 - p)).toFixed(1);
+
+    if (!isMobile && length > 0) {
+      var span = lastY - firstY;
+      var travelled = view * LINE_AT - currentBoxTop - firstY;
+      var p = span > 0 ? Math.max(0, Math.min(1, travelled / span)) : 1;
+      path.style.strokeDashoffset = (length * (1 - p)).toFixed(1);
+    }
 
     var targetThreshold = view * LINE_AT - currentBoxTop;
     for (var i = 0; i < cachedMarks.length; i++) {

@@ -1,7 +1,7 @@
 /* ==========================================================================
    ParticleSystem — the drifting motes that make up the realm's air.
    Canvas 2D, spatial-hashed constellation links, pointer forces, click bursts.
-   Optimized for 60fps without layout thrashing or per-frame gradient allocation.
+   Optimized for mobile to ensure 60fps native momentum scrolling without lag.
    ========================================================================== */
 
 (function () {
@@ -18,7 +18,6 @@
     [240, 244, 255]
   ];
 
-  // Pre-render radial gradient textures for each palette color to eliminate per-frame allocations
   var SPRITES = [];
   function createSprites(dpr) {
     SPRITES = PALETTE.map(function (c) {
@@ -53,6 +52,7 @@
     this.running = false;
     this.vw = 0;
     this.vh = 0;
+    this.isMobile = false;
     createSprites(this.dpr);
     this.resize();
     this.seed();
@@ -66,14 +66,15 @@
     this.h = h;
     this.vw = w;
     this.vh = h;
+    this.isMobile = w < 768;
     this.canvas.width = Math.floor(w * this.dpr);
     this.canvas.height = Math.floor(h * this.dpr);
     this.canvas.style.width = w + "px";
     this.canvas.style.height = h + "px";
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-    var target = Math.round(Math.min(220, Math.max(70, (w * h) / 7500)));
-    if (w < 720) target = Math.round(target * 0.5);
+    var target = Math.round(Math.min(180, Math.max(50, (w * h) / 8500)));
+    if (this.isMobile) target = 24; // Low particle count on mobile for smooth 60fps scrolling
     this.target = target;
   };
 
@@ -115,12 +116,14 @@
     });
 
     window.addEventListener("pointermove", function (e) {
+      if (e.pointerType === "touch" || self.isMobile) return;
       self.pointer.x = e.clientX;
       self.pointer.y = e.clientY;
       self.pointer.inside = true;
     }, { passive: true });
 
     window.addEventListener("pointerdown", function (e) {
+      if (self.isMobile) return;
       self.pointer.down = true;
       self.burst(e.clientX, e.clientY);
     }, { passive: true });
@@ -188,7 +191,7 @@
       p.vx += Math.sin(p.phase * 0.6) * 0.004 * p.drift;
       p.vy += Math.cos(p.phase * 0.4) * 0.004 * p.drift;
 
-      if (pt.inside) {
+      if (pt.inside && !this.isMobile) {
         var ax = p.x - pt.x;
         var ay = p.y - pt.y;
         var d2 = ax * ax + ay * ay;
@@ -229,46 +232,49 @@
     var pt = this.pointer;
     ctx.clearRect(0, 0, this.w, this.h);
 
-    this.hash();
-    ctx.lineWidth = 0.6;
-    var range = this.linkRange;
-    var range2 = range * range;
+    // Skip heavy spatial hash link calculations on mobile screens
+    if (!this.isMobile) {
+      this.hash();
+      ctx.lineWidth = 0.6;
+      var range = this.linkRange;
+      var range2 = range * range;
 
-    this.grid.forEach(function (bucket, key) {
-      var parts = key.split(":");
-      var cx = +parts[0];
-      var cy = +parts[1];
-      for (var ox = 0; ox <= 1; ox++) {
-        for (var oy = ox === 0 ? 0 : -1; oy <= 1; oy++) {
-          var nKey = (cx + ox) + ":" + (cy + oy);
-          var other = this.grid.get(nKey);
-          if (!other) continue;
-          for (var i = 0; i < bucket.length; i++) {
-            var a = bucket[i];
-            var start = nKey === key ? i + 1 : 0;
-            for (var j = start; j < other.length; j++) {
-              var b = other[j];
-              var dx = a.x - b.x;
-              var dy = a.y - b.y;
-              var d2 = dx * dx + dy * dy;
-              if (d2 > range2) continue;
-              var t = 1 - Math.sqrt(d2) / range;
-              var mx = (a.x + b.x) * 0.5 - pt.x;
-              var my = (a.y + b.y) * 0.5 - pt.y;
-              var near = pt.inside ? Math.max(0, 1 - Math.sqrt(mx * mx + my * my) / 300) : 0;
-              ctx.strokeStyle = "rgba(" + (150 + near * 90) + "," + (140 + near * 52) + ",235," +
-                (t * (0.07 + near * 0.3)).toFixed(3) + ")";
-              ctx.beginPath();
-              ctx.moveTo(a.x, a.y);
-              ctx.lineTo(b.x, b.y);
-              ctx.stroke();
+      this.grid.forEach(function (bucket, key) {
+        var parts = key.split(":");
+        var cx = +parts[0];
+        var cy = +parts[1];
+        for (var ox = 0; ox <= 1; ox++) {
+          for (var oy = ox === 0 ? 0 : -1; oy <= 1; oy++) {
+            var nKey = (cx + ox) + ":" + (cy + oy);
+            var other = this.grid.get(nKey);
+            if (!other) continue;
+            for (var i = 0; i < bucket.length; i++) {
+              var a = bucket[i];
+              var start = nKey === key ? i + 1 : 0;
+              for (var j = start; j < other.length; j++) {
+                var b = other[j];
+                var dx = a.x - b.x;
+                var dy = a.y - b.y;
+                var d2 = dx * dx + dy * dy;
+                if (d2 > range2) continue;
+                var t = 1 - Math.sqrt(d2) / range;
+                var mx = (a.x + b.x) * 0.5 - pt.x;
+                var my = (a.y + b.y) * 0.5 - pt.y;
+                var near = pt.inside ? Math.max(0, 1 - Math.sqrt(mx * mx + my * my) / 300) : 0;
+                ctx.strokeStyle = "rgba(" + (150 + near * 90) + "," + (140 + near * 52) + ",235," +
+                  (t * (0.07 + near * 0.3)).toFixed(3) + ")";
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.stroke();
+              }
             }
           }
         }
-      }
-    }, this);
+      }, this);
+    }
 
-    // Render motes using pre-cached sprite canvases instead of runtime createRadialGradient
+    // Render motes
     for (var i = 0; i < this.particles.length; i++) {
       var p = this.particles[i];
       var twinkle = p.base + Math.sin(p.phase) * 0.24;

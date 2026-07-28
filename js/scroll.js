@@ -21,15 +21,24 @@
         if (!entry.isIntersecting) return;
         var el = entry.target;
         var delay = el.dataset.delay ? parseInt(el.dataset.delay, 10) : 0;
-        setTimeout(function () {
+        if (delay > 0) {
+          setTimeout(function () {
+            el.classList.add("is-visible");
+          }, delay);
+        } else {
           el.classList.add("is-visible");
-        }, delay);
+        }
         observer.unobserve(el);
       });
-    }, { threshold: 0.12, rootMargin: "0px 0px -8% 0px" });
+    }, { threshold: 0.01, rootMargin: "100px 0px 50px 0px" });
 
     Array.prototype.forEach.call(revealables, function (el) {
-      observer.observe(el);
+      // Instantly reveal blog post articles and top hero sections
+      if (el.classList.contains("blog-post") || el.closest(".threshold")) {
+        el.classList.add("is-visible");
+      } else {
+        observer.observe(el);
+      }
     });
   }
 
