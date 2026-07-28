@@ -32,7 +32,10 @@ See [docs/brand-guidelines.md](docs/brand-guidelines.md) and
 [design-system/modracx-portfolio/MASTER.md](design-system/modracx-portfolio/MASTER.md)
 for the tokens and patterns.
 
-To preview locally: `python3 -m http.server 8000`.
+## Packages & Open Source
+
+- [MODRACX Packagist Vendor Packages](https://packagist.org/packages/modracx/)
+- [modracx/mage-admin-dev-tools](https://packagist.org/packages/modracx/mage-admin-dev-tools)
 
 ## Copyright and Usage
 
