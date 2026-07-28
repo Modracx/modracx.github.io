@@ -1,6 +1,7 @@
 /* ==========================================================================
    ParticleSystem — the drifting motes that make up the realm's air.
    Canvas 2D, spatial-hashed constellation links, pointer forces, click bursts.
+   Optimized for 60fps without layout thrashing or per-frame gradient allocation.
    ========================================================================== */
 
 (function () {
@@ -17,6 +18,28 @@
     [240, 244, 255]
   ];
 
+  // Pre-render radial gradient textures for each palette color to eliminate per-frame allocations
+  var SPRITES = [];
+  function createSprites(dpr) {
+    SPRITES = PALETTE.map(function (c) {
+      var size = Math.ceil(12 * dpr);
+      var off = document.createElement("canvas");
+      off.width = size;
+      off.height = size;
+      var octx = off.getContext("2d");
+      var r = size / 2;
+      var rgb = c[0] + "," + c[1] + "," + c[2];
+      var g = octx.createRadialGradient(r, r, 0, r, r, r);
+      g.addColorStop(0, "rgba(" + rgb + ",0.55)");
+      g.addColorStop(1, "rgba(" + rgb + ",0)");
+      octx.fillStyle = g;
+      octx.beginPath();
+      octx.arc(r, r, r, 0, 6.283);
+      octx.fill();
+      return off;
+    });
+  }
+
   function ParticleSystem(el) {
     this.canvas = el;
     this.ctx = el.getContext("2d", { alpha: true });
@@ -28,6 +51,9 @@
     this.cell = this.linkRange;
     this.grid = new Map();
     this.running = false;
+    this.vw = 0;
+    this.vh = 0;
+    createSprites(this.dpr);
     this.resize();
     this.seed();
     this.bind();
@@ -38,19 +64,21 @@
     var h = window.innerHeight;
     this.w = w;
     this.h = h;
+    this.vw = w;
+    this.vh = h;
     this.canvas.width = Math.floor(w * this.dpr);
     this.canvas.height = Math.floor(h * this.dpr);
     this.canvas.style.width = w + "px";
     this.canvas.style.height = h + "px";
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-    var target = Math.round(Math.min(340, Math.max(90, (w * h) / 5200)));
-    if (w < 720) target = Math.round(target * 0.55);
+    var target = Math.round(Math.min(220, Math.max(70, (w * h) / 7500)));
+    if (w < 720) target = Math.round(target * 0.5);
     this.target = target;
   };
 
   ParticleSystem.prototype.makeParticle = function (x, y) {
-    var tone = PALETTE[(Math.random() * PALETTE.length) | 0];
+    var toneIdx = (Math.random() * PALETTE.length) | 0;
     return {
       x: x === undefined ? Math.random() * this.w : x,
       y: y === undefined ? Math.random() * this.h : y,
@@ -58,8 +86,8 @@
       vy: (Math.random() - 0.5) * 0.28,
       r: Math.random() * 1.5 + 0.5,
       base: Math.random() * 0.5 + 0.28,
-      tone: tone,
-      // twinkle: each mote keeps its own rhythm
+      toneIdx: toneIdx,
+      tone: PALETTE[toneIdx],
       phase: Math.random() * Math.PI * 2,
       rate: Math.random() * 0.02 + 0.006,
       drift: Math.random() * 0.4 + 0.2
@@ -113,8 +141,6 @@
     });
   };
 
-  /* A click casts a ring: particles nearby are shoved outward, and a
-     visible ripple expands from the point. */
   ParticleSystem.prototype.burst = function (x, y) {
     this.bursts.push({ x: x, y: y, r: 0, life: 1 });
     for (var i = 0; i < this.particles.length; i++) {
@@ -151,7 +177,6 @@
     pt.px = pt.x;
     pt.py = pt.y;
 
-    // A quick cursor pushes the air aside; a still one draws motes in.
     var repelling = pt.speed > 6 && !pt.down;
     var reach = pt.down ? 260 : 170;
     var reach2 = reach * reach;
@@ -171,10 +196,10 @@
           var d = Math.sqrt(d2);
           var falloff = 1 - d / reach;
           var force = pt.down
-            ? -falloff * 0.9          // held: motes stream toward the cursor
+            ? -falloff * 0.9
             : repelling
-              ? falloff * (0.4 + pt.speed * 0.02)   // swept aside
-              : -falloff * 0.09;      // resting: gently drawn to the light
+              ? falloff * (0.4 + pt.speed * 0.02)
+              : -falloff * 0.09;
           p.vx += (ax / d) * force;
           p.vy += (ay / d) * force;
         }
@@ -204,13 +229,11 @@
     var pt = this.pointer;
     ctx.clearRect(0, 0, this.w, this.h);
 
-    // Constellation threads, brightest where the cursor rests
     this.hash();
     ctx.lineWidth = 0.6;
     var range = this.linkRange;
     var range2 = range * range;
 
-    // Half-neighbourhood sweep: every cell pair is visited exactly once.
     this.grid.forEach(function (bucket, key) {
       var parts = key.split(":");
       var cx = +parts[0];
@@ -245,30 +268,26 @@
       }
     }, this);
 
-    // Motes
+    // Render motes using pre-cached sprite canvases instead of runtime createRadialGradient
     for (var i = 0; i < this.particles.length; i++) {
       var p = this.particles[i];
       var twinkle = p.base + Math.sin(p.phase) * 0.24;
       if (twinkle <= 0.02) continue;
-      var c = p.tone;
-      var rgb = c[0] + "," + c[1] + "," + c[2];
-      var halo = p.r * 3.2;
-      var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, halo);
-      g.addColorStop(0, "rgba(" + rgb + "," + (twinkle * 0.55).toFixed(3) + ")");
-      g.addColorStop(1, "rgba(" + rgb + ",0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, halo, 0, 6.283);
-      ctx.fill();
 
-      // a crisp core keeps the mote a point of light, not a smudge
-      ctx.fillStyle = "rgba(" + rgb + "," + twinkle.toFixed(3) + ")";
+      var sprite = SPRITES[p.toneIdx];
+      var halo = p.r * 6.4;
+      ctx.globalAlpha = twinkle;
+      ctx.drawImage(sprite, p.x - halo / 2, p.y - halo / 2, halo, halo);
+
+      var c = p.tone;
+      ctx.globalAlpha = twinkle;
+      ctx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r * 0.62, 0, 6.283);
       ctx.fill();
     }
+    ctx.globalAlpha = 1.0;
 
-    // Click rings
     for (var b2 = 0; b2 < this.bursts.length; b2++) {
       var burst = this.bursts[b2];
       ctx.strokeStyle = "rgba(240,192,96," + (burst.life * 0.5).toFixed(3) + ")";
