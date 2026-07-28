@@ -2,6 +2,7 @@
    Starfield · MagicCursor — the ambient layers.
    Parallax star sheets, occasional shooting stars, and a light that
    follows the pointer so the page always has a source of illumination.
+   Optimized to cache viewport geometry and eliminate forced reflows.
    ========================================================================== */
 
 (function () {
@@ -9,6 +10,14 @@
 
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (reduced) return;
+
+  var vw = window.innerWidth;
+  var vh = window.innerHeight;
+
+  window.addEventListener("resize", function () {
+    vw = window.innerWidth;
+    vh = window.innerHeight;
+  }, { passive: true });
 
   /* --- Starfield ----------------------------------------------------- */
 
@@ -38,13 +47,13 @@
     };
 
     window.addEventListener("pointermove", function (e) {
-      self.mx = e.clientX / window.innerWidth - 0.5;
-      self.my = e.clientY / window.innerHeight - 0.5;
+      self.mx = e.clientX / (vw || 1) - 0.5;
+      self.my = e.clientY / (vh || 1) - 0.5;
       schedule();
     }, { passive: true });
 
     window.addEventListener("scroll", function () {
-      self.sy = window.scrollY;
+      self.sy = window.scrollY || window.pageYOffset;
       schedule();
     }, { passive: true });
   };
@@ -63,7 +72,6 @@
     }
   };
 
-  /* Shooting stars arrive on their own schedule, never twice at once. */
   Starfield.prototype.streak = function () {
     var el = document.createElement("div");
     el.className = "shooting-star";
@@ -87,13 +95,13 @@
     };
     scheduleStreak();
 
-    // Scrolling fast enough also tears one loose.
-    var lastY = window.scrollY;
+    var lastY = window.scrollY || window.pageYOffset;
     var lastStreak = 0;
     window.addEventListener("scroll", function () {
       var now = performance.now();
-      var delta = Math.abs(window.scrollY - lastY);
-      lastY = window.scrollY;
+      var currentY = window.scrollY || window.pageYOffset;
+      var delta = Math.abs(currentY - lastY);
+      lastY = currentY;
       if (delta > 220 && now - lastStreak > 4000) {
         lastStreak = now;
         sky.streak();
@@ -105,8 +113,8 @@
 
   function MagicCursor(el) {
     this.el = el;
-    this.x = window.innerWidth / 2;
-    this.y = window.innerHeight / 2;
+    this.x = vw / 2;
+    this.y = vh / 2;
     this.tx = this.x;
     this.ty = this.y;
     this.bind();

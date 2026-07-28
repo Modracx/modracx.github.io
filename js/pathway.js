@@ -2,6 +2,7 @@
    PathwayRenderer — the constellation spine.
    Threads a curve through every .waypoint inside [data-spine], then draws
    that curve in as the reader descends. Waypoints ignite when reached.
+   Optimized to cache bounding geometry and prevent forced reflows during scroll.
    ========================================================================== */
 
 (function () {
@@ -20,40 +21,50 @@
   var queued = false;
   var firstY = 0;
   var lastY = 0;
+  var hostTop = 0;
+  var hostHeight = 0;
+  var hostWidth = 0;
+  var cachedMarks = [];
 
   // The line reaches a waypoint at the same moment that waypoint ignites.
   var LINE_AT = 0.75;
 
   function build() {
+    var scrollY = window.scrollY || window.pageYOffset;
     var box = host.getBoundingClientRect();
-    var top = box.top + window.scrollY;
-    var points = marks.map(function (mark, i) {
+    hostTop = box.top + scrollY;
+    hostHeight = host.offsetHeight;
+    hostWidth = box.width;
+
+    cachedMarks = marks.map(function (mark, i) {
       var m = mark.getBoundingClientRect();
+      var markTop = m.top + scrollY - hostTop + m.height / 2;
       return {
+        el: mark,
         x: m.left + m.width / 2 - box.left,
-        // A curve that only ever ran straight down would not be a path.
         sway: (i % 2 === 0 ? -1 : 1) * Math.min(box.width * 0.16, 150),
-        y: m.top + window.scrollY - top + m.height / 2
+        y: markTop,
+        relTop: markTop
       };
     });
 
-    var d = "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
-    for (var i = 1; i < points.length; i++) {
-      var a = points[i - 1];
-      var b = points[i];
+    var d = "M " + cachedMarks[0].x.toFixed(1) + " " + cachedMarks[0].y.toFixed(1);
+    for (var i = 1; i < cachedMarks.length; i++) {
+      var a = cachedMarks[i - 1];
+      var b = cachedMarks[i];
       var mid = (a.y + b.y) / 2;
       d += " C " + (a.x + a.sway).toFixed(1) + " " + mid.toFixed(1) +
         " " + (b.x + b.sway).toFixed(1) + " " + mid.toFixed(1) +
         " " + b.x.toFixed(1) + " " + b.y.toFixed(1);
     }
 
-    svg.setAttribute("viewBox", "0 0 " + box.width + " " + host.offsetHeight);
+    svg.setAttribute("viewBox", "0 0 " + hostWidth + " " + hostHeight);
     svg.setAttribute("preserveAspectRatio", "none");
     path.setAttribute("d", d);
     if (ghost) ghost.setAttribute("d", d);
 
-    firstY = points[0].y;
-    lastY = points[points.length - 1].y;
+    firstY = cachedMarks[0].y;
+    lastY = cachedMarks[cachedMarks.length - 1].y;
     length = path.getTotalLength();
     path.style.strokeDasharray = length;
     draw();
@@ -62,23 +73,24 @@
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function draw() {
-    // Without motion the path is simply already there.
     if (reduced) {
       path.style.strokeDashoffset = 0;
       for (var r = 0; r < marks.length; r++) marks[r].classList.add("is-lit");
       return;
     }
 
-    var box = host.getBoundingClientRect();
+    var scrollY = window.scrollY || window.pageYOffset;
     var view = window.innerHeight;
+    var currentBoxTop = hostTop - scrollY;
     var span = lastY - firstY;
-    var travelled = view * LINE_AT - box.top - firstY;
+    var travelled = view * LINE_AT - currentBoxTop - firstY;
     var p = span > 0 ? Math.max(0, Math.min(1, travelled / span)) : 1;
     path.style.strokeDashoffset = (length * (1 - p)).toFixed(1);
 
-    for (var i = 0; i < marks.length; i++) {
-      var m = marks[i].getBoundingClientRect();
-      marks[i].classList.toggle("is-lit", m.top + m.height / 2 < view * LINE_AT);
+    var targetThreshold = view * LINE_AT - currentBoxTop;
+    for (var i = 0; i < cachedMarks.length; i++) {
+      var cm = cachedMarks[i];
+      cm.el.classList.toggle("is-lit", cm.relTop < targetThreshold);
     }
   }
 
