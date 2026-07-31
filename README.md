@@ -35,7 +35,7 @@ for the tokens and patterns.
 ## Packages & Open Source
 
 - [MODRACX Packagist Vendor Packages](https://packagist.org/packages/modracx/)
-- [modracx/mage-admin-dev-tools](https://packagist.org/packages/modracx/mage-admin-dev-tools)
+- [MODRACX Npm Vendor Packages](https://www.npmjs.com/~modracx)
 
 ## Copyright and Usage
 
