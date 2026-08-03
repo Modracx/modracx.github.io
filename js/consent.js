@@ -74,7 +74,7 @@
           '<p class="modracx-consent-text">' +
             'We use cookies and analytics to enhance performance and analyze site usage. ' +
             'Choose your preference below or customize settings anytime. ' +
-            '<a href="/about.html" class="modracx-consent-link">Learn more</a>.' +
+            '<a href="/about/" class="modracx-consent-link">Learn more</a>.' +
           '</p>' +
           '<div id="modracx-consent-options" class="modracx-consent-options" style="display: none;">' +
             '<div class="modracx-consent-option">' +

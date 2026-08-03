@@ -164,7 +164,7 @@
       },
       map: function () {
         write("realm",
-          "services.html · work.html · about.html · contact.html — or name a ward: " +
+          "/services/ · /work/ · /about/ · /contact/ — or name a ward: " +
           "commerce, engineering, security, seo, ai, archive.");
       },
       wards: function () {
@@ -178,16 +178,16 @@
       whoami: function () {
         write("realm", "Kenneth D'Silva — MODRACX. Ecommerce and systems developer, based in India, working globally.");
       },
-      commerce: function () { go("/services.html#commerce"); },
-      engineering: function () { go("/services.html#engineering"); },
-      security: function () { go("/services.html#security"); },
-      seo: function () { go("/services.html#security"); },
-      ai: function () { go("/work.html"); },
-      archive: function () { go("/about.html"); },
-      services: function () { go("/services.html"); },
-      work: function () { go("/work.html"); },
-      about: function () { go("/about.html"); },
-      contact: function () { go("/contact.html"); },
+      commerce: function () { go("/services/#commerce"); },
+      engineering: function () { go("/services/#engineering"); },
+      security: function () { go("/services/#security"); },
+      seo: function () { go("/services/#security"); },
+      ai: function () { go("/work/"); },
+      archive: function () { go("/about/"); },
+      services: function () { go("/services/"); },
+      work: function () { go("/work/"); },
+      about: function () { go("/about/"); },
+      contact: function () { go("/contact/"); },
       clear: function () {
         log.innerHTML = "";
       }
