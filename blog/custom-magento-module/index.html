@@ -85,6 +85,7 @@
     "url": "https://modracx.com/blog/custom-magento-module/",
     "datePublished": "2026-07-28",
     "dateModified": "2026-08-03",
+    "timeRequired": "PT22M",
     "mainEntityOfPage": "https://modracx.com/blog/custom-magento-module/",
     "image": "https://modracx.com/og-image.png",
     "author": {
@@ -173,7 +174,7 @@
         <p class="lede">Magento 2 backend extension development requires strict adherence to enterprise design patterns. Learn how Dependency Injection (di.xml), Interceptor Plugins, and Declarative Schema (`db_schema.xml`) maintain core upgradeability.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 38 min read</span> •
+          <span>Reading Time: 22 min read</span> •
           <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
         </div>
       </div>
@@ -203,9 +204,71 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Magento 2 Interceptor Plugin Implementation</h2>
+        <h2>Introduction to Magento 2 Architecture</h2>
+        <p>Developing robust extensions for Magento 2 requires a solid understanding of its underlying architecture. The framework enforces strict separation of concerns, heavily relying on concepts such as Dependency Injection (DI), service contracts, and interceptors (plugins). When creating a custom module, developers must adhere to these enterprise patterns to ensure their code is maintainable, testable, and compatible with future system upgrades.</p>
+        <p>This comprehensive guide details the entire lifecycle of building a custom Magento 2 module. We cover module registration, dependency injection configuration, interceptor plugins for modifying core behavior, declarative schema for database management, ViewModels for frontend logic, and CLI command integration. The methodologies outlined here reflect production-grade standards utilized in enterprise environments.</p>
+        <p>Before diving into the code, it is important to recognize that Magento 2's architecture is designed to prevent core modifications. Any changes to native behavior should be accomplished via plugins or dependency injection preferences. Understanding these mechanisms is paramount for maintaining system stability.</p>
 
+        <h2>Module Registration and Configuration</h2>
+        <p>Every Magento 2 module begins with two essential files: <code>registration.php</code> and <code>module.xml</code>. These files declare the module's existence to the framework and define its version and dependencies. Proper registration is the foundation upon which all other module functionality is built.</p>
+        <p>The <code>registration.php</code> file is placed in the module's root directory (e.g., <code>app/code/Modracx/CustomCatalog/registration.php</code>). It utilizes the <code>ComponentRegistrar</code> class to register the module as a component type.</p>
+        
+        <pre><code class="language-php">&lt;?php
+/**
+ * Modracx_CustomCatalog registration
+ */
+use Magento\Framework\Component\ComponentRegistrar;
+
+ComponentRegistrar::register(
+    ComponentRegistrar::MODULE,
+    'Modracx_CustomCatalog',
+    __DIR__
+);
+</code></pre>
+        
+        <p>Following registration, the <code>etc/module.xml</code> file specifies the module's setup version and defines dependencies on other modules. Declaring dependencies ensures that Magento loads modules in the correct sequence, preventing runtime errors caused by missing functionality.</p>
+        
+        <pre><code class="language-xml">&lt;?xml version="1.0"?&gt;
+&lt;config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Module/etc/module.xsd"&gt;
+    &lt;module name="Modracx_CustomCatalog" setup_version="1.0.0"&gt;
+        &lt;sequence&gt;
+            &lt;module name="Magento_Catalog"/&gt;
+        &lt;/sequence&gt;
+    &lt;/module&gt;
+&lt;/config&gt;
+</code></pre>
+        
+        <p>In this example, our custom module depends on <code>Magento_Catalog</code>. This guarantees that the catalog module is initialized before ours, allowing us to safely extend or modify its behavior. With these files in place, executing <code>bin/magento module:enable Modracx_CustomCatalog</code> followed by <code>bin/magento setup:upgrade</code> will register the module within the system.</p>
+
+        <h2>Dependency Injection and di.xml</h2>
+        <p>Dependency Injection (DI) is a core architectural pattern in Magento 2, replacing the outdated Mage::getModel() paradigm found in Magento 1. DI manages object instantiation and dependencies, promoting loose coupling and easier testing. The <code>etc/di.xml</code> file serves as the configuration hub for DI, allowing developers to define object preferences, pass arguments, and configure plugins.</p>
+        <p>The Object Manager is responsible for interpreting the <code>di.xml</code> configuration and instantiating objects accordingly. While developers rarely interact with the Object Manager directly, understanding its behavior is critical. It operates based on two primary concepts: preferences and types.</p>
+        <h3>Preferences</h3>
+        <p>Preferences instruct the Object Manager to instantiate a specific implementation when an interface is requested. This is crucial for service contracts, where controllers and models depend on interfaces rather than concrete classes. By defining a preference, you can swap out the default implementation with a custom one without modifying the dependent classes.</p>
+        
+        <pre><code class="language-xml">&lt;config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd"&gt;
+    &lt;preference for="Modracx\CustomCatalog\Api\CustomProductRepositoryInterface" type="Modracx\CustomCatalog\Model\CustomProductRepository" /&gt;
+&lt;/config&gt;
+</code></pre>
+        
+        <h3>Types and Arguments</h3>
+        <p>The <code>&lt;type&gt;</code> configuration allows developers to modify the arguments passed to a class constructor. This is frequently used to inject custom logic or configuration values into existing classes without overriding them entirely.</p>
+        
+        <pre><code class="language-xml">&lt;type name="Magento\Catalog\Model\Product"&gt;
+    &lt;arguments&gt;
+        &lt;argument name="customData" xsi:type="string"&gt;Custom Value&lt;/argument&gt;
+    &lt;/arguments&gt;
+&lt;/type&gt;
+</code></pre>
+        
+        <p>By mastering <code>di.xml</code>, developers can effectively manage dependencies, implement service contracts, and modify system behavior with minimal intrusion. Properly structured DI configurations are the hallmark of high-quality Magento 2 extensions.</p>
+
+        <h2>Interceptor Pattern and Plugins</h2>
+        <p>Plugins, or interceptors, provide an elegant mechanism for modifying the behavior of public methods within Magento 2 classes. Unlike class rewrites (preferences), which can cause conflicts if multiple modules attempt to override the same class, plugins allow multiple modules to modify the same method independently. This makes plugins the preferred approach for customizing core functionality.</p>
+        <p>Plugins intercept method calls and execute custom logic either before, after, or around the target method. They are configured in <code>di.xml</code> and implemented as standard PHP classes.</p>
+        <h3>Before Plugins</h3>
+        <p>A before plugin executes prior to the target method. It can be used to modify the arguments passed to the method. The method name in the plugin class must be prefixed with <code>before</code>. If the plugin modifies arguments, it must return them as an array.</p>
+        
         <pre><code class="language-php">&lt;?php
 namespace Modracx\CustomCatalog\Plugin;
 
@@ -225,7 +288,176 @@ class ProductSavePlugin
         }
         return [$product];
     }
-}</code></pre>
+}
+</code></pre>
+        
+        <h3>After Plugins</h3>
+        <p>An after plugin executes after the target method completes. It receives the method's result and can modify it before returning it to the caller. The method name must be prefixed with <code>after</code>.</p>
+        
+        <pre><code class="language-php">&lt;?php
+namespace Modracx\CustomCatalog\Plugin;
+
+class ProductNamePlugin
+{
+    public function afterGetName(\Magento\Catalog\Model\Product $subject, $result)
+    {
+        return $result . ' - Custom Edition';
+    }
+}
+</code></pre>
+        
+        <h3>Around Plugins</h3>
+        <p>An around plugin encapsulates the target method, allowing developers to execute logic both before and after the method, or even prevent the method from executing entirely. It receives a callable parameter, typically named <code>$proceed</code>, which must be invoked to execute the original method. Overusing around plugins can negatively impact performance, so they should be used sparingly.</p>
+        
+        <pre><code class="language-php">&lt;?php
+namespace Modracx\CustomCatalog\Plugin;
+
+class ProductPricePlugin
+{
+    public function aroundGetPrice(\Magento\Catalog\Model\Product $subject, callable $proceed)
+    {
+        // Custom logic before executing original method
+        $price = $proceed();
+        // Custom logic after executing original method
+        return $price * 1.10; // Apply a 10% markup
+    }
+}
+</code></pre>
+        <p>Understanding when and how to utilize each plugin type is crucial for developing robust and conflict-free extensions. In general, prefer before and after plugins over around plugins to minimize performance overhead and improve maintainability.</p>
+
+        <h2>Declarative Schema (db_schema.xml)</h2>
+        <p>Starting with Magento 2.3, Declarative Schema replaced the older InstallSchema and UpgradeSchema scripts. Declarative Schema provides a unified, XML-based approach for defining the database structure. Instead of writing imperative scripts to manage schema changes, developers simply declare the desired final state of the database, and the framework automatically calculates and applies the necessary modifications.</p>
+        <p>This approach simplifies schema management, reduces the risk of errors during upgrades, and allows for easier version control. The schema definition is stored in <code>etc/db_schema.xml</code>.</p>
+        
+        <pre><code class="language-xml">&lt;?xml version="1.0"?&gt;
+&lt;schema xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Setup/Declaration/Schema/etc/schema.xsd"&gt;
+    &lt;table name="modracx_custom_catalog_log" resource="default" engine="innodb" comment="Custom Catalog Log Table"&gt;
+        &lt;column xsi:type="int" name="log_id" padding="10" unsigned="true" nullable="false" identity="true" comment="Log ID"/&gt;
+        &lt;column xsi:type="int" name="product_id" padding="10" unsigned="true" nullable="false" comment="Product ID"/&gt;
+        &lt;column xsi:type="varchar" name="action" length="255" nullable="false" comment="Action Taken"/&gt;
+        &lt;column xsi:type="timestamp" name="created_at" on_update="false" nullable="false" default="CURRENT_TIMESTAMP" comment="Creation Time"/&gt;
+        &lt;constraint xsi:type="primary" referenceId="PRIMARY"&gt;
+            &lt;column name="log_id"/&gt;
+        &lt;/constraint&gt;
+        &lt;index referenceId="MODRACX_CUSTOM_CATALOG_LOG_PRODUCT_ID" indexType="btree"&gt;
+            &lt;column name="product_id"/&gt;
+        &lt;/index&gt;
+    &lt;/table&gt;
+&lt;/schema&gt;
+</code></pre>
+        
+        <p>After defining or modifying the <code>db_schema.xml</code> file, developers must generate a whitelist file using the CLI command: <code>bin/magento setup:db-declaration:generate-whitelist --module-name=Modracx_CustomCatalog</code>. This file, <code>etc/db_schema_whitelist.json</code>, ensures backward compatibility and tracks which tables and columns are managed by the declarative schema system. Finally, executing <code>bin/magento setup:upgrade</code> applies the schema changes to the database.</p>
+        <p>Declarative schema represents a significant advancement in Magento 2 extension development, streamlining the deployment process and improving database consistency across different environments. You might also want to review <a href="/blog/performance-optimization/">performance considerations</a> when designing complex indexes and keys.</p>
+
+        <h2>ViewModels vs Block Classes</h2>
+        <p>In modern Magento 2 development, ViewModels offer a superior alternative to traditional Block classes for passing data to templates. Block classes often become bloated and difficult to maintain as they accumulate dependencies and complex logic. ViewModels decouple the data retrieval logic from the presentation layer, promoting cleaner code and better separation of concerns.</p>
+        <p>A ViewModel is a simple PHP class that implements <code>Magento\Framework\View\Element\Block\ArgumentInterface</code>. It requires only the dependencies necessary for its specific function. By passing the ViewModel as an argument to a block in layout XML, templates can access its methods without relying on an overloaded block class.</p>
+        
+        <pre><code class="language-php">&lt;?php
+namespace Modracx\CustomCatalog\ViewModel;
+
+use Magento\Framework\View\Element\Block\ArgumentInterface;
+use Magento\Catalog\Api\ProductRepositoryInterface;
+
+class CustomProductData implements ArgumentInterface
+{
+    private $productRepository;
+
+    public function __construct(ProductRepositoryInterface $productRepository)
+    {
+        $this-&gt;productRepository = $productRepository;
+    }
+
+    public function getCustomAttributeValue($productId)
+    {
+        try {
+            $product = $this-&gt;productRepository-&gt;getById($productId);
+            return $product-&gt;getCustomAttribute('special_data') ? $product-&gt;getCustomAttribute('special_data')-&gt;getValue() : null;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+}
+</code></pre>
+        
+        <p>In the layout XML file, the ViewModel is assigned to the block via the <code>&lt;arguments&gt;</code> node.</p>
+        
+        <pre><code class="language-xml">&lt;referenceBlock name="product.info.details"&gt;
+    &lt;arguments&gt;
+        &lt;argument name="custom_view_model" xsi:type="object"&gt;Modracx\CustomCatalog\ViewModel\CustomProductData&lt;/argument&gt;
+    &lt;/arguments&gt;
+&lt;/referenceBlock&gt;
+</code></pre>
+        
+        <p>Within the PHTML template, the ViewModel can be retrieved and utilized.</p>
+        
+        <pre><code class="language-php">&lt;?php
+/** @var \Magento\Framework\View\Element\Template $block */
+/** @var \Modracx\CustomCatalog\ViewModel\CustomProductData $viewModel */
+$viewModel = $block-&gt;getData('custom_view_model');
+$productId = $block-&gt;getProduct()-&gt;getId();
+$customValue = $viewModel-&gt;getCustomAttributeValue($productId);
+?&gt;
+&lt;div class="custom-data"&gt;
+    &lt;strong&gt;Custom Value:&lt;/strong&gt; &lt;?= $block-&gt;escapeHtml($customValue) ?&gt;
+&lt;/div&gt;
+</code></pre>
+        <p>Adopting ViewModels simplifies block hierarchy, improves testability, and aligns with modern architectural practices, making it a critical skill for advanced Magento 2 developers. It works very well within <a href="/blog/headless-architecture/">headless configurations</a> where separation of concerns is paramount.</p>
+
+        <h2>CLI Command Integration</h2>
+        <p>Providing custom Command Line Interface (CLI) tools within your module is an excellent way to expose maintenance, import, or diagnostic functions to system administrators. Magento 2 leverages the Symfony Console component for CLI operations. Creating a custom command involves defining a PHP class that extends <code>Symfony\Component\Console\Command\Command</code> and registering it in <code>di.xml</code>.</p>
+        
+        <pre><code class="language-php">&lt;?php
+namespace Modracx\CustomCatalog\Console\Command;
+
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Input\InputOption;
+
+class SyncCatalogCommand extends Command
+{
+    protected function configure()
+    {
+        $this-&gt;setName('modracx:catalog:sync')
+             -&gt;setDescription('Synchronize custom catalog data')
+             -&gt;addOption('dry-run', null, InputOption::VALUE_NONE, 'Execute a dry run without applying changes');
+        parent::configure();
+    }
+
+    protected function execute(InputInterface $input, OutputInterface $output)
+    {
+        $isDryRun = $input-&gt;getOption('dry-run');
+        
+        $output-&gt;writeln('&lt;info&gt;Starting catalog synchronization...&lt;/info&gt;');
+        if ($isDryRun) {
+            $output-&gt;writeln('&lt;comment&gt;Dry run mode enabled. No changes will be saved.&lt;/comment&gt;');
+        }
+        
+        // Execute sync logic here
+        
+        $output-&gt;writeln('&lt;info&gt;Synchronization complete.&lt;/info&gt;');
+        return \Magento\Framework\Console\Cli::RETURN_SUCCESS;
+    }
+}
+</code></pre>
+        
+        <p>To register the command, add it to the <code>Magento\Framework\Console\CommandListInterface</code> arguments within your <code>etc/di.xml</code> configuration file.</p>
+        
+        <pre><code class="language-xml">&lt;type name="Magento\Framework\Console\CommandListInterface"&gt;
+    &lt;arguments&gt;
+        &lt;argument name="commands" xsi:type="array"&gt;
+            &lt;item name="modracx_catalog_sync" xsi:type="object"&gt;Modracx\CustomCatalog\Console\Command\SyncCatalogCommand&lt;/item&gt;
+        &lt;/argument&gt;
+    &lt;/arguments&gt;
+&lt;/type&gt;
+</code></pre>
+        
+        <p>Once registered, administrators can execute the command via <code>bin/magento modracx:catalog:sync</code>. Providing robust CLI tools enhances the operational efficiency and manageability of complex Magento installations.</p>
+
+        <h2>Deployment Considerations and Best Practices</h2>
+        <p>Production deployment of a custom module requires careful adherence to Magento's three-phase deployment pipeline: DI compilation, static content generation, and setup upgrade. Run <code>bin/magento setup:di:compile</code> first — this exposes missing dependencies and malformed constructor signatures that developer mode masks. Any plugin or preference misconfiguration surfaces here as a hard error rather than a runtime exception at checkout.</p>
+        <p>Static content deployment (<code>bin/magento setup:static-content:deploy</code>) processes assets from <code>view/frontend/web</code> and <code>view/adminhtml/web</code>. Modules modifying frontend PHTML templates must escape all output via <code>$block-&gt;escapeHtml()</code> — failure to do so introduces XSS vectors that violate PCI-DSS SAQ A-EP scope. Always include <code>Psr\Log\LoggerInterface</code> for structured exception logging; correlating module errors with Nginx access logs is how production incidents get resolved in under ten minutes. For additional security considerations, see my guide on <a href="/blog/security-hardening-checklist/">Magento 2 Security Hardening</a>.</p>
 
         <hr />
 
@@ -240,6 +472,14 @@ class ProductSavePlugin
             <li>
               <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify Stores</a></strong>
               <p>Redis cache backend and Varnish FPC rules.</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-architecture/">Headless Commerce Architecture and Magento 2 PWA</a></strong>
+              <p>Scaling the front-end independently from backend operations.</p>
+            </li>
+            <li>
+              <strong><a href="/blog/technical-seo-structured-data/">Technical SEO & JSON-LD Structured Data for Magento</a></strong>
+              <p>Optimizing organic search visibility through semantic data structures.</p>
             </li>
           </ul>
         </div>
