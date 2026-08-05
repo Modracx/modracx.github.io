@@ -82,6 +82,7 @@
     "@type": "TechArticle",
     "headline": "Securing E-Commerce REST & GraphQL API Gateways",
     "description": "Technical guide on API rate limiting, JWT token validation, and OAuth 2.0 authorization for Magento 2 and Shopify API gateways.",
+    "timeRequired": "PT22M",
     "url": "https://modracx.com/blog/secure-api-gateways/",
     "datePublished": "2026-07-28",
     "dateModified": "2026-08-03",
@@ -173,7 +174,7 @@
         <p class="lede">Unprotected e-commerce APIs invite bot scraping, credential stuffing, and unauthorized checkout mutations. Rate-limiting with Redis tokens stops abuse.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
+          <span>Reading Time: 22 min read</span> •
           <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
         </div>
       </div>
@@ -204,21 +205,441 @@
     <section class="chapter container">
       <article class="blog-post reveal">
         
-        <h2>Express API Rate Limiter Redis Code</h2>
+<p>Modern e-commerce infrastructure demands a resilient boundary layer. In headless commerce architectures spanning Magento 2, Shopify Plus, and custom microservices, the API Gateway operates as the primary defense mechanism against malicious traffic. Inadequate protection mechanisms directly correlate with security incidents.</p>
 
-        <pre><code class="language-javascript">// Express API Rate Limiter using Redis Bucket Algorithm
-const rateLimit = require('express-rate-limit');
-const RedisStore = require('rate-limit-redis');
+<p>Implementing an API gateway establishes a centralized policy enforcement point. This architectural decision abstracts security concerns from the underlying application logic. A production-grade gateway handles rate limiting, authentication verification, request sanitization, and logging.</p>
+
+<h2>Architectural Positioning of the API Gateway</h2>
+<p>In a distributed deployment, the gateway intercepts all inbound client requests before they reach upstream services. This positioning is strategic. It ensures that unauthenticated or malicious payloads are dropped at the edge, conserving compute resources within the cluster.</p>
+
+<h3>Nginx API Gateway Configuration</h3>
+<p>Nginx remains a foundational technology for high-performance proxying. By defining upstream blocks and applying strict location directives, engineers configure Nginx to act as a robust API gateway. The following configuration implements TLS enforcement, basic rate limiting using shared memory zones, and request body restrictions.</p>
+
+<pre><code class="language-nginx"># Nginx API Gateway Configuration for E-Commerce
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+
+events {
+    worker_connections 4096;
+    multi_accept on;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Rate limiting zones
+    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+    limit_conn_zone $binary_remote_addr zone=api_conn:10m;
+
+    # Upstream backend services
+    upstream magento_backend {
+        server 10.0.1.15:8080 max_fails=3 fail_timeout=30s;
+        server 10.0.1.16:8080 max_fails=3 fail_timeout=30s;
+        keepalive 32;
+    }
+
+    upstream shopify_proxy {
+        server 10.0.2.20:3000;
+        keepalive 16;
+    }
+
+    server {
+        listen 443 ssl http2;
+        server_name api.modracx.com;
+
+        ssl_certificate /etc/letsencrypt/live/api.modracx.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/api.modracx.com/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+
+        # Global security headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Frame-Options DENY always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none';" always;
+
+        server_tokens off;
+        client_max_body_size 5M;
+
+        location /v1/catalog/ {
+            limit_req zone=api_limit burst=20 nodelay;
+            limit_conn api_conn 10;
+            
+            proxy_pass http://magento_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $host;
+
+            proxy_cache api_cache;
+            proxy_cache_valid 200 5m;
+            proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
+        }
+
+        location /graphql {
+            limit_req zone=api_limit burst=5 nodelay;
+            
+            limit_except POST {
+                deny all;
+            }
+
+            proxy_pass http://shopify_proxy;
+            proxy_http_version 1.1;
+            proxy_set_header Content-Type application/json;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+}</code></pre>
+
+<p>This config applies TLS 1.2+, rate limiting, concurrent connection limits, and proxies requests to upstream servers. The `client_max_body_size` restricts payloads to 5MB.</p>
+
+<h2>Kong and Envoy Configuration</h2>
+<p>Kong API Gateway extends capabilities through a plugin ecosystem, allowing engineers to apply policies dynamically.</p>
+
+<h3>Deploying Kong Declaratively</h3>
+<p>Using DB-less mode, routing rules are defined in YAML, ensuring configurations are version-controlled.</p>
+
+<pre><code class="language-yaml"># kong-declarative.yaml
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: magento-checkout-service
+    url: http://checkout-service.internal:8080/api/checkout
+    routes:
+      - name: checkout-route
+        paths:
+          - /v1/checkout
+        methods:
+          - POST
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 10
+          policy: redis
+          redis_host: redis-cluster.internal
+          redis_port: 6379
+          redis_password: secure_redis_password
+          fault_tolerant: true
+      - name: bot-detection
+        config:
+          allow: []
+          deny:
+            - curl
+            - python-requests
+            - PostmanRuntime
+
+  - name: shopify-inventory-service
+    url: https://internal-inventory.svc.cluster.local:3000
+    routes:
+      - name: inventory-route
+        paths:
+          - /v1/inventory
+        methods:
+          - GET
+
+plugins:
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid
+      echo_downstream: true
+</code></pre>
+
+<p>This establishes routes for checkout and inventory. Rate limiting specifically protects the checkout route, backing counters with Redis for distributed consistency. The bot-detection plugin actively denies scraping tools.</p>
+
+<h2>JWT Verification with RSA-256</h2>
+<p>Stateless authentication using JWT is standard for APIs. Using asymmetric encryption (RSA-256) is superior to symmetric encryption in distributed architectures. It allows the gateway to verify tokens without access to the private key.</p>
+
+<pre><code class="language-python"># Python JWT Verification Middleware using RSA-256
+import jwt
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
+from cryptography.x509 import load_pem_x509_certificate
+from cryptography.hazmat.backends import default_backend
+import requests
+import functools
+from flask import request, jsonify
+
+JWKS_URL = "https://identity.modracx.com/.well-known/jwks.json"
+
+class JWKSCache:
+    def __init__(self):
+        self.keys = {}
+        self.fetch_keys()
+
+    def fetch_keys(self):
+        try:
+            response = requests.get(JWKS_URL, timeout=5)
+            response.raise_for_status()
+            jwks = response.json()
+            for key in jwks.get("keys", []):
+                kid = key.get("kid")
+                if kid:
+                    self.keys[kid] = jwt.algorithms.RSAAlgorithm.from_jwk(key)
+        except Exception as e:
+            print(f"Failed to fetch JWKS: {e}")
+
+jwks_cache = JWKSCache()
+
+def require_auth(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", None)
+        if not auth_header:
+            return jsonify({"error": "Authorization header missing"}), 401
+
+        parts = auth_header.split()
+        if parts[0].lower() != "bearer" or len(parts) != 2:
+            return jsonify({"error": "Invalid format"}), 401
+
+        token = parts[1]
+
+        try:
+            unverified_header = jwt.get_unverified_header(token)
+            kid = unverified_header.get("kid")
+            if not kid:
+                return jsonify({"error": "Token missing kid"}), 401
+
+            public_key = jwks_cache.keys.get(kid)
+            if not public_key:
+                jwks_cache.fetch_keys()
+                public_key = jwks_cache.keys.get(kid)
+                if not public_key:
+                    return jsonify({"error": "Public key not found"}), 401
+
+            decoded_payload = jwt.decode(
+                token,
+                public_key,
+                algorithms=["RS256"],
+                audience="https://api.modracx.com",
+                issuer="https://identity.modracx.com/"
+            )
+            
+            request.user = decoded_payload
+            
+        except ExpiredSignatureError:
+            return jsonify({"error": "Token expired"}), 401
+        except InvalidTokenError as e:
+            return jsonify({"error": f"Invalid token: {str(e)}"}), 401
+
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route('/v1/customer/profile', methods=['GET'])
+@require_auth
+def get_customer_profile():
+    user_id = request.user.get('sub')
+    return jsonify({"message": f"Profile data for {user_id}"})
+</code></pre>
+
+<p>This dynamic implementation fetches the JWKS from the authorization server, caches keys in memory, and verifies tokens accurately against `audience` and `issuer` claims.</p>
+
+<h2>Redis Leaky Bucket Limiting</h2>
+<p>The leaky bucket algorithm smooths bursty traffic, ensuring a steady processing rate. Redis Lua scripting guarantees read, increment, and write operations occur atomically, preventing race conditions.</p>
+
+<pre><code class="language-javascript">// Advanced Redis Leaky Bucket Rate Limiter
 const { createClient } = require('redis');
 
-const redisClient = createClient({ url: 'redis://redis:6379' });
-redisClient.connect();
+class LeakyBucketLimiter {
+    constructor(redisUrl, capacity, leakRatePerSecond) {
+        this.client = createClient({ url: redisUrl });
+        this.capacity = capacity;
+        this.leakRate = leakRatePerSecond;
+        
+        this.client.connect().catch(console.error);
 
-const apiLimiter = rateLimit({
-  store: new RedisStore({ sendCommand: (...args) => redisClient.sendCommand(args) }),
-  windowMs: 60 * 1000, // 1 minute
-  max: 100 // limit each IP to 100 requests per windowMs
-});</code></pre>
+        this.luaScript = `
+            local key = KEYS[1]
+            local capacity = tonumber(ARGV[1])
+            local leak_rate = tonumber(ARGV[2])
+            local now = tonumber(ARGV[3])
+
+            local bucket = redis.call('HMGET', key, 'water', 'last_leak_time')
+            local water = tonumber(bucket[1]) or 0
+            local last_leak_time = tonumber(bucket[2]) or now
+
+            local time_elapsed = now - last_leak_time
+            local leaked = time_elapsed * leak_rate
+            
+            water = math.max(0, water - leaked)
+
+            if water + 1 <= capacity then
+                water = water + 1
+                redis.call('HMSET', key, 'water', water, 'last_leak_time', now)
+                local ttl = math.ceil(capacity / (leak_rate * 1000))
+                redis.call('EXPIRE', key, ttl)
+                return 1 -- Allowed
+            else
+                redis.call('HMSET', key, 'water', water, 'last_leak_time', now)
+                return 0 -- Denied
+            end
+        `;
+    }
+
+    async isAllowed(identifier) {
+        const key = `rate_limit:${identifier}`;
+        const leakRateMs = this.leakRate / 1000;
+        const now = Date.now();
+
+        try {
+            const result = await this.client.executeIsolated(async (isolatedClient) => {
+                return await isolatedClient.eval(
+                    this.luaScript,
+                    {
+                        keys: [key],
+                        arguments: [
+                            this.capacity.toString(),
+                            leakRateMs.toString(),
+                            now.toString()
+                        ]
+                    }
+                );
+            });
+            
+            return result === 1;
+        } catch (error) {
+            console.error('Rate Limiting Error:', error);
+            return true; 
+        }
+    }
+}
+
+const bucketLimiter = new LeakyBucketLimiter('redis://redis-cluster:6379', 50, 5);
+
+async function rateLimitMiddleware(req, res, next) {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const allowed = await bucketLimiter.isAllowed(ip);
+    
+    if (!allowed) {
+        return res.status(429).json({
+            error: 'Too Many Requests',
+            message: 'Rate limit exceeded.'
+        });
+    }
+    next();
+}
+</code></pre>
+
+<h2>GraphQL Query Complexity Limits</h2>
+<p>Unlike REST APIs, GraphQL allows clients to define the shape and depth of requested data, introducing severe security risks if unbounded.</p>
+
+<pre><code class="language-php">&lt;?php
+// PHP GraphQL Query Depth and Complexity Limiting
+require_once __DIR__ . '/vendor/autoload.php';
+
+use GraphQL\GraphQL;
+use GraphQL\Type\Schema;
+use GraphQL\Validator\Rules\QueryDepth;
+use GraphQL\Validator\Rules\QueryComplexity;
+use GraphQL\Validator\DocumentValidator;
+
+$maxDepth = 5;
+$depthRule = new QueryDepth($maxDepth);
+DocumentValidator::addRule($depthRule);
+
+$maxComplexity = 1000;
+$complexityRule = new QueryComplexity($maxComplexity);
+DocumentValidator::addRule($complexityRule);
+
+$rawInput = file_get_contents('php://input');
+$input = json_decode($rawInput, true);
+$query = $input['query'];
+$variableValues = isset($input['variables']) ? $input['variables'] : null;
+
+try {
+    $result = GraphQL::executeQuery(
+        $schema,
+        $query,
+        $rootValue,
+        $context,
+        $variableValues
+    );
+    
+    $output = $result->toArray();
+} catch (\Exception $e) {
+    $output = ['errors' => [['message' => $e->getMessage()]]];
+}
+
+header('Content-Type: application/json; charset=UTF-8');
+echo json_encode($output);
+</code></pre>
+
+<p>Depth limiting alone is insufficient. Complexity analysis assigns a cost to each field and calculates the total prior to execution.</p>
+
+<h2>OAuth 2.0 Scopes for APIs</h2>
+<p>Standardizing authorization using OAuth 2.0 ensures secure, granular access control across integrations.</p>
+
+<pre><code class="language-sql">-- OAuth 2.0 Scope Schema
+CREATE TABLE oauth_clients (
+    client_id VARCHAR(128) PRIMARY KEY,
+    client_secret_hash VARCHAR(255) NOT NULL,
+    client_name VARCHAR(100) NOT NULL,
+    redirect_uris JSON NOT NULL,
+    grant_types JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE oauth_scopes (
+    scope_id VARCHAR(50) PRIMARY KEY,
+    description TEXT NOT NULL,
+    is_critical BOOLEAN DEFAULT FALSE
+);
+
+CREATE TABLE client_scopes (
+    client_id VARCHAR(128) REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    scope_id VARCHAR(50) REFERENCES oauth_scopes(scope_id) ON DELETE CASCADE,
+    granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (client_id, scope_id)
+);
+
+INSERT INTO oauth_scopes (scope_id, description, is_critical) VALUES
+('read_catalog', 'View product catalog', FALSE),
+('write_catalog', 'Update products', FALSE),
+('read_customers', 'View customer data', TRUE),
+('write_customers', 'Modify customer data', TRUE),
+('read_orders', 'View order history', TRUE),
+('write_orders', 'Modify orders', TRUE);
+
+INSERT INTO client_scopes (client_id, scope_id) VALUES
+('inventory_sync_service', 'read_catalog'),
+('inventory_sync_service', 'write_catalog');
+</code></pre>
+
+<p>In Magento 2, REST APIs utilize ACLs defined in `webapi.xml` to enforce scope matching automatically.</p>
+
+<pre><code class="language-xml">&lt;!-- Magento 2 webapi.xml --&gt;
+&lt;?xml version="1.0"?&gt;
+&lt;routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Webapi:etc/webapi.xsd"&gt;
+    &lt;route url="/V1/modracx/inventory/update" method="POST"&gt;
+        &lt;service class="Modracx\InventorySync\Api\SyncInterface" method="updateStock"/&gt;
+        &lt;resources&gt;
+            &lt;resource ref="Modracx_InventorySync::update_stock"/&gt;
+        &lt;/resources&gt;
+    &lt;/route&gt;
+    
+    &lt;route url="/V1/modracx/catalog/public" method="GET"&gt;
+        &lt;service class="Modracx\Catalog\Api\PublicCatalogInterface" method="getList"/&gt;
+        &lt;resources&gt;
+            &lt;resource ref="anonymous"/&gt;
+        &lt;/resources&gt;
+    &lt;/route&gt;
+&lt;/routes&gt;
+</code></pre>
+
+<h2>Intrusion Detection and WAF Integration</h2>
+<p>A WAF at the API gateway layer intercepts SQL injection payloads, XSS strings, XXE attack vectors, and malformed JSON before they reach the application tier. Cloudflare WAF managed rulesets (OWASP CRS) can be applied to the API subdomain independently from the main storefront, enabling stricter rule sets without affecting checkout pages. For self-hosted Nginx-based gateways, integrating ModSecurity with the OWASP core ruleset provides comparable protection. Tag all API WAF alerts with the request's JWT <code>sub</code> claim so incidents can be traced to specific integration accounts rather than IP addresses that may be shared across CDN nodes.</p>
+<p>Complement WAF rules with anomaly-based rate limiting at the gateway level. Track rolling request windows per OAuth client ID using Redis INCR with expiry: if a client exceeds 1,000 requests in 60 seconds, automatically revoke their token and queue an alert to the security channel. This pattern catches credential-stuffed access tokens that pass JWT signature validation but exhibit bot-like usage patterns. See my detailed guide on <a href="/blog/waf-implementation/">implementing a production WAF</a> for full Nginx/ModSecurity configuration examples.</p>
+
+<h2>Securing Microservices with mTLS</h2>
+<p>In a Zero Trust service mesh, every east-west API call between services requires identity proof. Mutual TLS (mTLS) enforces bidirectional certificate authentication: both the calling service and the receiving service present X.509 certificates issued by a shared internal Certificate Authority (CA). If a compromised service attempts to make unauthorized calls to the payment microservice, the handshake fails at the transport layer before any HTTP data is exchanged. Tools like HashiCorp Vault PKI Secrets Engine or Cert-Manager on Kubernetes automate certificate issuance, rotation, and revocation, eliminating manual certificate management as a human error vector. Pair mTLS with Istio or Linkerd service mesh sidecars to enforce policy declaratively without modifying application code.</p>
+
+<h2>Security Posture Validation</h2>
+<p>A deployed API gateway is not a static artifact — it degrades as traffic patterns evolve, as new integration clients are onboarded, and as upstream dependencies introduce new endpoints. Continuous security validation must be embedded in the CI/CD pipeline. OWASP ZAP in API-scan mode can execute against OpenAPI specifications, automatically fuzzing every endpoint parameter with injection payloads. Integrate this into the GitHub Actions workflow so pull requests against gateway configuration files trigger automated scans against a staging environment before merge. Combine this with periodic credential rotation audits: any OAuth client secret older than 90 days should generate an automated alert via PagerDuty or Opsgenie. Validate HMAC webhook signatures with constant-time comparison functions exclusively — timing-attack vulnerabilities in token validation are a recurring source of CVEs in e-commerce integrations.</p>
 
         <hr />
 
@@ -233,6 +654,10 @@ const apiLimiter = rateLimit({
             <li>
               <strong><a href="/blog/waf-implementation/">Implementing a Web Application Firewall (WAF)</a></strong>
               <p>API gateway WAF expression rules.</p>
+            </li>
+            <li>
+              <strong><a href="/blog/secure-ecommerce-checklist/">Secure E-Commerce Deployment Checklist</a></strong>
+              <p>Comprehensive security validation for headless and monolithic architectures.</p>
             </li>
           </ul>
         </div>
