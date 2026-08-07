@@ -55,9 +55,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>CDN Speed Optimization & Edge Caching for Global Stores | MODRACX</title>
-  <meta name="description" content="An exhaustive technical engineering guide to Content Delivery Network (CDN) edge caching, Cloudflare / Fastly Cache-Control directives, and HTTP/3 QUIC protocol tuning." />
+  <meta name="description" content="Single-CDN fundamentals for ecommerce: what edge caching does to TTFB, cache key normalisation, what to cache and never cache, tag-based purging, and the honest SEO effect." />
   <meta property="og:title" content="CDN Speed Optimization & Edge Caching for Global Stores | MODRACX" />
   <meta property="og:description" content="CDN speed optimization and edge caching guide by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -189,17 +191,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>CDN Speed Optimization & Edge Caching for Global Stores</h1>
-        <p class="lede">The global edge network architecture guide: Cache-Control HTTP headers, Cloudflare Worker edge compute rules, and HTTP/3 QUIC protocol optimization.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>CDN Speed Optimization &amp; Edge Caching for Global Stores</h1>
+        <p class="lede">A homeware retailer had a CDN in front of their store for three years and a 0% hit rate on HTML. Here is what a CDN actually removes from TTFB, where cache keys go wrong, and how small the SEO effect really is.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 31 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -224,221 +226,627 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-<h2>1. Global Edge Architecture</h2>
-<p>Modern e-commerce infrastructure mandates decentralizing compute capabilities. Serving customers directly from a central origin introduces unavoidable geographic latency constraints. TCP handshakes, TLS negotiations, and physical light propagation through fiber optic cables collectively degrade standard Time to First Byte (TTFB). These latency penalties directly harm <a href="/blog/core-web-vitals/">Core Web Vitals</a> and impair Largest Contentful Paint (LCP).</p>
+        <h2>1. The Ticket Said "Turn On The CDN"</h2>
 
-<p>A Content Delivery Network (CDN) re-engineers this topology. By caching high-resolution images, compressed stylesheets, bundled JavaScript applications, and dynamic HTML documents across geographically distributed Edge Points of Presence (PoPs), the architecture pushes data physically closer to the end user. This geographical proximity reduces response times to consistent sub-30ms levels globally. Deploying an edge caching CDN operates as a fundamental pillar of site reliability engineering and resilient commerce systems architecture.</p>
+        <p>A lighting retailer came to me in March with a Lighthouse report and a theory. Their TTFB was 940ms on mobile, the report was scolding them about it, and someone on the marketing side had read that a CDN fixes TTFB. The ticket, verbatim, was "enable CDN on all pages". Two days of work, they thought.</p>
 
-<p>Maintaining optimal cache hit ratios (CHR) above the 90% threshold demands rigorous control over specific HTTP headers, dynamic edge compute routing, and precise cache invalidation protocols.</p>
+        <p>They already had a CDN. It had been in front of the site for three years. It was serving 96% of their image requests from cache and 4% of everything else, and the 4% was the part the customer was waiting for.</p>
 
-<hr />
+        <p>The reason was a single line in their origin's response headers. Every HTML response carried <code>Cache-Control: no-cache, no-store, must-revalidate</code>, inherited from a session-handling change made in 2022 to stop a logged-in customer's basket leaking into a cached page for an anonymous one. Sensible instinct. Blunt execution. Every product page, every category page, every blog post went to origin, every time, for every visitor, from every country.</p>
 
-<h2>2. Cache-Control Header Directives</h2>
-<p>The standard protocol for dictating caching behavior relies exclusively on the HTTP <code>Cache-Control</code> header. You must explicitly instruct the client browser and the edge network proxy exactly how long they are permitted to store data.</p>
+        <p>So the CDN was doing what a CDN does when you tell it nothing is cacheable: acting as an expensive extra hop. Sydney to the edge in Sydney, then Sydney to the origin in Frankfurt, then back. The edge added about 15ms of its own and saved nothing.</p>
 
-<p>Static application assets incorporating unique version hashes within their filenames (for example, <code>app.v1.4.3.js</code>) are immutable. Once published, the specific binary contents associated with that exact file URL never change. You can maximize browser-level and edge-level caching for these immutable files using the <code>immutable</code> directive alongside an extraordinarily long <code>max-age</code> expiration value.</p>
+        <p>This article is about what a CDN actually does to the numbers, where the wins come from, and how to tell whether yours is working. It is deliberately about running <em>one</em> CDN well, because that is the situation almost every store is in and almost every store is leaving something on the table. If you have already got one CDN working properly and are wondering whether to add a second, that is a genuinely different problem and I have written about <a href="/blog/multi-cdn-strategies/">multi-CDN architecture</a> separately. Do not read that one first. It will make you want to buy things.</p>
 
-<pre><code class="language-nginx"># Nginx Optimal Cache-Control Headers for Immutable Static Assets
-location ~* \.(js|css|webp|avif|woff2|svg)$ {
-    add_header Cache-Control "public, max-age=31536000, immutable";
-    fastcgi_hide_header Set-Cookie;
-    proxy_hide_header Set-Cookie;
-    gzip on;
-    gzip_types text/css application/javascript image/svg+xml;
-    brotli on;
-    brotli_types text/css application/javascript image/svg+xml;
-}</code></pre>
+        <h2>2. What A CDN Actually Removes From TTFB</h2>
 
-<p>Generating HTML documents presents a highly dynamic caching challenge. High-volume e-commerce storefronts frequently update inventory counts, modify pricing rules based on promotional schedules, and adjust localized merchandising content dynamically. If you carelessly cache HTML documents for excessive durations, you risk displaying incorrect pricing structures. To resolve this paradox, utilize a sophisticated dual-layered caching strategy utilizing the <code>s-maxage</code> and the highly performant <code>stale-while-revalidate</code> HTTP header directives.</p>
+        <p>Time to First Byte is not one thing. It is a stack of things, and a CDN removes some of them completely, some of them partially, and some of them not at all. Getting this straight is what stops you buying an edge network to solve a database problem.</p>
 
-<pre><code class="language-nginx"># Nginx Cache-Control Headers for Dynamic HTML Pages
-location / {
-    add_header Cache-Control "public, max-age=60, s-maxage=3600, stale-while-revalidate=86400";
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-}</code></pre>
+        <p>Break a TTFB into its parts, in the order they happen:</p>
 
-<p>The <code>s-maxage</code> directive operates specifically targeting the CDN edge server layer. The browser caches the HTML document for one minute, while the robust CDN edge layer caches the heavy payload for a full hour. When an edge cache object eventually expires, the CDN immediately serves the "stale" cached version to the user, ensuring a consistent sub-50ms TTFB. Simultaneously, it triggers a secondary background network request retrieving the fresh HTML document. This asynchronous update pattern is crucial for <a href="/blog/performance-optimization/">performance optimization</a> at scale.</p>
+        <p><strong>DNS resolution.</strong> Turning your hostname into an address. A CDN usually improves this, because its authoritative nameservers are anycast and near the client, whereas your registrar's default nameservers may be in one place. Typical saving on a cold lookup: 20–60ms. Not nothing, and completely invisible in most people's measurements because they test from a machine that has the answer cached.</p>
 
-<hr />
+        <p><strong>TCP handshake.</strong> One round trip. Purely a function of distance and network quality between the client and whatever it is connecting to. This is where the CDN earns its keep: instead of a round trip to Frankfurt, the customer in Sydney does a round trip to a box in Sydney. That is the difference between roughly 280ms and roughly 12ms.</p>
 
-<h2>3. Serverless Edge Compute: Fastly and Cloudflare</h2>
-<p>Advanced edge compute platforms allow you to execute arbitrary programmatic logic directly at the CDN proxy layer. This capability enables complex dynamic URL routing, localized content injection, and dynamic caching decisions without routing network requests back to your fragile central origin infrastructure.</p>
+        <p><strong>TLS negotiation.</strong> One more round trip on TLS 1.3, two on 1.2. Same logic, same saving, doubled. If you want the detail on that, the <a href="/blog/http2-tls13-implementation/">TLS 1.3 handshake</a> is worth understanding properly, because the difference between a resumed and a full handshake is larger than most people assume.</p>
 
-<h3>Fastly Varnish Configuration Language (VCL)</h3>
-<p>Fastly utilizes an optimized, compiled variant of standard Varnish Configuration Language (VCL). VCL allows you to explicitly dissect the incoming HTTP request, evaluate header values, and conditionally strip sensitive session data before the request hits your origin cache layer.</p>
+        <p><strong>Request travel time.</strong> The request itself crossing the network.</p>
 
-<pre><code class="language-vcl"># Fastly Custom VCL Snippet for URL Normalization and State Management
-sub vcl_recv {
-    if (req.url ~ "(\?|&)(utm_source|utm_medium|utm_campaign)=") {
-        set req.url = regsuball(req.url, "(?:(\?|&)(?:utm_source|utm_medium|utm_campaign)=[^&]+)", "");
-        set req.url = regsub(req.url, "\?&", "?");
-        set req.url = regsub(req.url, "\?$", "");
-    }
+        <p><strong>Origin think time.</strong> Your PHP or Node process building the page. Database queries, template rendering, third-party API calls to your ERP for stock levels.</p>
 
-    if (req.http.Cookie ~ "frontend_session|store_auth_token") {
-        set req.http.X-User-State = "authenticated";
-        return(pass);
-    } else {
-        set req.http.X-User-State = "anonymous";
-        unset req.http.Cookie;
-    }
-}
+        <p><strong>Response travel time.</strong> The first byte coming back.</p>
 
-sub vcl_fetch {
-    if (beresp.status >= 500 && beresp.status < 600) {
-        if (req.restarts > 0 || !req.backend.healthy) {
-            set beresp.saintmode = 10s;
-            return (deliver_stale);
-        }
-    }
-}</code></pre>
+        <p>On a cache miss, the CDN removes nothing from the middle three. It removes some of the first three. It adds a small amount of its own — one extra hop, some header processing, occasionally a TLS termination and re-establishment to origin — and if the origin connection is not kept warm, it can add a lot.</p>
 
-<h3>Cloudflare Workers JavaScript Edge Runtime</h3>
-<p>Cloudflare Workers utilize the V8 engine runtime executing arbitrary serverless JavaScript or TypeScript functions. Workers provide immense flexibility, allowing you to intercept network requests, construct dynamic HTML payloads, or implement sophisticated rate-limiting logic.</p>
+        <p>On a cache hit, everything from "request travel time" onwards collapses to a disk read on a machine near the customer. That is the entire value proposition, and it is enormous, and it only happens if you cache.</p>
 
-<pre><code class="language-javascript">/**
- * Cloudflare Worker: Intelligent E-commerce Edge Caching and Security Proxy
- */
+        <h3>The number that actually matters</h3>
+
+        <p>Here is the arithmetic that I put in front of the lighting retailer, because it made the argument better than I could.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Component</th><th>No CDN</th><th>CDN, cache miss</th><th>CDN, cache hit</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>DNS</td><td>45ms</td><td>18ms</td><td>18ms</td></tr>
+            <tr><td>TCP</td><td>280ms</td><td>12ms</td><td>12ms</td></tr>
+            <tr><td>TLS</td><td>280ms</td><td>12ms</td><td>12ms</td></tr>
+            <tr><td>Edge to origin</td><td>—</td><td>295ms</td><td>—</td></tr>
+            <tr><td>Origin think time</td><td>310ms</td><td>310ms</td><td>—</td></tr>
+            <tr><td>Response travel</td><td>140ms</td><td>150ms</td><td>3ms</td></tr>
+            <tr><td><strong>TTFB</strong></td><td><strong>1055ms</strong></td><td><strong>797ms</strong></td><td><strong>45ms</strong></td></tr>
+          </tbody>
+        </table>
+
+        <p>Real figures from an Australian test location against a Frankfurt origin, rounded. The middle column is what their site was doing. The right-hand column is what it could do. The gap is not a feature you can buy; it is a cache policy you have to write.</p>
+
+        <p>Note also that the miss column is worse than the no-CDN column in one place — response travel, because there is an extra hop. A CDN that never hits is a small net negative for local users and a moderate net positive for distant ones.</p>
+
+        <h2>3. Distance Is Not The Only Latency</h2>
+
+        <p>The mental model everyone has is that a CDN moves bytes closer. That is true and it is not the whole story, and the rest of the story is why a CDN can help even a store whose customers are all in one country.</p>
+
+        <p><strong>Congestion window.</strong> TCP does not start at full speed. It starts with a small congestion window — ten packets on most modern stacks, roughly 14KB — and grows as acknowledgements come back. Growth is paced by round-trip time. A long-RTT connection takes several round trips to reach a useful throughput, so a 60KB HTML document over a 280ms link is not one round trip of transfer, it is four or five. Terminating the connection at an edge node with a 12ms RTT means the window opens almost immediately.</p>
+
+        <p><strong>Warm origin connections.</strong> A decent CDN keeps persistent connections open to your origin. So even on a miss, the edge is not paying for DNS, TCP and TLS to your origin — it is reusing a pipe that is already open and already has a wide congestion window. This is a real and underrated benefit and it is one reason the miss column above is not worse than it is.</p>
+
+        <p><strong>Better routing.</strong> BGP optimises for policy and cost, not latency. Large CDNs have private backbones and direct peering with the major eyeball networks, so edge-to-origin traffic can take a materially better path than the client's would have. I have seen 40ms shaved off a UK-to-US origin fetch purely from routing, with no caching involved.</p>
+
+        <p><strong>Absorbing bursts.</strong> Your origin has a finite number of PHP-FPM workers. A CDN with a good hit rate means a traffic spike hits the edge, not the workers. This is not a latency benefit until it is — the moment your worker pool saturates, TTFB goes from 300ms to 8 seconds, and that is the failure mode that actually costs money.</p>
+
+        <p>So the honest framing is: a CDN is a caching layer that happens to also be nearby. The nearby part helps. The caching part is the point.</p>
+
+        <h2>4. The Cache Key Is The Whole Game</h2>
+
+        <p>Everything about CDN performance reduces to one question: for a given request, what string does the edge use to look up its cache?</p>
+
+        <p>That string is the cache key. By default it is roughly scheme plus host plus path plus query string, and every CDN lets you modify it. The two failure modes are symmetrical and both are common.</p>
+
+        <p><strong>Too specific</strong> and you fragment. Ten variants of the same page cached separately because the key includes a tracking parameter that changes per visitor. Hit rate collapses. Every unique key is a guaranteed miss on first request, and if the long tail is long enough, the object gets evicted before it is ever served twice.</p>
+
+        <p><strong>Too general</strong> and you leak. One customer's cached page served to another. Currency, language, tax-inclusive pricing, and — the one that ends careers — a logged-in header showing someone else's name.</p>
+
+        <p>Getting this right is fiddly and it is the highest-leverage work in this entire article.</p>
+
+        <h3>Query strings are where hit rate goes to die</h3>
+
+        <p>A product page URL that has been shared on Facebook, run through an email campaign, and clicked from a Google Ad looks like this by the time it reaches your edge:</p>
+
+<pre><code class="language-text">/products/oak-dining-table?fbclid=IwAR2x9k...&amp;utm_source=newsletter&amp;utm_medium=email&amp;utm_campaign=spring&amp;gclid=Cj0KCQ...</code></pre>
+
+        <p>Those four parameters change per click. If they are in the cache key, that URL is unique, forever, for every single visitor. Your product page has a 0% hit rate and you will not notice, because your <em>overall</em> hit rate is dominated by images.</p>
+
+        <p>The fix is to normalise. Strip the parameters that do not change the response; keep the ones that do.</p>
+
+<pre><code class="language-javascript">// Cloudflare Worker: normalise the cache key before lookup.
+// Anything not on the allowlist is discarded — analytics params, click IDs,
+// affiliate tags, and the endless supply of junk that appears in the wild.
+const KEEP = new Set([
+  'page',        // pagination changes the response
+  'sort',        // so does sort order
+  'colour',      // and a variant selector
+  'size',
+]);
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const cacheableParams = new Set(['page', 'sort', 'category']);
-    const params = new URLSearchParams(url.search);
-    const normalizedParams = new URLSearchParams();
-    
-    for (const [key, value] of params) {
-      if (cacheableParams.has(key)) normalizedParams.append(key, value);
+    const params = [...url.searchParams.keys()];
+
+    for (const name of params) {
+      if (!KEEP.has(name)) url.searchParams.delete(name);
     }
-    
-    url.search = normalizedParams.toString();
-    const normalizedRequest = new Request(url, request);
+    // Sort what survives, so ?sort=price&amp;page=2 and ?page=2&amp;sort=price
+    // are the same object rather than two.
+    url.searchParams.sort();
 
-    const cache = caches.default;
-    let response = await cache.match(normalizedRequest);
-
-    if (!response) {
-      response = await fetch(normalizedRequest);
-      if (response.ok && request.method === 'GET') {
-        response = new Response(response.body, response);
-        response.headers.set('Cache-Control', 's-maxage=3600, stale-while-revalidate=86400');
-        ctx.waitUntil(cache.put(normalizedRequest, response.clone()));
-      }
-    }
-
-    response = new Response(response.body, response);
-    response.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
-    response.headers.set('X-Content-Type-Options', 'nosniff');
-    response.headers.set('X-Frame-Options', 'DENY');
-
-    return response;
-  }
+    // Look up and store under the normalised URL, but send the ORIGINAL
+    // request to origin on a miss, so server-side analytics still see the
+    // campaign parameters.
+    return fetch(request, { cf: { cacheKey: url.toString() } });
+  },
 };</code></pre>
 
-<hr />
+        <p>That last comment matters more than it looks. If you strip UTM parameters before the request reaches origin, and your analytics runs server-side, you have just deleted your campaign attribution to fix your hit rate. Marketing will find out in about nine days and they will be right to be annoyed. Strip from the key, not from the request.</p>
 
-<h2>4. Precision Cache Invalidation via Surrogate Keys</h2>
-<p>Instructing the CDN to simply cache static data is a relatively trivial exercise; invalidating that cached data precisely when the underlying database state changes is a difficult computer science challenge. The naive approach involves purging the entire global CDN cache volume whenever a single product description is modified. This brutal purge indiscriminately evicts perfectly valid content, violently forcing the central origin server to regenerate HTML pages, frequently causing a cache stampede.</p>
+        <p>Most platforms have a version of this. Fastly calls it a VCL edit, Akamai a "cache ID modification" behaviour, Shopify does it for you and does not let you touch it. On Nginx it is a <code>map</code> block and a <code>proxy_cache_key</code>.</p>
 
-<p>The correct solution requires highly granular, specifically targeted cache invalidation using complex surrogate keys. When the origin server successfully generates a dynamic response, it actively appends a hidden proprietary HTTP header containing a comma-separated list of precise identifiers intimately related to the data structures on that specific page.</p>
+<pre><code class="language-nginx"># Nginx as an edge cache: build a key from path plus a whitelisted
+# subset of arguments, plus the things that genuinely change the response.
 
-<p>When a team member modifies pricing for a specific SKU via the backend CMS dashboard, the core application layer fires an asynchronous API webhook request directly to the CDN provider's invalidation endpoint. The secure webhook payload contains the specific surrogate key. The CDN instantly locates all cached binary objects tagged with that exact key across its global memory network and completely invalidates them simultaneously.</p>
+map $arg_page $key_page { default ""; ~. "p=$arg_page"; }
+map $arg_sort $key_sort { default ""; ~. "s=$arg_sort"; }
 
-<pre><code class="language-python"># Python Implementation: Triggering Asynchronous Fastly Cache Purge via Surrogate Key
-import os
-import requests
-import logging
-import json
+# Device class comes from a header your CDN or a UA parse sets upstream.
+# Two buckets, not fifty. Every bucket halves your effective hit rate.
+map $http_user_agent $device {
+    default            "d";
+    "~*iphone|android" "m";
+}
 
-FASTLY_API_TOKEN = os.environ.get('FASTLY_API_TOKEN')
-FASTLY_SERVICE_ID = os.environ.get('FASTLY_SERVICE_ID')
+proxy_cache_key "$scheme$host$uri|$key_page|$key_sort|$device|$cookie_currency";</code></pre>
 
-def purge_cdn_surrogate_key(surrogate_key: str) -> bool:
-    if not FASTLY_API_TOKEN or not FASTLY_SERVICE_ID:
-        logging.error("Fastly API credentials missing.")
-        return False
-        
-    url = f"https://api.fastly.com/service/{FASTLY_SERVICE_ID}/purge/{surrogate_key}"
-    headers = {
-        "Fastly-Key": FASTLY_API_TOKEN,
-        "Accept": "application/json",
-        "Fastly-Soft-Purge": "1" 
-    }
-    
-    try:
-        response = requests.post(url, headers=headers, timeout=5)
-        response.raise_for_status()
-        logging.info(f"Successfully purged surrogate key: {surrogate_key}")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Fastly purge API failed abruptly for surrogate key {surrogate_key}: {str(e)}")
-        return False
-</code></pre>
+        <h3>The dimensions that legitimately belong in the key</h3>
 
-<p>Observe the inclusion of the <code>Fastly-Soft-Purge: 1</code> HTTP header. Instead of aggressively hard-deleting the cached object from the edge memory layer, a soft purge command merely marks the specific object as stale. When the very next user requests the invalid asset, the CDN intelligently invokes the previously established <code>stale-while-revalidate</code> logic.</p>
+        <p>Be miserly here. Every dimension multiplies your object count and divides your hit rate. On a storefront, the defensible list is short:</p>
 
-<hr />
+        <p>Currency or market, if prices differ. Language, if you serve more than one and do not use separate paths. Device class, and only if you genuinely render different HTML for mobile — if you are responsive, and you should be, this is zero dimensions rather than two. Logged-in versus anonymous, which is better handled by not caching the logged-in case at all. And that is close to the complete list.</p>
 
-<h2>5. HTTP/3 QUIC Protocol Tuning</h2>
-<p>While optimizing caching infrastructure primarily addresses application payload delivery efficiency, you must also fundamentally optimize the underlying network transport layer itself. Legacy protocols rely entirely upon the Transmission Control Protocol (TCP) as their foundation. TCP was engineered for guaranteed reliability across severely unreliable early networks, severely degrading raw transmission speed. Securing connections via Transport Layer Security (TLS) requires additional expensive cryptographic negotiation round-trips.</p>
+        <p>Things that do not belong: session ID (ever), any per-user token, the full user agent string, and geolocation at any granularity finer than "the countries where my prices differ". I once inherited a configuration that varied on city-level geo for a store with a single price list. Two hundred and forty cache variants of a homepage that was byte-identical in all of them.</p>
 
-<p>The modern HTTP/3 specification radically solves these severe transport layer bottlenecks by entirely discarding TCP in favor of the QUIC protocol. QUIC operates completely over the User Datagram Protocol (UDP), bypassing the limitations of the traditional operating system kernel networking stack. It integrates the complex cryptographic TLS handshake directly into the initial connection establishment phase.</p>
+        <h2>5. Vary, Cookies, And Why Your Hit Rate Is Four Percent</h2>
 
-<p>For returning visitors who have previously established secure cryptographic parameters with the edge CDN, QUIC enables Zero Round-Trip Time (0-RTT) connection resumption functionality. Furthermore, QUIC implements true stream-level multiplexing. If packet loss inevitably occurs over a congested network, only the specific file stream associated with that precise missing packet is delayed. All other image streams continue downloading completely uninterrupted, permanently resolving the catastrophic Head-of-Line blocking failure mode inherent in standard TCP. This directly and positively impacts search engine algorithmic calculations, crucial for <a href="/blog/why-seo-matters/">technical SEO audits</a>.</p>
+        <p>Two headers do more damage to cache hit rates than everything else combined, and both are usually set by something you did not write.</p>
 
-<p>When implementing QUIC and HTTP/3, robust edge monitoring is required to track actual protocol adoption across the global client base. Native browser support varies, and legacy enterprise firewall networks frequently block UDP port 443 entirely. Consequently, the CDN infrastructure gracefully falls back to standard TCP-based HTTP/2 for any clients that fail the initial UDP connection attempt, definitively guaranteeing seamless accessibility for all users without causing connection failures.</p>
+        <p><strong><code>Vary: Cookie</code></strong> tells the cache that the response depends on the request's cookies, and since every visitor has a different session cookie, every response is unique. Hit rate: zero. Frameworks emit this defensively — Magento does it, Django does it the moment you touch the session, Rails does it — because it is the safe default and the framework does not know you have put a CDN in front.</p>
 
-<pre><code class="language-nginx"># Nginx HTTP/3 QUIC Protocol Activation and Performance Tuning
-server {
-    listen 443 ssl;
-    listen 443 quic reuseport;
-    
-    server_name modracx.com;
+        <p><strong><code>Set-Cookie</code> on a cacheable response</strong> is worse, because most CDNs will refuse to cache a response carrying it, and they are right to. If they did cache it, every subsequent visitor would receive someone else's session cookie. A single analytics library that sets a first-party cookie server-side can silently make your entire HTML uncacheable.</p>
 
-    ssl_certificate     /etc/letsencrypt/live/modracx.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/modracx.com/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5:!RC4:!DES;
-    ssl_prefer_server_ciphers on;
+        <p>Check for it directly. This is the first thing I run on any store where the hit rate looks wrong:</p>
 
-    add_header Alt-Svc 'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000';
-    
-    quic_retry on;
-    ssl_early_data on; 
+<pre><code class="language-bash"># What is the origin actually saying about cacheability?
+# -s silent, -o discard the body, -D - dump headers to stdout.
+curl -s -o /dev/null -D - https://origin.example.com/products/oak-dining-table \
+  | grep -iE 'cache-control|vary|set-cookie|age|expires|surrogate'
 
-    location / {
-        proxy_pass http://backend_upstream_cluster;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-    }
+# And what does the edge think, on two consecutive requests?
+# The second should report a hit. If it does not, that is your answer.
+for i in 1 2; do
+  curl -s -o /dev/null -D - https://www.example.com/products/oak-dining-table \
+    | grep -iE 'cf-cache-status|x-cache|age'
+done</code></pre>
+
+        <p>The fix is to strip both at the edge for the paths where they are wrong, which means being explicit about which cookies genuinely affect the response.</p>
+
+<pre><code class="language-javascript">// Strip everything except the cookies that legitimately change the page.
+// Run this on the request before cache lookup; run the Set-Cookie removal
+// on the response before storing.
+const MEANINGFUL = ['currency', 'store_locale'];
+
+function stripCookies(request) {
+  const raw = request.headers.get('Cookie') || '';
+  const kept = raw
+    .split(';')
+    .map(c =&gt; c.trim())
+    .filter(c =&gt; MEANINGFUL.some(name =&gt; c.startsWith(name + '=')));
+
+  const headers = new Headers(request.headers);
+  if (kept.length) headers.set('Cookie', kept.join('; '));
+  else headers.delete('Cookie');
+
+  return new Request(request, { headers });
+}
+
+function makeCacheable(response) {
+  const headers = new Headers(response.headers);
+  // The origin's session cookie must not be stored and re-served.
+  headers.delete('Set-Cookie');
+  // And the framework's defensive Vary would defeat the whole exercise.
+  headers.delete('Vary');
+  return new Response(response.body, { ...response, headers });
 }</code></pre>
 
-<hr />
+        <p>I want to be honest about the risk in that second function. Deleting <code>Vary</code> and <code>Set-Cookie</code> from a response you are about to store in a shared cache is exactly the operation that leaks one customer's data to another if you get the conditions wrong. Do it only for paths you have positively identified as anonymous — product pages, category pages, content pages — and never as a global rule. I gate it on the request having no session cookie at all, which means logged-in users bypass the cache entirely and get a slower but correct page. That trade is nearly always the right one on a storefront, because the logged-in population is a small fraction of traffic and a large fraction of your legal exposure.</p>
 
-<h2>6. Frequently Asked Questions</h2>
+        <h2>6. Reading Your Hit Rate Honestly</h2>
 
-<h3>What is the stale-while-revalidate Cache-Control header?</h3>
-<p>The directive allows CDN edge nodes to immediately serve older, cached content to users instantly while simultaneously and asynchronously fetching highly updated data from the origin server in the silent background. This powerful mechanism effectively combines sub-50ms TTFB rendering speed with strong data cache freshness, entirely eliminating the severe latency penalty typically associated with cold cache misses.</p>
+        <p>Your CDN dashboard shows one big number. That number is a lie, or at least it is answering a question you did not ask.</p>
 
-<h3>How does the modern HTTP/3 QUIC protocol fundamentally reduce connection latency over unstable mobile cellular networks?</h3>
-<p>HTTP/3 entirely replaces the archaic TCP protocol with the highly advanced UDP-based QUIC protocol, structurally eliminating the dangerous head-of-line blocking vulnerability and significantly reducing initial TLS handshake round-trips from the legacy 2-RTT sequence down to lightning-fast 0-RTT connections for returning site visitors.</p>
+        <p>An overall hit rate is dominated by whatever you request most, and on a storefront that is images. A product page with thirty images and one HTML document gives you a 96.7% hit rate if every image hits and the HTML misses every time. The dashboard says 96.7%. The customer waits for the HTML.</p>
 
-<h3>What is the role of Brotli compression at the edge layer?</h3>
-<p>While standard Gzip remains widely supported, enabling Brotli compression algorithms directly on the CDN proxy layer substantially improves payload density for text-based assets. Brotli consistently reduces the final sizes of HTML, CSS, and JSON responses by an additional fifteen to twenty-five percent compared to standard Gzip implementations. Transmitting significantly smaller data payloads physically across the network layer inherently accelerates JavaScript parsing and dramatically improves overall browser rendering timelines.</p>
+        <p>Segment it. At minimum, split by content type, and ideally by template.</p>
 
-        <hr />
+<pre><code class="language-javascript">// Paste in the console on a real page. Groups resource timings by
+// extension and reports how many were served from a nearby cache
+// versus how long they actually took.
+const groups = {};
+for (const e of performance.getEntriesByType('resource')) {
+  const ext = (new URL(e.name).pathname.split('.').pop() || 'html').slice(0, 5);
+  groups[ext] ??= { n: 0, ms: 0, bytes: 0 };
+  groups[ext].n++;
+  groups[ext].ms += e.duration;
+  groups[ext].bytes += e.transferSize || 0;
+}
+console.table(
+  Object.entries(groups)
+    .map(([ext, g]) =&gt; ({
+      ext,
+      requests: g.n,
+      avgMs: Math.round(g.ms / g.n),
+      kb: Math.round(g.bytes / 1024),
+    }))
+    .sort((a, b) =&gt; b.avgMs - a.avgMs)
+);</code></pre>
+
+        <p>The number I actually care about is the HTML hit rate for anonymous traffic on your top three templates. That is a single figure, it is usually embarrassing, and it predicts your field TTFB better than anything else on the dashboard.</p>
+
+        <p>There is a second number worth pulling out, which most dashboards bury: the ratio of hits to <em>revalidations</em>. A revalidation is a conditional request to origin — the edge has the object, it has expired, so it asks the origin whether it is still good. The origin returns 304, the edge serves its copy. That is counted as a hit by some providers and it is not free: it cost a full round trip to origin. If your revalidation count is high, your TTLs are too short and your dashboard is flattering you.</p>
+
+        <h2>7. What To Cache</h2>
+
+        <p>The categories, in descending order of how obvious they are.</p>
+
+        <p><strong>Fingerprinted static assets.</strong> Anything whose filename contains a content hash — <code>app.7f3c2a.js</code>, <code>main.9b21e4.css</code> — is immutable by construction. Cache it for a year and tell the browser to never revalidate. There is no risk, because a change produces a new filename.</p>
+
+<pre><code class="language-http">Cache-Control: public, max-age=31536000, immutable</code></pre>
+
+        <p>The <code>immutable</code> directive is the part people leave off, and it does real work: without it, a browser reload issues a conditional request for every asset, so a customer who hits F5 pays a round trip per file even though everything is cached. With it, the browser does not ask.</p>
+
+        <p><strong>Images.</strong> Long TTLs, but not usually a year, because product photography does get replaced and the filenames are frequently not fingerprinted. A month at the edge with a purge on product update is the pattern I use. If you are also doing format negotiation, be careful — that is a <code>Vary: Accept</code> situation and it is one of the few places <code>Vary</code> is legitimate. See the <a href="/blog/responsive-webp-images/">notes on serving WebP and AVIF</a> for how to avoid caching a WebP for a browser that cannot render it.</p>
+
+        <p><strong>Product and category HTML for anonymous visitors.</strong> This is the big one and it is the one people skip. A product page for a not-logged-in visitor is the same bytes for everyone in the same market. Cache it. Short TTL if you are nervous, long TTL plus a purge hook if you are not.</p>
+
+        <p><strong>Search and autocomplete responses.</strong> The head of the query distribution is tiny and repeats constantly. Ninety seconds of caching on <code>/api/search?q=</code> for the top thousand queries removes a startling amount of load from an Elasticsearch cluster.</p>
+
+        <p><strong>Sitemaps, robots.txt, feeds.</strong> Trivial, frequently uncached, and requested by crawlers with a persistence that will surprise you.</p>
+
+        <p><strong>Stock and price fragments — carefully.</strong> Ten to sixty seconds. Long enough to absorb a burst, short enough that nobody sees a wrong number for long. On a fast-moving marketplace, not acceptable at all.</p>
+
+        <h2>8. What To Never Cache</h2>
+
+        <p>Shorter list, and the consequences of getting it wrong are not "slow page", they are "incident".</p>
+
+        <p>Cart contents. Checkout, at every step. Customer account pages. Order history and order confirmation. Anything behind authentication. Admin, obviously, and I have seen an admin panel cached at the edge exactly once, which was enough.</p>
+
+        <p>The correct posture is an explicit bypass rule, matched on path, evaluated before anything else, with an audit that runs in CI. Not a default that you hope holds.</p>
+
+<pre><code class="language-nginx"># Bypass is an allowlist inverted: named paths never cache, full stop.
+# Evaluated first, before any of the caching logic below it.
+location ~ ^/(checkout|cart|customer|account|admin|api/session) {
+    proxy_pass          http://origin;
+    proxy_cache         off;
+    add_header          Cache-Control "private, no-store, max-age=0" always;
+    # Belt and braces: if a downstream shared cache ignores Cache-Control,
+    # this at least tells CDNs that honour it.
+    add_header          CDN-Cache-Control "no-store" always;
+}</code></pre>
+
+        <p>And then test it, because a rule that exists in one config file and not in the one that is actually deployed is worth nothing:</p>
+
+<pre><code class="language-bash">#!/usr/bin/env bash
+# Run in CI after every deploy. Any of these being cacheable is a
+# stop-the-line failure, not a warning.
+set -e
+HOST="https://www.example.com"
+
+for path in /checkout /cart /customer/account /admin; do
+  cc=$(curl -s -o /dev/null -D - "$HOST$path" | grep -i '^cache-control:' | tr -d '\r')
+  case "$cc" in
+    *no-store*) echo "ok    $path" ;;
+    *)          echo "FAIL  $path -&gt; $cc"; exit 1 ;;
+  esac
+done</code></pre>
+
+        <h2>9. Caching HTML: The Argument Both Ways</h2>
+
+        <p>This is the decision that separates a CDN that saves 40ms from one that saves 700ms, and it is the one people are most frightened of. Reasonably so.</p>
+
+        <p>The case against is straightforward. HTML on a storefront often contains personalisation — a name in the header, a cart count, recently viewed items, a market-specific price. Cache it and you serve one person's page to another. The failure is silent, it is visible to the customer, and under GDPR it is reportable if it includes anything identifying.</p>
+
+        <p>The case for is that the overwhelming majority of your traffic is anonymous, that page is identical for all of them, and it is the single largest component of TTFB.</p>
+
+        <p>The resolution is not to pick a side, it is to separate the document from the personalisation. Three ways to do that, in ascending order of effort.</p>
+
+        <h3>Cache the shell, fetch the personal bits</h3>
+
+        <p>Serve a fully cached HTML document with placeholder markup for the personal parts, then fill them in with a small uncached request after load. The cart badge, the customer name, the "you viewed this" strip.</p>
+
+<pre><code class="language-html">&lt;!-- Cached HTML. The placeholder reserves layout so filling it in
+     later does not cause a shift. --&gt;
+&lt;div id="account-strip" data-personal style="min-height:1.5rem"&gt;
+  &lt;a href="/customer/account/login/"&gt;Sign in&lt;/a&gt;
+&lt;/div&gt;
+
+&lt;script&gt;
+  // One uncached request, after paint, for everything personal at once.
+  // Batching matters: three separate calls means three round trips.
+  fetch('/api/session-summary', { credentials: 'include' })
+    .then(r =&gt; r.ok ? r.json() : null)
+    .then(data =&gt; {
+      if (!data || !data.name) return;
+      document.getElementById('account-strip').innerHTML =
+        'Hello, ' + data.name + ' — ' + data.cartCount + ' items';
+    })
+    .catch(() =&gt; { /* leave the cached default in place */ });
+&lt;/script&gt;</code></pre>
+
+        <p>This is the pattern Magento's full page cache uses, and it works. The cost is a flash of the anonymous state before the personal state arrives, which on a slow connection can be a second or more, and a layout shift if you have not reserved the space. Reserve the space.</p>
+
+        <h3>Edge-side includes</h3>
+
+        <p>ESI lets the edge assemble a page from cached fragments with different TTLs. The page shell caches for an hour, the price block for a minute, the stock indicator for ten seconds.</p>
+
+<pre><code class="language-html">&lt;div class="price-block"&gt;
+  &lt;esi:include src="/fragments/price/SKU-4471" /&gt;
+&lt;/div&gt;
+&lt;div class="stock"&gt;
+  &lt;esi:include src="/fragments/stock/SKU-4471" /&gt;
+&lt;/div&gt;</code></pre>
+
+        <p>I have a complicated relationship with ESI. It works, it is supported by Varnish, Fastly and Akamai, and it is genuinely the right answer for a page with several independently-changing regions. It is also a distributed templating system with no local development story, poor debuggability, and error semantics that will ruin an afternoon — a fragment that 500s can blank a section of the page with no obvious signal. I reach for it on large catalogues where the alternative is a 15-second TTL on everything, and I avoid it otherwise.</p>
+
+        <h3>Compute the personalisation at the edge</h3>
+
+        <p>Workers, Lambda@Edge, Fastly Compute. Cache the anonymous document, then rewrite it at the edge using something cheap you already have — a signed cookie, a geo header — before it goes to the client. This keeps the personalisation server-side, removes the flash, and adds a few milliseconds of edge CPU.</p>
+
+        <p>It is the best answer technically and the most operationally involved. You now have code deployed in a third place, with its own release cycle and its own outage mode. On a store with a small team I would not introduce it to solve a cart badge.</p>
+
+        <h2>10. Cache-Control, Explained By What Breaks</h2>
+
+        <p>The directives are documented everywhere and understood nowhere, largely because the documentation explains what they mean rather than what goes wrong when you get them wrong.</p>
+
+        <p><strong><code>public</code> vs <code>private</code>.</strong> <code>private</code> means browsers may cache it but shared caches may not. Get this wrong in the permissive direction and a CDN caches a personal page. Get it wrong in the restrictive direction and your hit rate is zero and you will not know why, because the response looks cacheable to a casual reading.</p>
+
+        <p><strong><code>max-age</code>.</strong> Seconds. Applies to every cache that does not have a more specific instruction. The failure mode is setting a long one on HTML and then needing to change something, at which point browsers that already have it will not ask again for the duration and you have no way to reach them. You can purge a CDN. You cannot purge a browser.</p>
+
+        <p><strong><code>s-maxage</code>.</strong> Overrides <code>max-age</code> for shared caches only. This is the directive that makes HTML caching survivable, because it lets you say "edge, hold this for an hour; browser, hold it for sixty seconds". The edge you can purge. The browser you cannot.</p>
+
+<pre><code class="language-http">Cache-Control: public, max-age=60, s-maxage=3600, stale-while-revalidate=86400</code></pre>
+
+        <p>That single line is the workhorse for storefront HTML and it is worth reading slowly. Browser holds it for a minute. Edge holds it for an hour. For a day after the edge copy expires, the edge may serve it stale while fetching a fresh one in the background. The worst-case user-visible staleness is a minute; the worst-case origin load is one request per URL per hour.</p>
+
+        <p><strong><code>no-cache</code> vs <code>no-store</code>.</strong> These are not synonyms and the naming is genuinely awful. <code>no-cache</code> means "store it, but revalidate before every use" — the object is on disk, there is a conditional request, and a 304 saves the body. <code>no-store</code> means "do not write this down anywhere". If you want a checkout page to never touch a cache, you want <code>no-store</code>. Half the internet writes <code>no-cache</code> and gets a conditional request per view, which is slow rather than dangerous, so nobody notices.</p>
+
+        <p><strong>Provider-specific headers.</strong> <code>Surrogate-Control</code> (Fastly, Varnish) and <code>CDN-Cache-Control</code> (Cloudflare, Akamai, and now standardised) let you instruct the CDN without the browser ever seeing it. This is cleaner than the <code>s-maxage</code> trick when your CDN supports it, because the browser-facing header stays honest and readable.</p>
+
+<pre><code class="language-http">Cache-Control: public, max-age=60
+CDN-Cache-Control: max-age=86400
+Surrogate-Control: max-age=86400, stale-while-revalidate=604800
+Surrogate-Key: product-4471 category-dining collection-oak</code></pre>
+
+        <h2>11. Stale-While-Revalidate, And The Header That Saves Your Weekend</h2>
+
+        <p><code>stale-while-revalidate</code> changes the shape of your traffic more than any other single directive. Without it, an expiring object means the next visitor waits for a full origin fetch. With it, that visitor gets the stale copy instantly and the refresh happens behind them.</p>
+
+        <p>On a busy page this is the difference between one slow request per TTL and none. On a page with a long tail it is the difference between a thundering herd and a gentle trickle.</p>
+
+        <p><code>stale-if-error</code> is the one I actually evangelise. It says: if the origin returns a 5xx or times out, serve the stale copy rather than the error.</p>
+
+<pre><code class="language-http">Cache-Control: public, s-maxage=600, stale-while-revalidate=3600, stale-if-error=86400</code></pre>
+
+        <p>A homeware client's origin database fell over on a Saturday afternoon during a sale. The origin was returning 500s for eleven minutes. Because <code>stale-if-error=86400</code> was set on category and product HTML, anonymous browsing continued working the entire time from stale edge copies. Checkout was down, which is not nothing, but customers could browse, and the ones already mid-session did not see an error page. We got a handful of "the site's a bit slow" emails instead of a public incident.</p>
+
+        <p>Eleven minutes of degraded service instead of eleven minutes of outage, from one directive that costs nothing. Set it on everything anonymous.</p>
+
+        <h2>12. Purging: Four Strategies, Ranked</h2>
+
+        <p>The reason people set short TTLs is that they do not trust their ability to invalidate. Fix the invalidation and you can set long TTLs, and long TTLs are where the hit rate lives.</p>
+
+        <h3>Purge by URL</h3>
+
+        <p>Simplest. You changed a product, you purge that product's URL. It works and it is insufficient, because that product also appears on three category pages, the homepage's "new in" strip, a collection page, the sitemap, and a search result. Purging one URL leaves six stale.</p>
+
+        <h3>Purge everything</h3>
+
+        <p>The nuclear option, and I understand the appeal. The problem is what happens next: every URL is now a miss, every miss goes to origin, and your origin receives its full uncached traffic in a single burst. I have watched a store take itself down with a purge-all during a Black Friday price update. The purge succeeded. The origin did not.</p>
+
+        <p>If you must, do it at 4am, and warm the top thousand URLs immediately afterwards.</p>
+
+        <h3>Purge by cache tag</h3>
+
+        <p>This is the right answer and it is available on every serious CDN under a different name — surrogate keys on Fastly, cache tags on Cloudflare Enterprise and Akamai, <code>X-Magento-Tags</code> if you are running Varnish in front of Magento.</p>
+
+        <p>The origin declares, on every response, which entities the page depends on. Later, when an entity changes, you purge the tag and every page that declared it disappears from cache, wherever it was.</p>
+
+<pre><code class="language-php">&lt;?php
+// Emitted by the application on every cacheable response.
+// Every entity the page reads from becomes a tag; changing any of
+// them invalidates exactly the pages that depend on it.
+$tags = [];
+$tags[] = 'product-' . $product-&gt;getId();
+$tags[] = 'price-' . $product-&gt;getId();
+$tags[] = 'stock-' . $product-&gt;getSku();
+
+foreach ($product-&gt;getCategoryIds() as $categoryId) {
+    $tags[] = 'category-' . $categoryId;
+}
+if ($product-&gt;getBrandId()) {
+    $tags[] = 'brand-' . $product-&gt;getBrandId();
+}
+
+// Fastly and Varnish read Surrogate-Key; Cloudflare reads Cache-Tag.
+// Emitting both is harmless and makes a provider change less painful.
+header('Surrogate-Key: ' . implode(' ', array_unique($tags)));
+header('Cache-Tag: '     . implode(',', array_unique($tags)));</code></pre>
+
+        <p>Then the invalidation, fired from wherever your product save hook lives:</p>
+
+<pre><code class="language-bash"># Purge every cached object that declared a dependency on product 4471.
+# One call, regardless of how many category and collection pages
+# happened to include it.
+curl -X POST "https://api.fastly.com/service/$FASTLY_SERVICE/purge/product-4471" \
+  -H "Fastly-Key: $FASTLY_TOKEN" \
+  -H "Accept: application/json"
+
+# Cloudflare's equivalent takes a batch, which is worth using —
+# one request for a whole catalogue import beats four thousand.
+curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE/purge_cache" \
+  -H "Authorization: Bearer $CF_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"tags":["product-4471","category-12","brand-9"]}'</code></pre>
+
+        <p>The mistake I made the first time I built this was tagging too finely. A tag per attribute — colour, material, dimensions — on the theory that granularity was free. It is not: providers cap tags per response, and I blew past Fastly's header size limit on category pages listing sixty products. Those responses silently lost their keys and became unpurgeable. Tag at the entity level: product, category, brand, plus a global tag for the layout.</p>
+
+        <h3>Do not purge at all</h3>
+
+        <p>The most reliable invalidation is a URL that never needs it. Fingerprint your assets, version your API paths, and put a content hash in any URL you can. For everything that survives, a short <code>s-maxage</code> with a long <code>stale-while-revalidate</code> gets you most of the benefit of a long TTL with none of the purge machinery. On a small catalogue that changes twice a day, this is genuinely the correct engineering decision and building a tag system would be over-engineering.</p>
+
+        <h2>13. Origin Shielding And Tiered Caching</h2>
+
+        <p>A CDN with 300 points of presence and a cold cache means up to 300 separate misses for the same object, each hitting your origin. On a purge-all, that is 300 times your object count.</p>
+
+        <p>Origin shielding designates one location — ideally close to your origin — as the only tier that talks to origin. Every other edge, on a miss, asks the shield. The shield asks origin once and answers everyone else.</p>
+
+        <p>The effect on origin load is dramatic and the effect on latency is mildly negative for the second-tier miss, since there is now an extra hop. That trade is nearly always worth it. On the homeware store, enabling a Frankfurt shield in front of a Frankfurt origin took origin requests per minute from around 2,400 to around 310 with no change to any cache policy.</p>
+
+        <p>Where it is not worth it: if your origin is itself globally distributed, or if your platform already does this invisibly. Check before you pay for it.</p>
+
+        <h2>14. Compression And The Edge</h2>
+
+        <p>Two things interact here in a way that surprises people.</p>
+
+        <p>First, if your origin serves uncompressed responses and the CDN compresses them at the edge, you are paying for compression CPU on every miss and shipping uncompressed bytes over the edge-to-origin link. Compress at origin. Better still, pre-compress your static assets at build time so nothing compresses anything at request time — I have written up the <a href="/blog/brotli-compression/">Brotli and gzip trade-offs</a> at length.</p>
+
+        <p>Second, compression and caching share a failure mode: <code>Vary: Accept-Encoding</code>. It is correct and necessary, and it means the edge stores a separate object per encoding. That is fine — two or three variants, and every modern client sends the same thing. It becomes a problem when a middlebox or an old client sends a mangled <code>Accept-Encoding</code> and you end up with dozens of variants. Normalise the header at the edge into two buckets, br and gzip, and cache against those.</p>
+
+<pre><code class="language-javascript">// Normalise Accept-Encoding to at most two values before cache lookup.
+// Without this, "gzip;q=1.0, deflate, br" and "br, gzip" are different
+// cache entries containing identical bytes.
+function normaliseEncoding(request) {
+  const ae = (request.headers.get('Accept-Encoding') || '').toLowerCase();
+  const value = ae.includes('br') ? 'br' : ae.includes('gzip') ? 'gzip' : '';
+  const headers = new Headers(request.headers);
+  if (value) headers.set('Accept-Encoding', value);
+  else headers.delete('Accept-Encoding');
+  return new Request(request, { headers });
+}</code></pre>
+
+        <h2>15. The Honest Section About SEO</h2>
+
+        <p>Here is where I part company with most articles carrying a title like this one's.</p>
+
+        <p>A CDN is not a ranking factor. There is no CDN signal. Google does not know or care which provider serves your bytes. What it observes is response time and availability, and those feed into things that do matter, weakly and indirectly.</p>
+
+        <p>Three real mechanisms, in descending order of how much they are worth:</p>
+
+        <p><strong>Crawl budget.</strong> This is the one people underrate. Googlebot allocates a crawl rate partly based on how fast your server responds; if responses are slow, it backs off to avoid hurting you. On a small site this is irrelevant, because your whole catalogue gets crawled regardless. On a site with 400,000 URLs it is very relevant indeed, because the difference between a 200ms and an 800ms average response is roughly the difference between your new products being indexed in a day and in a week. I have watched a store cut average response time by 60% and see indexed URL count climb over the following six weeks with no other change. That is a real effect and it is a crawling effect, not a ranking one.</p>
+
+        <p><strong>Core Web Vitals.</strong> Page experience is a confirmed but small ranking input, and it is a tiebreaker rather than a lever. A CDN improves TTFB, and TTFB is a component of LCP — often 30–40% of it on a slow origin. So the chain is: CDN improves TTFB, improves LCP, contributes to a signal that is one of many. Each link in that chain is real and each one attenuates. If your LCP is 4.2s because of a 3MB hero image, no CDN will save you; the <a href="/blog/core-web-vitals/">fixes for the metrics themselves</a> are a different piece of work.</p>
+
+        <p><strong>Availability.</strong> Underrated because it is invisible when it works. A site that 500s when Googlebot arrives gets crawled less, and repeated failures can drop pages from the index. <code>stale-if-error</code> at the edge means a crawler sees a 200 with slightly old content instead of a 503. That is worth more than most on-page work.</p>
+
+        <p>And here is what a CDN does <em>not</em> do for SEO, despite what you will read: it does not help you rank in a country because you have a PoP there. Geographic ranking comes from your domain, your hreflang, your content, your local links and your Search Console targeting. Serving bytes from São Paulo does not make you Brazilian.</p>
+
+        <p>If someone quotes you a percentage — "a CDN improves rankings by 15%" — they made it up. The mechanism is response time, the effect is indirect, and the correct expectation is "this helps a bit and helps more the larger your site is".</p>
+
+        <h2>16. Measuring Whether Any Of This Worked</h2>
+
+        <p>Lab tools will tell you your TTFB from a datacentre in Virginia with a warm cache. That is not your customer.</p>
+
+        <p>Measure from the field. The Navigation Timing API gives you TTFB directly, and reporting it alongside the cache status the edge told you about is what turns a number into a diagnosis.</p>
+
+<pre><code class="language-javascript">// Real-user TTFB, tagged with the edge's own cache verdict.
+// The Server-Timing header is how you get the CDN to tell you, in a
+// form the browser exposes to JavaScript.
+addEventListener('load', () =&gt; {
+  const nav = performance.getEntriesByType('navigation')[0];
+  if (!nav) return;
+
+  // Origin must send: Server-Timing: cdn-cache;desc=HIT, edge;dur=12
+  const timings = Object.fromEntries(
+    (nav.serverTiming || []).map(t =&gt; [t.name, t.description || t.duration])
+  );
+
+  navigator.sendBeacon('/rum', JSON.stringify({
+    url: location.pathname,
+    ttfb: Math.round(nav.responseStart),
+    // How much of TTFB was connection setup vs waiting for bytes
+    connect: Math.round(nav.connectEnd - nav.domainLookupStart),
+    wait: Math.round(nav.responseStart - nav.requestStart),
+    cache: timings['cdn-cache'] || 'unknown',
+    country: document.documentElement.dataset.geo || '',
+  }));
+});</code></pre>
+
+        <p>Then look at the distribution, not the mean. TTFB is bimodal on a site with a partial hit rate: a tight cluster around 50ms for hits, a long smear from 400ms upwards for misses. The mean sits between the two humps and describes nobody. Report the 75th percentile, split by cache status, split by country. That table is the one that tells you what to do next.</p>
+
+        <p>Synthetic monitoring still has a place: catching configuration regressions. A daily check that checkout is still <code>no-store</code> and product pages still hit is worth more than another Lighthouse score.</p>
+
+        <h2>17. A Worked Example, Including What Went Wrong</h2>
+
+        <p>Back to the lighting retailer. UK-based, Frankfurt origin on a managed Magento host, 18,000 SKUs, meaningful traffic from Australia and the west coast of the US.</p>
+
+        <p><strong>Where we started.</strong> Cloudflare in front, on since 2021. Overall hit rate 94%, which everyone was pleased with. HTML hit rate: 0%. Field TTFB at p75: 940ms in the UK, 1,740ms in Australia. Every HTML response carried <code>no-cache, no-store, must-revalidate</code> and a <code>Vary: Cookie</code> for good measure.</p>
+
+        <p><strong>Week one: find out why.</strong> The <code>no-store</code> traced back to a 2022 commit fixing a genuine bug where a logged-in header was served to an anonymous visitor. The fix was correct for the bug and far too broad. Nobody had revisited it because nothing was visibly wrong.</p>
+
+        <p><strong>Week two: separate personal from public.</strong> Moved the cart badge, the account name and the recently-viewed strip into a single <code>/api/session-summary</code> call. Made the header markup render an anonymous default with reserved height. This was the bulk of the work — about six days, most of it spent finding places in the theme where a template quietly read the session.</p>
+
+        <p><strong>Week three: cache policy.</strong> Product, category and content pages moved to <code>public, max-age=0, s-maxage=3600, stale-while-revalidate=86400, stale-if-error=604800</code>. <code>max-age=0</code> rather than 60 because they wanted price changes visible immediately on refresh and were willing to pay a conditional request for it. Checkout, cart and account got an explicit bypass with a CI check.</p>
+
+        <p><strong>Week three, also: cache keys.</strong> Query normalisation with an allowlist of four parameters. Cookie stripping down to <code>currency</code> and nothing else. This alone moved the category page hit rate from 0% to 71%, because a startling proportion of their category traffic arrived with a <code>gclid</code> attached.</p>
+
+        <p><strong>Week four: tags and purge.</strong> Surrogate keys per product, category and brand, wired into the product save observer and the nightly ERP import. Purge-all was removed from the deploy script and replaced with a tag purge for the global layout tag.</p>
+
+        <p><strong>What went wrong.</strong> Two things, and the second one was mine.</p>
+
+        <p>The first was a price display bug that ran for about four hours on the Tuesday of week three. Prices are shown tax-inclusive for UK visitors and tax-exclusive for trade accounts, and the trade flag lived in a cookie we had just stripped. Trade customers, who are a small but very vocal fraction of that business, saw consumer pricing on category pages. Caught by a customer phone call, not by us. The fix was to add the trade flag to the cache key as a boolean, which cost one extra cache variant and would have cost nothing had I audited what read from cookies before deciding which to strip.</p>
+
+        <p>The second was worse in intent if not in effect. I set <code>s-maxage=3600</code> on the homepage before wiring up the tag purge, over a weekend, on the assumption that nothing would change. Marketing changed the hero banner on Saturday morning for a flash sale and it did not appear for an hour. The sale ran for six hours. They lost the first sixth of it. Long TTLs and no invalidation is a combination you get away with until the one time you do not, and I knew better.</p>
+
+        <p><strong>Where it ended up.</strong> HTML hit rate 82% for anonymous traffic on product and category templates. Field TTFB at p75: 210ms in the UK, 290ms in Australia. Origin requests per minute at peak went from about 2,400 to about 340, and they downgraded their hosting tier at renewal, which paid for the project roughly four times over.</p>
+
+        <p><strong>The SEO part, honestly.</strong> Indexed URLs in Search Console rose from 71,000 to 96,000 over ten weeks, which I attribute mostly to crawl budget — the crawl stats report shows average response time dropping from 780ms to 240ms in the same window, and pages crawled per day roughly doubling. Organic sessions rose about 9% over the quarter. I would not claim all of that. They also published forty category descriptions in the same period, and I have no clean way to separate the two. Anyone who tells you they can attribute a 9% traffic change to a caching project with confidence is doing marketing, not measurement.</p>
+
+        <h2>18. Common Mistakes, In The Order I Encounter Them</h2>
+
+        <p><strong>Assuming the CDN caches by default.</strong> Most providers cache static extensions out of the box and nothing else. HTML is opt-in everywhere. If you have never explicitly configured HTML caching, you do not have it.</p>
+
+        <p><strong>Judging by the overall hit rate.</strong> Covered above, and it is the single most common reason a broken configuration survives for years.</p>
+
+        <p><strong>Caching a redirect.</strong> A 301 cached at the edge with a long TTL is very hard to take back. Use 302 while you are still deciding.</p>
+
+        <p><strong>Caching error pages.</strong> Some CDNs cache a 404 or a 500 with a default TTL. A transient origin error that gets cached for an hour turns a blip into an outage. Set a short negative TTL explicitly — 10 to 30 seconds is plenty.</p>
+
+        <p><strong>Forgetting the API.</strong> Storefronts increasingly load their content over GraphQL or REST after first paint. Those responses go through the same edge and they are almost always uncached, because POST is not cacheable and everyone sends GraphQL over POST. Persisted queries over GET are the fix and they are worth the effort.</p>
+
+        <p><strong>Not testing from where customers are.</strong> A UK team testing from a UK office will never see the problem the Australian customers have.</p>
+
+        <h2>19. Questions People Ask</h2>
+
+        <p><strong>"We're on Shopify. Does any of this apply?"</strong> Partly. Shopify runs its own edge and caches your storefront HTML for you, and you cannot set <code>Cache-Control</code> on it. What you still control: how many third-party scripts and apps you load, whether your images go through their CDN with sensible transforms, and whether your app blocks make uncached AJAX calls on every page load. The last one is where I find most Shopify performance problems.</p>
+
+        <p><strong>"Will a CDN fix my slow TTFB?"</strong> Only the parts of it that are network latency and only for requests that hit cache. If your origin takes 900ms to build a page and you have a 0% HTML hit rate, a CDN changes your TTFB by roughly the distance saving and nothing else. Measure your origin's own response time first. If it is above 400ms with a warm application cache, fix that before buying edge capacity.</p>
+
+        <p><strong>"How long should I cache HTML for?"</strong> Longer than you are comfortable with, provided you have tag-based purging. An hour of <code>s-maxage</code> with a day of <code>stale-while-revalidate</code> and reliable invalidation beats sixty seconds with no invalidation, both for hit rate and for how it behaves when your origin has a bad afternoon.</p>
+
+        <p><strong>"Does caching hurt personalisation?"</strong> It constrains it, and that constraint is usually healthy. Most storefront personalisation is a name in a header and a cart count, and both belong in a separate request. If your personalisation is genuinely deep — different product sets per visitor — you need edge compute or you need to accept a low hit rate on those templates. Pick one deliberately rather than discovering it.</p>
+
+        <p><strong>"Can I cache logged-in pages?"</strong> Not in a shared cache, no. You can cache them in the browser with <code>private</code>, and you can cache the expensive fragments server-side. The edge is the wrong layer for authenticated content and every attempt I have seen to make it work has ended with someone seeing someone else's data.</p>
+
+        <p><strong>"Is Cloudflare's free plan enough?"</strong> For a small store, genuinely yes. You get the network, TLS, HTTP/3 and basic caching. What you do not get is cache tags, which means purging is by URL or everything, and that is the constraint that will eventually push you up a tier. Do not upgrade until you feel that specific pain.</p>
+
+        <p><strong>"Should I cache at the origin as well?"</strong> Yes, and people skip this. Varnish or a full-page cache in front of your application handles the misses that reach origin, so a cold edge is not a cold application. Belt and braces, and the origin cache is also what protects you during a purge-all.</p>
+
+        <p><strong>"How do I stop marketing from breaking this?"</strong> Give them a purge button. Genuinely — a small internal tool with a "clear cache for this page" action, scoped to safe paths, removes the entire class of "the change isn't showing" escalation and the accompanying pressure to lower TTLs. It took an afternoon to build and I would do it first next time.</p>
+
+        <p><strong>"What about HTTP/3?"</strong> Enable it, it is free on every major provider, and the gains are real for lossy mobile connections specifically. It is not a substitute for caching. The <a href="/blog/http3-quic-implementation/">detail on QUIC</a> is worth reading if you are curious, but do not sequence it before your cache policy.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>In this order, on a store I had never seen before.</p>
+
+        <p>Run two consecutive curl requests against a product page and read the cache status header. Thirty seconds of work and it tells you whether the rest of this article is urgent or academic. If the second request reports a miss, everything below is worth doing.</p>
+
+        <p>Pull the hit rate split by content type rather than the headline figure. Find the HTML number. Write it down somewhere your team can see it.</p>
+
+        <p>Read your origin's response headers on a product page and find out what is preventing caching. It is nearly always <code>Vary: Cookie</code>, a <code>Set-Cookie</code>, or a <code>no-store</code> somebody added for a good reason four years ago.</p>
+
+        <p>Before changing anything, write the bypass rules for checkout, cart and account, and put the CI check in place that verifies them. Do this first, not last, so that every subsequent change is happening inside a guard rail.</p>
+
+        <p>Then audit what actually reads from the session on your cacheable templates. Every one of them. This is tedious and it is the step I skipped and regretted, and it is what stands between you and a trade customer seeing consumer prices.</p>
+
+        <p>Normalise the cache key. Query parameter allowlist, cookie allowlist, encoding normalisation. This is often the single largest hit rate improvement available and it takes an afternoon.</p>
+
+        <p>Set <code>stale-if-error</code> on everything anonymous, today, regardless of what else you do. It costs nothing and it is the cheapest availability insurance available to you.</p>
+
+        <p>Build tag-based purging before you extend TTLs, not after. I have made the opposite mistake in production and it cost a client the first hour of a flash sale.</p>
+
+        <p>Then extend the TTLs, and keep extending them until something breaks or someone complains. The right TTL is not a number you can derive; it is one you find by pushing until you meet a constraint.</p>
+
+        <p>And measure it in the field, at the 75th percentile, split by country. If the number does not move for real customers, the change did not happen, whatever the dashboard says.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related deep engineering and architectural guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify: The Engineering Blueprint</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify: The Engineering Blueprint</a></strong>
               <p>In-depth architectural analysis of Varnish VCL proxy layers and high-throughput Redis session offloading.</p>
             </li>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Technical SEO Audits & Aggressive Crawl Budget Allocation</a></strong>
+              <strong><a href="/blog/why-seo-matters/">Technical SEO Audits &amp; Aggressive Crawl Budget Allocation</a></strong>
               <p>Advanced engineering techniques to maximize critical search indexing efficiency for extensive product catalogs.</p>
             </li>
             <li>
@@ -447,7 +855,6 @@ server {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -481,6 +888,6 @@ server {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

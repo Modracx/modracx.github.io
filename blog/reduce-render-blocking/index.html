@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Eliminating Render-Blocking CSS and JavaScript | MODRACX</title>
-  <meta name="description" content="Technical guide on extracting critical CSS, loading non-critical stylesheets asynchronously, and deferring script tags to optimize First Contentful Paint (FCP)." />
+  <meta name="description" content="How the parser, CSSOM and preload scanner really interact, and how to remove every render-blocking resource without regressing LCP or CLS." />
   <meta property="og:title" content="Eliminating Render-Blocking CSS and JavaScript | MODRACX" />
   <meta property="og:description" content="Technical guide on eliminating render-blocking assets by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Eliminating Render-Blocking CSS and JavaScript</h1>
-        <p class="lede">Inlining above-the-fold Critical CSS while dynamically requesting remaining stylesheet bundles via `media="print" onload="this.media='all'"` prevents browser render delays.</p>
+        <p class="lede">A Shopify storefront scored 91 in Lighthouse and painted nothing for 3.4 seconds. The gap was a cross-origin @import and one synchronous app script.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 34 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 30 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,18 +205,576 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Asynchronous Non-Critical CSS HTML Pattern</h2>
+        <h2>1. The Waterfall That Made No Sense</h2>
 
-        <pre><code class="language-html">&lt;!-- Non-blocking CSS Load Pattern --&gt;
-&lt;link rel="preload" as="style" href="/style.min.css" /&gt;
-&lt;link rel="stylesheet" href="/style.min.css" media="print" onload="this.media='all'" /&gt;
-&lt;noscript&gt;&lt;link rel="stylesheet" href="/style.min.css" /&gt;&lt;/noscript&gt;</code></pre>
+        <p>A bathroom fittings retailer on Shopify sent me a WebPageTest run and a one-line brief: "Lighthouse says 91 on mobile but the site feels slow, can you look." The score really was 91. The filmstrip told a different story: nothing painted until 3.4 seconds on a Moto G4 over emulated 4G, and then the whole page arrived at once, fully styled.</p>
 
-        <hr />
+        <p>The waterfall had eleven requests before first paint. Two of them were the culprits, and neither was the one the client expected. The theme's main stylesheet was 148KB and arrived at 1.1s. Fine. But the stylesheet contained an <code>@import</code> for an icon font CSS file hosted on a different domain, which the browser could not even <em>see</em> until it had parsed the first stylesheet, and which then needed a fresh DNS lookup, TLS handshake and round trip of its own. That second file was 4KB. It cost 780ms of pure serialised latency during which the browser had a fully downloaded main stylesheet it refused to use.</p>
+
+        <p>The other culprit was a review app that had injected a synchronous <code>&lt;script&gt;</code> tag into the theme's header six months earlier. Classic script, no attributes, sitting above the fold in the markup. The HTML parser stopped dead at it.</p>
+
+        <p>Fixing both took an afternoon. First paint went from 3.4s to 1.2s. The Lighthouse score went from 91 to 93, which tells you roughly everything you need to know about how much attention to pay to the number in the circle.</p>
+
+        <p>This article is about the blocking mechanism itself — what the browser is actually waiting for, why it waits, and how to take each blocker away without breaking the page in the process. The extraction workflow for critical CSS I've written about separately in <a href="/blog/critical-css-optimization/">the critical-CSS piece</a>; this one is about the machinery underneath, which is the part people skip and then wonder why their fix didn't work.</p>
+
+        <h2>2. What "Blocking" Actually Means</h2>
+
+        <p>The word "blocking" gets used for two entirely different things and conflating them is the root of most bad advice on this topic.</p>
+
+        <p><strong>Parser-blocking</strong> means the HTML parser stops consuming bytes. The document tree stops growing. Nothing further in the markup is discovered — not the images below, not the stylesheets further down the head, not the LCP element. The parser is a cursor moving through the byte stream, and a parser-blocking resource freezes the cursor.</p>
+
+        <p><strong>Render-blocking</strong> means the parser keeps going, the DOM keeps growing, but the browser refuses to paint anything. It has a document tree; it just won't commit pixels to the screen yet.</p>
+
+        <p>These have very different costs. Parser-blocking is worse, because a frozen parser means the browser stops discovering work it could be doing in parallel. Render-blocking is expensive but at least the network stays busy.</p>
+
+        <p>To understand which resource does which, you need the actual pipeline, and it's shorter than most explanations make it.</p>
+
+        <h3>The pipeline in five steps</h3>
+
+        <p>Bytes arrive. The HTML parser tokenises them and builds the DOM incrementally — it does not wait for the whole document. Separately, every stylesheet the browser encounters gets fetched and parsed into the CSSOM, a tree of style rules. The DOM and the CSSOM are then combined into the render tree, which contains only the nodes that will actually be drawn, each with its computed style. Layout runs over the render tree to work out geometry. Paint fills in pixels.</p>
+
+        <p>The critical dependency is between step three and everything before it. The render tree needs both trees. If the CSSOM is incomplete, there is no render tree, and therefore no layout and no paint.</p>
+
+        <pre><code class="language-text">HTML bytes ──▶ tokens ──▶ DOM ─┐
+                                ├──▶ render tree ──▶ layout ──▶ paint
+CSS bytes  ──▶ tokens ──▶ CSSOM ┘
+
+The render tree cannot be built until BOTH inputs exist.
+A missing CSSOM node blocks paint. It does not block DOM construction.</code></pre>
+
+        <h2>3. Why CSS Blocks Rendering But Not Parsing</h2>
+
+        <p>A stylesheet in the head is render-blocking by default. The browser will not paint until it has downloaded and parsed every stylesheet it has discovered that applies to the current media. This is deliberate and it is correct: if the browser painted with a partial CSSOM, you would see the page in one style and then watch it violently restyle itself. That was the flash of unstyled content that made the web look broken in 1998, and browsers have spent twenty-five years making sure you never see it again.</p>
+
+        <p>But CSS does not stop the HTML parser. The parser sails past a <code>&lt;link rel="stylesheet"&gt;</code> and keeps building DOM. This matters enormously, because it means the browser can continue discovering resources — images, scripts, other stylesheets — while a stylesheet is in flight.</p>
+
+        <p>There's one exception that people trip over. A stylesheet <em>does</em> effectively block a subsequent script, because a script may query computed styles, and the browser can't answer that question until the CSSOM is ready. So the sequence in the markup below serialises badly:</p>
+
+        <pre><code class="language-html">&lt;link rel="stylesheet" href="/theme.css"&gt;
+&lt;script src="/widget.js"&gt;&lt;/script&gt;
+&lt;!-- widget.js has DOWNLOADED but cannot EXECUTE until theme.css
+     has downloaded AND parsed, because it might call
+     getComputedStyle() and expect a truthful answer. --&gt;</code></pre>
+
+        <p>The script's download proceeds in parallel. Its execution waits. And because a classic script is parser-blocking, the parser waits on the execution, which waits on the CSS. One stylesheet has now stalled DOM construction, indirectly, via a script three lines below it. I have seen people move a stylesheet <em>down</em> the head to "get the script started earlier" and make things measurably worse for exactly this reason.</p>
+
+        <h2>4. Why a Classic Script Blocks Both</h2>
+
+        <p>A plain <code>&lt;script src="..."&gt;&lt;/script&gt;</code> is both parser-blocking and, as a consequence, render-blocking. The reason is <code>document.write</code>. Because a script may write into the byte stream at the point where it sits, the parser cannot know what comes next until the script has finished running. So it stops, downloads, executes, and only then resumes.</p>
+
+        <p>The cost is not just the execution. It's the download <em>and</em> the execution <em>and</em> — on a cold connection to a third-party host — the DNS lookup and TLS handshake in front of them. A synchronous script from a domain you've never contacted can easily cost 400 to 600ms on mobile before a single byte of its payload arrives. During all of that, your parser is frozen.</p>
+
+        <p>Inline scripts block too. An inline <code>&lt;script&gt;</code> has no download cost but its execution still halts the parser, and if it does something expensive — parsing a large JSON blob, running a polyfill detection loop, touching <code>localStorage</code> synchronously — it halts the parser for however long that takes. The theme-flash-prevention snippet most sites have in the head is an inline blocking script, and that's a legitimate use: you want it to run before paint. Just keep it to a few lines.</p>
+
+        <h2>5. The Preload Scanner, and the Four Ways You Break It</h2>
+
+        <p>Browsers do not actually sit idle while a synchronous script blocks the parser. Since roughly 2008 they have run a second, lightweight parser — the preload scanner, sometimes called the speculative parser — that races ahead through the raw markup looking for things it can start fetching. It doesn't build DOM and it doesn't execute anything. It just finds URLs in <code>src</code> and <code>href</code> attributes and gets them into the network queue early.</p>
+
+        <p>Four things defeat it, and I find at least one on most sites I audit.</p>
+
+        <h3>JavaScript-injected assets</h3>
+
+        <p>The scanner reads markup. It does not run JavaScript. So a resource that only exists after a script constructs it is invisible until that script runs:</p>
+
+        <pre><code class="language-javascript">// The preload scanner cannot see this. Nothing about hero.avif enters
+// the network queue until this file has downloaded, parsed and executed.
+const img = new Image();
+img.src = '/media/hero.avif';
+document.querySelector('.hero').appendChild(img);</code></pre>
+
+        <p>Every lazy-loading library that swaps <code>data-src</code> into <code>src</code> does this. That's acceptable for images below the fold — that's the point of the library — and actively harmful for anything above it. Which brings us to the mistake I see most often.</p>
+
+        <h3>Lazy loading the LCP image</h3>
+
+        <p>Putting <code>loading="lazy"</code> or a <code>data-src</code> placeholder on your hero image is the single most common self-inflicted performance wound in ecommerce. On a product page, the LCP element is nearly always the main product image. Marking it lazy means the browser deliberately defers a resource it would otherwise have started immediately, and on a slow connection that costs 500ms to 1.5s of LCP directly.</p>
+
+        <pre><code class="language-html">&lt;!-- Wrong: the LCP candidate, deferred on purpose --&gt;
+&lt;img src="/products/kettle-1200.avif" loading="lazy" width="1200" height="1200" alt="Copper kettle"&gt;
+
+&lt;!-- Right: eager, high priority, and discoverable by the scanner --&gt;
+&lt;img src="/products/kettle-1200.avif"
+     fetchpriority="high"
+     decoding="async"
+     width="1200" height="1200"
+     alt="Copper kettle"&gt;</code></pre>
+
+        <p><code>fetchpriority="high"</code> shipped in Chrome 101 in April 2022 and is now in Safari and Firefox as well. It matters because the preload scanner assigns images a low initial priority by default — it doesn't know which one is your LCP element, and most images on a page are not. The attribute tells it.</p>
+
+        <h3>document.write</h3>
+
+        <p>A script that writes markup into the stream invalidates everything the scanner speculated about. Chrome has intervened here since version 55 in 2016: it will refuse to execute <code>document.write</code>-injected external scripts on slow connections, and log a console warning. The intervention helps but it doesn't rescue the discovery order.</p>
+
+        <h3>CSS <code>@import</code></h3>
+
+        <p>The scanner reads HTML, not CSS. An <code>@import</code> inside a stylesheet is only discovered when that stylesheet has been downloaded and parsed. That's the 780ms hole I found on the homeware site. Covered in more detail below, because it earns its own section.</p>
+
+        <h2>6. defer, async, and type="module"</h2>
+
+        <p>Three mechanisms, subtly different, and choosing wrongly produces bugs that only appear on slow connections — which is to say, in production, on real customers' phones, and never on your laptop.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Attribute</th><th>Blocks parser?</th><th>When it executes</th><th>Order guaranteed?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>(none)</td><td>Yes</td><td>Immediately on download</td><td>Yes — document order</td></tr>
+            <tr><td><code>async</code></td><td>Only while executing</td><td>As soon as it arrives</td><td>No — arrival order</td></tr>
+            <tr><td><code>defer</code></td><td>No</td><td>After parsing, before DOMContentLoaded</td><td>Yes — document order</td></tr>
+            <tr><td><code>type="module"</code></td><td>No</td><td>Like defer, after parsing</td><td>Yes — document order</td></tr>
+            <tr><td><code>type="module" async</code></td><td>Only while executing</td><td>As soon as the graph resolves</td><td>No</td></tr>
+          </tbody>
+        </table>
+
+        <p><code>defer</code> is what you want almost every time. The script downloads in parallel with parsing, executes after the document is parsed, in document order, before <code>DOMContentLoaded</code> fires. Your existing scripts that assume the DOM exists will keep working, and scripts that depend on each other will keep their sequence.</p>
+
+        <p><code>async</code> is right for exactly one shape of script: self-contained, dependency-free, order-irrelevant. Analytics beacons. An error reporter. Anything that touches nothing else on the page. The moment two async scripts depend on each other, you have a race condition that fires maybe one time in fifty on a fast connection and constantly on a train.</p>
+
+        <p>Modules are deferred by default — that surprises people. You do not write <code>&lt;script type="module" defer&gt;</code>; the <code>defer</code> is redundant and ignored. What you can write is <code>&lt;script type="module" async&gt;</code>, which opts back into async semantics.</p>
+
+        <pre><code class="language-html">&lt;!-- Deferred by default. The defer attribute here does nothing. --&gt;
+&lt;script type="module" src="/js/app.js"&gt;&lt;/script&gt;
+
+&lt;!-- The legacy fallback pattern. Module-aware browsers ignore the
+     nomodule script; older ones ignore type="module" entirely. --&gt;
+&lt;script nomodule defer src="/js/app.legacy.js"&gt;&lt;/script&gt;
+
+&lt;!-- Independent, order-irrelevant: async is correct here --&gt;
+&lt;script async src="https://errors.example.net/sdk.js"&gt;&lt;/script&gt;
+
+&lt;!-- Flatten a deep module graph so the browser does not discover
+     imports one round trip at a time --&gt;
+&lt;link rel="modulepreload" href="/js/app.js"&gt;
+&lt;link rel="modulepreload" href="/js/cart-store.js"&gt;
+&lt;link rel="modulepreload" href="/js/api-client.js"&gt;</code></pre>
+
+        <p>One trap with modules: they are fetched with CORS semantics even same-origin, and a module graph is resolved before execution. A deep import chain — module A imports B imports C imports D — costs you one round trip per level unless you bundle or preload the graph with <code>modulepreload</code>. I've seen an unbundled dev-style module graph add 900ms on 4G because the browser was discovering imports four levels deep, one hop at a time.</p>
+
+        <h2>7. Splitting CSS With the media Attribute</h2>
+
+        <p>The cleanest way to make a stylesheet non-render-blocking is to tell the truth about when it applies. A stylesheet whose <code>media</code> query does not match the current environment is downloaded at low priority and does not block rendering.</p>
+
+        <pre><code class="language-html">&lt;!-- Blocks render on every device --&gt;
+&lt;link rel="stylesheet" href="/css/all.css"&gt;
+
+&lt;!-- Only the matching one blocks. On a phone, wide.css downloads
+     at low priority and never delays first paint. --&gt;
+&lt;link rel="stylesheet" href="/css/base.css"&gt;
+&lt;link rel="stylesheet" href="/css/wide.css"  media="(min-width: 900px)"&gt;
+&lt;link rel="stylesheet" href="/css/print.css" media="print"&gt;</code></pre>
+
+        <p>The practical obstacle is that most CSS pipelines emit one file. Splitting by media query means either configuring your bundler to do it — PostCSS has plugins for this, and both Vite and webpack can be coaxed into media-based chunks — or accepting a modest duplication of shared rules across files. On a homeware client's Magento build I split a 210KB stylesheet into a 61KB base and a 149KB wide-viewport file. Mobile users stopped downloading two-thirds of the CSS on the render-blocking path. That's a bigger win than any amount of inlining, and it's boring, which is the highest compliment I can pay a fix.</p>
+
+        <h2>8. The media="print" onload Pattern, and What It Actually Costs</h2>
+
+        <p>This is the pattern everyone reaches for, including this very site's head, and it deserves an honest accounting rather than the enthusiastic write-ups it usually gets.</p>
+
+        <pre><code class="language-html">&lt;link rel="preload" as="style" href="/css/theme.css"&gt;
+&lt;link rel="stylesheet" href="/css/theme.css"
+      media="print" onload="this.media='all'; this.onload=null;"&gt;
+&lt;noscript&gt;&lt;link rel="stylesheet" href="/css/theme.css"&gt;&lt;/noscript&gt;</code></pre>
+
+        <p>The mechanism: <code>media="print"</code> means the sheet doesn't apply to screen, so it doesn't block render. The <code>onload</code> handler flips it to <code>all</code> once it has downloaded, at which point it applies and the page restyles. The <code>preload</code> line above it raises the fetch priority back up, because a non-matching stylesheet is fetched at low priority and you usually don't want that for your main theme. The <code>noscript</code> line is the no-JavaScript fallback, without which a user with scripting disabled gets a permanently unstyled page.</p>
+
+        <p>Now the costs, which nobody mentions.</p>
+
+        <p><strong>You have deliberately created a flash of unstyled content.</strong> That is what "don't block render" means. The browser paints, then the stylesheet arrives, then it repaints with styles. If your critical CSS is good, the visible difference is small. If it isn't, your customers see raw HTML for 400ms and then the site. Every complaint I've had about this pattern traces back to inadequate critical CSS, not to the pattern.</p>
+
+        <p><strong>It can cause layout shift.</strong> The restyle happens after paint, so anything whose geometry changes when the full sheet applies moves. CLS is measured across the whole page lifetime, not just the first paint, so this counts against you. If your critical CSS sets the dimensions of everything above the fold, you're fine. If it only sets colours and fonts, you're not.</p>
+
+        <p><strong>The double declaration costs you a priority argument.</strong> The <code>preload</code> and the <code>stylesheet</code> link refer to the same URL, and browsers have historically differed on how they reconcile the priorities. Chrome handles this well now — it recognises the pair and gives the fetch a sensible priority — but I've watched Safari fetch the resource at a priority I did not intend. Check the actual priority column in DevTools rather than assuming.</p>
+
+        <p><strong>An inline event handler needs a CSP allowance.</strong> If you run a Content Security Policy with a strict <code>script-src</code>, that <code>onload</code> attribute is an inline script and will be blocked unless you allow <code>unsafe-inline</code> or hash it. Weakening your CSP to speed up your CSS is a bad trade. Attach the handler from an external script instead — mark the link with a <code>data-async-style</code> attribute, find it with <code>querySelectorAll</code>, and set <code>link.media = 'all'</code> on its load event. Same effect, no inline script, no CSP exception.</p>
+
+        <p>Would I use this pattern? Yes, on sites where I control the critical CSS and can verify the above-fold geometry is stable. On a site with a sprawling theme and no critical CSS discipline, I'd split by media query instead and accept a slower first paint over a page that visibly rebuilds itself.</p>
+
+        <h2>9. Inline Critical CSS and the Point Where It Backfires</h2>
+
+        <p>Inlining the styles needed for the first viewport into a <code>&lt;style&gt;</code> block in the head removes a network round trip from the critical path entirely. It is the single change with the biggest payoff on most sites, and it has a ceiling that people blow past.</p>
+
+        <p>The ceiling is caching. Inline CSS is part of the HTML document. It is re-downloaded on every single page view, and it cannot be cached independently. At 8KB of inline critical CSS on a page a customer visits six times in a session, you've shipped 48KB where an external file would have shipped 8KB once. Beyond roughly 14KB — the rough size of what fits in the initial congestion window on a fresh TCP connection, though the arithmetic is fuzzier with modern initcwnd and HTTP/2 — you're also pushing your document out of the first round trip, which is the exact thing inlining was supposed to avoid.</p>
+
+        <p>My working budget is 8 to 10KB of inline critical CSS, uncompressed. Above 14KB I stop and ask why the first viewport needs that much style. The answer is usually that the extraction tool grabbed rules for a mega-menu that is hidden behind a click, or every variant of a button component, or the entire icon font's worth of pseudo-element rules.</p>
+
+        <pre><code class="language-html">&lt;head&gt;
+  &lt;style&gt;
+    /* Critical: first-viewport geometry and typography only.
+       Target 8-10KB. Everything else goes in the async sheet. */
+    :root{--ink:#111;--paper:#fff}
+    body{margin:0;font:16px/1.5 system-ui,sans-serif;color:var(--ink);background:var(--paper)}
+    .site-header{height:64px;display:flex;align-items:center;padding:0 16px}
+    .hero{aspect-ratio:16/9;background:#eee}
+    .hero img{width:100%;height:100%;object-fit:cover;display:block}
+  &lt;/style&gt;
+  &lt;link rel="stylesheet" href="/css/theme.css" media="print" onload="this.media='all';this.onload=null"&gt;
+  &lt;noscript&gt;&lt;link rel="stylesheet" href="/css/theme.css"&gt;&lt;/noscript&gt;
+&lt;/head&gt;</code></pre>
+
+        <p>Note the <code>aspect-ratio</code> on the hero. Reserving the box in critical CSS is what stops the async stylesheet causing a shift when it lands. This is the part that separates a critical-CSS implementation that helps from one that trades FCP for CLS.</p>
+
+        <h2>10. Fonts: The Blocker Nobody Puts in the Waterfall Diagram</h2>
+
+        <p>Web fonts are render-blocking in a way that doesn't show up in Lighthouse's "eliminate render-blocking resources" audit at all, because technically they block <em>text</em> painting rather than the render tree. Practically, if the text is the LCP element — which it is on most category and content pages — a slow font is a slow LCP.</p>
+
+        <p>The discovery problem is the same one <code>@import</code> has. A <code>@font-face</code> rule lives in CSS. The browser doesn't know the font URL until it has parsed the stylesheet, and it doesn't fetch the font until it knows a rendered element actually uses that family. So the sequence is: HTML → CSS → CSSOM → layout discovers a text node in that family → font request. Four serial steps before the request even starts.</p>
+
+        <pre><code class="language-html">&lt;!-- Break the chain: start the font fetch alongside the CSS.
+     crossorigin is REQUIRED even same-origin - fonts are fetched
+     in CORS mode, and without it you get a second, duplicate fetch. --&gt;
+&lt;link rel="preload" as="font" type="font/woff2"
+      href="/fonts/inter-var-subset.woff2" crossorigin&gt;</code></pre>
+
+        <p>Forgetting <code>crossorigin</code> on a font preload is the most common preload bug in existence. The preload is fetched in one mode, the font request in another, the cache entries don't match, and you download the font twice while congratulating yourself on the optimisation. Chrome warns about it in the console. Read your console.</p>
+
+        <h3>FOIT, FOUT, and which one to choose</h3>
+
+        <p>Without <code>font-display</code>, browsers apply a block period of around three seconds during which text in that family renders as nothing — invisible. That is FOIT, the flash of invisible text. Your LCP element does not exist during it.</p>
+
+        <p><code>font-display: swap</code> reduces the block period to essentially zero: text paints immediately in the fallback and swaps to the web font when it arrives. That's FOUT, the flash of unstyled text. You get fast FCP and LCP at the cost of a visible reflow when the swap happens.</p>
+
+        <p><code>font-display: optional</code> gives the font about 100ms to arrive; if it misses, the fallback is used for that entire page view and the font is quietly cached for next time. No swap, no shift. The trade is that first-time visitors on slow connections may never see your brand typeface.</p>
+
+        <pre><code class="language-css">@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/inter-var-subset.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+  /* Metric overrides make the fallback occupy near-identical space,
+     which is what turns a visible reflow into an invisible one.
+     Chrome 87+, Firefox 89+, Safari 17+. */
+  size-adjust: 107%;
+  ascent-override: 90%;
+  descent-override: 22%;
+  line-gap-override: 0%;
+}</code></pre>
+
+        <p>The metric override properties are what make <code>swap</code> safe. Without them the fallback and the web font have different x-heights and advance widths, the swap reflows the paragraph, and your CLS suffers. I'd pick <code>swap</code> plus overrides on a brand-conscious retail site, and <code>optional</code> where the typeface is decoration rather than identity.</p>
+
+        <h2>11. @import Chains and Other Self-Inflicted Serialisation</h2>
+
+        <p>Back to the 780ms hole from the opening. <code>@import</code> inside CSS is the worst construct in the language from a loading perspective and I would remove it from every production stylesheet without discussion.</p>
+
+        <pre><code class="language-css">/* theme.css — every one of these is a serial round trip.
+   The browser cannot see reset.css until theme.css has arrived
+   and been parsed. It cannot see typography.css until then either. */
+@import url('reset.css');
+@import url('typography.css');
+@import url('https://cdn.example.net/icons/icons.css');</code></pre>
+
+        <p>Three imports means at least one extra round trip, and a cross-origin one means DNS plus TLS on top. Worse, an <code>@import</code> inside an imported file chains further. I once traced a four-level chain on a Magento theme that had accumulated over three agency handovers; total serialised cost on 4G was 1.6 seconds of nothing happening.</p>
+
+        <p>The fix is to inline the imports at build time — every bundler does this, <code>postcss-import</code> being the standard tool — or to convert them into three sibling <code>&lt;link rel="stylesheet"&gt;</code> tags in the head, which the preload scanner sees all at once and fetches in parallel.</p>
+
+        <p>If the third file has to stay cross-origin, at minimum warm the connection ahead of time — the mechanics of that are in the <a href="/blog/preconnect-dns-prefetch/">preconnect and DNS-prefetch piece</a>, and the short version is that a <code>preconnect</code> to a third-party CSS host saves you the handshake but not the discovery delay. Only removing the <code>@import</code> saves the discovery delay.</p>
+
+        <h2>12. Third-Party Tags Are the Real Blocker on Most Storefronts</h2>
+
+        <p>I'll say this plainly: on the majority of ecommerce sites I audit, the theme's own CSS and JS are not the problem. The problem is between four and fourteen third-party scripts that marketing added over two years, most of which nobody can name an owner for.</p>
+
+        <p>The base GTM snippet is async, which is fine. What it loads is not necessarily fine. A single mis-configured tag that does a synchronous document.write, or a chat widget that inserts a stylesheet, will block rendering, and it will start doing so the day someone publishes a container version — with no deploy, no code review, no changelog you can read.</p>
+
+        <p>Three things I do about it, in order of how much I like them.</p>
+
+        <p><strong>Delete tags.</strong> Genuinely the best fix and the one nobody tries first. Export the container, list every tag, and ask each department to justify theirs. On a fashion client we removed nine of nineteen tags in a single meeting because nobody could say what they were for. Total blocking time fell by 610ms.</p>
+
+        <p><strong>Delay the container until interaction or idle.</strong> This is what the head of this site does with gtag. Load the tag manager on the first pointer, key, touch or scroll event, or at browser idle after load, whichever comes first. Consent Mode defaults and the queued <code>dataLayer</code> calls survive because they're just array pushes.</p>
+
+        <pre><code class="language-javascript">// Deferred third-party loader: first interaction, or idle after load.
+(function () {
+  var loaded = false;
+  function load() {
+    if (loaded) return;
+    loaded = true;
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://www.googletagmanager.com/gtm.js?id=GTM-XXXXXXX';
+    document.head.appendChild(s);
+  }
+  ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(function (e) {
+    window.addEventListener(e, load, { once: true, passive: true });
+  });
+  // Backstop so bounced sessions still register.
+  window.addEventListener('load', function () {
+    if ('requestIdleCallback' in window) requestIdleCallback(load, { timeout: 3000 });
+    else setTimeout(load, 2000);
+  }, { once: true });
+})();</code></pre>
+
+        <p>The honest downside: you will under-count sessions where the user leaves before the idle callback fires. On sites where I've measured it the loss is between 1 and 3% of sessions, concentrated in very short bounces. Tell your analytics owner before you ship it, not after they notice.</p>
+
+        <p><strong>Move it to a worker with Partytown.</strong> Partytown relocates third-party scripts into a web worker and proxies their DOM access back to the main thread synchronously via <code>Atomics</code> and a service worker. It genuinely takes the execution off the main thread. It is also the most operationally awkward thing on this list.</p>
+
+        <p>The caveats are real: it needs a service worker or the right COOP/COEP headers, the proxying adds latency to every DOM access the third-party script makes, and some scripts break outright because they assume synchronous patterns the proxy can't replicate. I've shipped it on two sites and abandoned it on a third where a personalisation vendor's SDK refused to work. Not a default.</p>
+
+        <h2>13. blocking=render, and Deliberately Blocking on Purpose</h2>
+
+        <p>Every technique so far removes blocking. Occasionally you want the opposite, and since Chrome 105 there's a standard way to ask for it.</p>
+
+        <pre><code class="language-html">&lt;!-- Deliberately block the first paint until this async script has
+     run. Useful for a script that must apply theme or personalisation
+     before anything is visible. --&gt;
+&lt;script async blocking="render" src="/js/theme-init.js"&gt;&lt;/script&gt;
+
+&lt;!-- Also valid on a stylesheet or an inline style block --&gt;
+&lt;link rel="expect" href="#app-shell" blocking="render"&gt;</code></pre>
+
+        <p>The use case that justifies it: you have a personalisation or A/B testing script that rewrites above-the-fold content. Without blocking, the customer sees version A, then a flicker, then version B. The historical hack for this was an inline synchronous script with a timeout and a CSS class hiding the body — the "anti-flicker snippet" that every testing vendor ships and that costs you 200 to 4000ms of blank page depending on how the timeout is configured. <code>blocking="render"</code> is the honest version of the same intent, with the parser still running underneath.</p>
+
+        <p>My opinion: if you find yourself needing this, the better fix is server-side rendering of the variant. Client-side personalisation of above-the-fold content is a performance tax you pay on every page view forever, in exchange for a testing convenience. I have argued this and lost, repeatedly, so here is the attribute.</p>
+
+        <h3>Early Hints, and whether it's ready</h3>
+
+        <p>HTTP 103 Early Hints lets a server send preload and preconnect hints before the final response is ready. On a slow backend — a Magento page that takes 600ms of PHP before the first byte — that 600ms is dead network time you can spend fetching CSS.</p>
+
+        <pre><code class="language-nginx"># Nginx 1.25.1+ — send 103 with the critical resources, then the
+# real response once the upstream has finished thinking.
+http {
+    early_hints on;
+
+    server {
+        location / {
+            add_header Link "&lt;/css/theme.css&gt;; rel=preload; as=style" always;
+            add_header Link "&lt;/fonts/inter-var-subset.woff2&gt;; rel=preload; as=font; crossorigin" always;
+            proxy_pass http://app_upstream;
+        }
+    }
+}</code></pre>
+
+        <p>Practical readiness in 2026: Chrome supports it on navigation requests, Cloudflare will generate hints for you automatically, and Fastly supports it at the edge. Firefox and Safari do not, so treat it as an optimisation for roughly two-thirds of your traffic rather than a fix. It's also easy to get wrong — hinting a resource the final page doesn't use wastes bandwidth on exactly the connections that can't spare it. I turn it on where the CDN generates the hints from observed traffic, and I hand-write hints only for the two or three resources that are on every single page.</p>
+
+        <h2>14. Which Metrics This Moves, and Which It Doesn't</h2>
+
+        <p>This is where I spend most of my time correcting expectations, because "improve Core Web Vitals" gets translated into "remove render-blocking resources" and the two are not the same job.</p>
+
+        <p><strong>First Contentful Paint: directly.</strong> FCP is the moment the first text or image is painted. Render-blocking resources are, by definition, the things preventing that. This is the metric render-blocking work owns.</p>
+
+        <p><strong>Largest Contentful Paint: usually, indirectly.</strong> LCP cannot happen before FCP, so lowering the floor helps. But if your LCP element is a 400KB hero image, unblocking the CSS moves FCP a lot and LCP barely at all. I've delivered a 1.4s FCP improvement with a 90ms LCP improvement and had to explain why that was still worth doing.</p>
+
+        <p><strong>Cumulative Layout Shift: no, and sometimes worse.</strong> CLS is about visual stability after paint. Removing render-blocking CSS means painting earlier with less style applied, which is a recipe for shift. Async stylesheets, swapped fonts, and lazily-styled components all move things. Every technique in this article needs a CLS check attached to it.</p>
+
+        <p><strong>Interaction to Next Paint: no.</strong> INP measures responsiveness to input, which is a main-thread contention problem, not a loading problem. Deferring a script doesn't make it cheaper to execute — it just moves the expense later. A 400ms parse-and-execute of a bundle is 400ms of blocked main thread whether it runs at 800ms or at 2400ms. If it runs while the user is trying to tap something, you've converted an FCP problem into an INP problem. Splitting the bundle so less of it runs at all is the actual fix, which is <a href="/blog/lazy-loading-code-splitting/">the code-splitting conversation</a> rather than this one.</p>
+
+        <p>If you want the metric-by-metric remediation framing rather than the mechanism, <a href="/blog/core-web-vitals/">the Core Web Vitals article</a> covers it, and the CI monitoring setup lives in <a href="/blog/core-web-vitals-optimization/">the measurement piece</a>.</p>
+
+        <h2>15. Measuring It Without Fooling Yourself</h2>
+
+        <p>Four tools, each good at something different, and one of them lies to you.</p>
+
+        <h3>Lighthouse, and why its savings estimate is wrong</h3>
+
+        <p>The "Eliminate render-blocking resources" audit lists your blocking resources and gives an estimated saving in milliseconds. That estimate is computed from a simulated network model, not from an actual measurement. It assumes you could remove the resource entirely at zero cost and it does not model what happens next — the reflow, the second paint, the shift.</p>
+
+        <p>I have twice implemented exactly what the audit suggested and produced a real-world regression, because the audit does not know that the stylesheet it wants you to defer contains the layout for your hero. Treat the list as a list. Ignore the number.</p>
+
+        <pre><code class="language-bash"># Applied (real) throttling rather than the default simulation.
+# Slower to run, far closer to what a device actually experiences.
+lighthouse https://shop.example.com/products/copper-kettle \
+  --throttling-method=devtools \
+  --preset=desktop=false \
+  --only-categories=performance \
+  --output=json --output-path=./lh.json
+
+# Pull just the blocking resources out of the report
+jq '.audits["render-blocking-resources"].details.items[]
+    | {url: .url, wasted: .wastedMs, bytes: .totalBytes}' ./lh.json</code></pre>
+
+        <h3>WebPageTest waterfalls</h3>
+
+        <p>Still the best tool for this problem, because the waterfall shows the <em>shape</em> of the dependency. You're looking for a staircase: a request that starts only after another finishes, with a gap. That gap is your serialised discovery cost, and no synthetic score will tell you about it.</p>
+
+        <p>Run it on a real device profile — a Moto G Power on 4G is my default because it's roughly the median Android device your customers actually hold — and read the filmstrip alongside the waterfall. The frame where content appears is your real FCP; the frame where it stops changing is where your async CSS landed.</p>
+
+        <h3>DevTools Performance panel</h3>
+
+        <p>Record a load with CPU throttled to 4x or 6x. Look at the Main track for the long "Parse HTML" task with a script execution nested inside it — that's your parser-blocking script, visually. Look for gaps between the end of a resource download and the first Paint event. The "Frames" track shows you exactly when the first pixels landed.</p>
+
+        <h3>PerformanceObserver in the field</h3>
+
+        <p>Synthetic tests measure one device on one connection. Field data measures everyone. For render-blocking work, FCP is the number to collect, segmented by device class:</p>
+
+        <pre><code class="language-javascript">// Field FCP collection. Send to your own endpoint, not a third party
+// that you then have to defer, which would be circular.
+new PerformanceObserver(function (list) {
+  for (const entry of list.getEntriesByName('first-contentful-paint')) {
+    const nav = performance.getEntriesByType('navigation')[0];
+    navigator.sendBeacon('/rum/fcp', JSON.stringify({
+      fcp: Math.round(entry.startTime),
+      ttfb: Math.round(nav ? nav.responseStart : 0),
+      // FCP minus TTFB isolates the render-blocking cost from
+      // server slowness, which is the number you actually changed.
+      blocked: Math.round(entry.startTime - (nav ? nav.responseStart : 0)),
+      conn: (navigator.connection || {}).effectiveType || 'unknown',
+      path: location.pathname
+    }));
+  }
+}).observe({ type: 'paint', buffered: true });</code></pre>
+
+        <p>The <code>buffered: true</code> flag is essential — paint entries fire before your observer registers, and without it you'll collect nothing and spend a morning confused. The derived <code>blocked</code> figure is the one I report to clients, because it separates "your server is slow" from "your head is badly organised", and those go to different teams.</p>
+
+        <h2>16. Shopify: theme.liquid and the Apps You Didn't Install</h2>
+
+        <p>Shopify gives you less control than you want and more than most people use.</p>
+
+        <p>What you control: everything in <code>theme.liquid</code>, the order of your own tags, and your asset pipeline. What you don't: <code>content_for_header</code>, which Shopify renders and which includes the analytics bundle and script tags for installed apps, and the checkout, which on non-Plus plans is off-limits.</p>
+
+        <p>A sane <code>theme.liquid</code> head, in this order:</p>
+
+        <pre><code class="language-liquid">&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;
+
+  {%- comment -%} Warm the CDN connection before anything needs it {%- endcomment -%}
+  &lt;link rel="preconnect" href="https://cdn.shopify.com" crossorigin&gt;
+
+  {%- comment -%} Inline critical CSS, rendered from a snippet {%- endcomment -%}
+  &lt;style&gt;{% render 'critical-css' %}&lt;/style&gt;
+
+  {%- comment -%} Font first: it is discovered latest and needed earliest {%- endcomment -%}
+  &lt;link rel="preload" as="font" type="font/woff2"
+        href="{{ 'inter-var-subset.woff2' | asset_url }}" crossorigin&gt;
+
+  {%- comment -%} Main theme sheet, off the critical path {%- endcomment -%}
+  &lt;link rel="stylesheet" href="{{ 'theme.css' | asset_url }}"
+        media="print" onload="this.media='all';this.onload=null"&gt;
+  &lt;noscript&gt;&lt;link rel="stylesheet" href="{{ 'theme.css' | asset_url }}"&gt;&lt;/noscript&gt;
+
+  &lt;script src="{{ 'theme.js' | asset_url }}" defer&gt;&lt;/script&gt;
+
+  {%- comment -%} Shopify's own output goes LAST. Anything it injects
+      then arrives after your critical resources are already in flight. {%- endcomment -%}
+  {{ content_for_header }}
+&lt;/head&gt;</code></pre>
+
+        <p>Moving <code>content_for_header</code> to the bottom of the head is the highest-value single change on most Shopify themes, and it is entirely supported — Shopify's own documentation no longer insists it goes first. On the homeware site from the opening, that move alone was worth 340ms of FCP because it stopped four app scripts from being discovered ahead of the theme stylesheet.</p>
+
+        <p>The app problem is harder. Apps inject script tags through the ScriptTag API or, increasingly, through theme app extensions that append blocks to your templates. You can audit them:</p>
+
+        <pre><code class="language-bash"># List every third-party host a product page pulls from.
+# Anything you cannot name an owner for is a candidate for removal.
+curl -s https://shop.example.com/products/copper-kettle \
+  | grep -oE 'src="https?://[^"]+"' \
+  | sed -E 's|src="https?://([^/"]+).*|\1|' \
+  | sort | uniq -c | sort -rn</code></pre>
+
+        <p>Uninstalling an app does not always remove its script tag. I've found tags from apps uninstalled eighteen months earlier still firing, because the ScriptTag was never cleaned up and nobody looked. Check <code>theme.liquid</code> and the theme's <code>snippets/</code> directory for orphaned includes after every app removal.</p>
+
+        <h2>17. Magento 2: Bundling, RequireJS, and the defer That Breaks Everything</h2>
+
+        <p>Magento 2's frontend is a special case because RequireJS is doing dependency resolution at runtime, in the browser, on every page load.</p>
+
+        <p>The default configuration is bad. JavaScript bundling in Magento's native form concatenates essentially every module into a handful of enormous files — I've measured 3.2MB of bundled JS on a stock 2.4.6 install with a couple of extensions. It is loaded before rendering completes and it is mostly code the page will never call.</p>
+
+        <pre><code class="language-bash"># The settings that matter. Merging is fine; native bundling is not.
+bin/magento config:set dev/js/merge_files 1
+bin/magento config:set dev/js/enable_js_bundling 0
+bin/magento config:set dev/js/minify_files 1
+bin/magento config:set dev/css/merge_css_files 1
+bin/magento config:set dev/css/minify_files 1
+
+bin/magento setup:static-content:deploy en_GB -j $(nproc)
+bin/magento cache:flush</code></pre>
+
+        <p>Turning native bundling <em>off</em> and using Baler or a custom webpack-based bundle is what I'd do on any project with the budget. Baler analyses which modules a page type actually needs and emits per-page-type bundles. It's unmaintained enough to be a slight risk and still better than the native option.</p>
+
+        <p>Now the trap that gives this section its title. Someone reads a performance article, adds <code>defer</code> to the RequireJS script tag, and the site breaks in ways that only appear on some pages.</p>
+
+        <pre><code class="language-xml">&lt;!-- app/design/frontend/Vendor/theme/Magento_Theme/layout/default_head_blocks.xml --&gt;
+&lt;page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd"&gt;
+    &lt;head&gt;
+        &lt;!-- This is safe: your own theme code, no inline dependents --&gt;
+        &lt;script src="js/storefront-enhancements.js" defer="true"/&gt;
+
+        &lt;!-- Do NOT do this to requirejs/require.js. Inline x-magento-init
+             blocks throughout the page call require() synchronously and
+             will throw ReferenceError if require is not yet defined. --&gt;
+    &lt;/head&gt;
+&lt;/page&gt;</code></pre>
+
+        <p>Magento sprinkles <code>&lt;script type="text/x-magento-init"&gt;</code> and inline <code>require([...])</code> calls throughout the page body — in templates, in widgets, in third-party module output. Those inline blocks execute in document order and expect <code>require</code> to be a defined global. Defer the loader and every one of them throws. The failure is partial and confusing: the page renders, the header works, and the add-to-cart button silently does nothing on product pages with a particular widget.</p>
+
+        <p>What does work on Magento, in order of payoff:</p>
+
+        <p>Inline critical CSS per page type — one for CMS, one for category, one for product — injected via a layout XML block, with the merged stylesheet moved to the async pattern. Magento's merged CSS is commonly 400KB+ and it is the single largest render-blocking resource on the page.</p>
+
+        <p>Removing unused modules from the layout entirely, rather than deferring them. <code>bin/magento module:disable</code> on the modules a B2B-only or B2C-only store doesn't use is free performance. Magento_Swatches, Magento_ProductVideo, Magento_Wishlist and the review modules are frequent candidates.</p>
+
+        <p>And moving the whole storefront off Luma. I've had this argument enough times to state it flatly: if render-blocking JS is your top problem on Magento and the budget exists, a Hyvä theme removes RequireJS and jQuery entirely and takes the JS payload from megabytes to about 30KB. Every optimisation above is working around an architecture. Replacing the architecture works better.</p>
+
+        <h2>18. A Worked Example, Including the Part That Went Wrong</h2>
+
+        <p>A specialist kitchenware retailer, Shopify Plus, roughly 12,000 sessions a day, 68% mobile. They came to me because their agency's performance sprint had finished and the numbers hadn't moved.</p>
+
+        <p><strong>The starting position.</strong> Field data from CrUX over 28 days: FCP p75 of 3.1s, LCP p75 of 4.4s, CLS p75 of 0.04, INP p75 of 210ms. Lab on a Moto G Power / 4G profile: FCP 3.4s, LCP 4.9s. Lighthouse mobile performance 58.</p>
+
+        <p><strong>What was blocking.</strong> The waterfall showed six render-blocking resources. A 212KB theme stylesheet. A Google Fonts stylesheet, cross-origin, which then referenced two font files the browser couldn't see until it had parsed the CSS. A currency-converter app's synchronous script. A cookie-consent script, synchronous by vendor recommendation. A 41KB "custom.css" containing four years of client tweaks. And an <code>@import</code> for an icon set inside the theme stylesheet.</p>
+
+        <p><strong>Week one.</strong> Self-hosted and subset the fonts, preloaded the two used weights with <code>crossorigin</code>, added metric overrides with <code>font-display: swap</code>, inlined the <code>@import</code> at build time, and moved <code>content_for_header</code> to the bottom of the head. Lab FCP went from 3.4s to 2.2s, nothing regressed.</p>
+
+        <p><strong>Week two, and here's the mistake.</strong> I extracted critical CSS with a headless-Chrome tool, inlined it, and moved the 212KB theme sheet plus custom.css to the <code>media="print"</code> pattern. Lab FCP dropped to 1.3s. I was pleased with myself for four hours.</p>
+
+        <p>Then the field data started arriving. FCP p75 improved to 1.9s, as expected. LCP p75 got <em>worse</em> — 4.4s to 4.7s. And CLS p75 went from 0.04 to 0.19, which is a fail.</p>
+
+        <p>Two separate causes, and I'd made both errors.</p>
+
+        <p>The CLS regression was the product grid. The extraction tool had run against the homepage at a 360×640 viewport and captured the hero and the header, but the product grid below started at about 620px and only its first row was in frame. So the grid's <code>grid-template-columns</code> and its card <code>aspect-ratio</code> weren't in the critical CSS. The page painted with the grid as a single stacked column of unsized cards, then the async stylesheet landed and it snapped into three columns with fixed-ratio images. A large, visible shift, on the most-viewed template.</p>
+
+        <p>The LCP regression was subtler and more embarrassing. The hero image was set as a CSS <code>background-image</code> on a section — which meant the browser couldn't discover it until the CSSOM was built. Previously that CSSOM came from the render-blocking stylesheet, which had high priority and arrived early. Now the stylesheet was <code>media="print"</code>, fetched at low priority. The background image was discovered later than before. I had made the LCP element's discovery <em>worse</em> by de-prioritising the thing that revealed it.</p>
+
+        <p><strong>Week three, the corrections.</strong> Re-ran critical extraction across four viewport heights (640, 800, 900, 1200) and three templates, unioned the results, and hand-added the grid geometry rules. Inline critical CSS went from 6.1KB to 9.4KB, which is inside my budget. Added the <code>preload as="style"</code> line ahead of the print-media link to restore the priority. And converted the hero from a CSS background to a real <code>&lt;img&gt;</code> with <code>fetchpriority="high"</code>, which is what it should always have been — it made the LCP element visible to the preload scanner for the first time.</p>
+
+        <p><strong>Week four.</strong> Deferred the cookie-consent script against the vendor's advice, after checking with their support that the queued-consent API worked. Moved the currency converter to load on interaction. Both were straightforward; the argument about the consent vendor took longer than the code.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric (CrUX p75)</th><th>Before</th><th>After week 2</th><th>After week 4</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>FCP</td><td>3.1s</td><td>1.9s</td><td>1.5s</td></tr>
+            <tr><td>LCP</td><td>4.4s</td><td>4.7s</td><td>2.3s</td></tr>
+            <tr><td>CLS</td><td>0.04</td><td>0.19</td><td>0.03</td></tr>
+            <tr><td>INP</td><td>210ms</td><td>205ms</td><td>190ms</td></tr>
+            <tr><td>Lighthouse mobile</td><td>58</td><td>79</td><td>88</td></tr>
+          </tbody>
+        </table>
+
+        <p><strong>What it cost.</strong> Around nine days of engineering across five weeks. Conversion rate on mobile rose 4.1% over the following six weeks against the prior period, which the client's analyst was appropriately cautious about attributing entirely to this. Revenue per mobile session rose 3.2%.</p>
+
+        <p><strong>What I'd do differently.</strong> Ship the async-CSS change to 10% of traffic first and watch field CLS for 72 hours before rolling it out. I had lab numbers that looked excellent and a field regression that took nine days to surface because CrUX is a 28-day rolling window. A field-measured canary would have caught the grid shift on day one instead of day nine. I now run the <code>PerformanceObserver</code> snippet from the measurement section on every project before I touch anything, precisely so I have a same-day signal rather than a month-lagged one.</p>
+
+        <h2>19. Questions I Get Asked</h2>
+
+        <p><strong>"Should I just put all my scripts at the bottom of the body?"</strong> That advice is from 2010 and it's now mostly obsolete. <code>defer</code> gives you the same execution timing with better download timing, because the preload scanner finds a deferred script in the head immediately and starts fetching it while the parser works. Bottom-of-body means the script isn't discovered until the parser gets there. Head plus <code>defer</code> beats bottom-of-body in nearly every case.</p>
+
+        <p><strong>"Lighthouse says my stylesheet blocks for 1,200ms. Will deferring it save 1,200ms?"</strong> No. That number is a simulation of removing the resource entirely, and it doesn't model the second paint, the reflow, or the shift. Expect somewhere between a third and two-thirds of it in practice, and check LCP and CLS before you claim anything.</p>
+
+        <p><strong>"Can I use <code>rel=preload</code> to make a stylesheet non-blocking?"</strong> Preload on its own doesn't apply the stylesheet at all — it only fetches it. You still need the <code>&lt;link rel="stylesheet"&gt;</code> to apply it, which is why the print-media pattern uses both lines. Preload changes priority, not semantics. Over-preloading also actively hurts: every high-priority preload competes with the resources that genuinely need bandwidth first, and I've seen a page with fourteen preloads in the head where removing eight of them improved LCP by 300ms. More on the trade-offs in <a href="/blog/resource-hints-optimization/">the resource hints piece</a>.</p>
+
+        <p><strong>"My site is behind Cloudflare and they offer automatic optimisation. Should I use it?"</strong> Rocket Loader in particular rewrites your scripts to load asynchronously, which will break anything with ordering dependencies, and it does so invisibly. I've spent whole days debugging a "random" JavaScript failure that turned out to be Rocket Loader. Their newer Speed Brain and early-hints generation are fine and I do use those. Automatic script rewriting, no.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>Given a storefront and a week, this is the order, and the order is the point — several of these change what the later ones should be.</p>
+
+        <p><strong>One.</strong> Identify the LCP element on your three highest-traffic templates. Not the homepage — the product page, the category page, and whichever landing template gets paid traffic. Write down what the element is and how the browser discovers it. Everything after this depends on knowing that.</p>
+
+        <p><strong>Two.</strong> Put field FCP collection in place, segmented by connection type and template. You need a same-day signal, because CrUX will not tell you about a regression for a fortnight. Ten lines of <code>PerformanceObserver</code>, beaconed to your own endpoint.</p>
+
+        <p><strong>Three.</strong> Run a WebPageTest on a real mid-range Android profile and read the waterfall for staircases. Every gap between a completed download and a dependent request starting is serialised discovery cost, and those are the cheapest wins on the page.</p>
+
+        <p><strong>Four.</strong> Fix the discovery problems before touching anything else. Remove <code>@import</code>. Preload fonts with <code>crossorigin</code>. Convert any CSS-background LCP image to a real <code>&lt;img&gt;</code> with <code>fetchpriority="high"</code>. Take <code>loading="lazy"</code> off anything above the fold. Low-risk, invisible to the design, and on the kitchenware project they were most of the first second.</p>
+
+        <p><strong>Five.</strong> Audit the third parties and delete the ones nobody owns. Then defer the survivors to interaction-or-idle. This is usually the largest single number on the page and it requires no engineering skill at all, only the willingness to have four uncomfortable conversations.</p>
+
+        <p><strong>Six.</strong> Add <code>defer</code> to your own scripts, one at a time, testing each. Not <code>async</code> unless the script is genuinely independent. Not on RequireJS if you're on Magento.</p>
+
+        <p><strong>Seven.</strong> Split your CSS by media query if your build allows it. It's the version of this work with no downside and no fallback story, and it's frequently worth more than inlining.</p>
+
+        <p><strong>Eight, and last.</strong> Critical CSS extraction and the async pattern. It's the biggest lab win and the one most likely to hurt you, so it goes after you have field measurement, after you know your LCP element, and after the free wins are banked. Extract across multiple viewport heights and multiple templates. Hand-check the grid and card geometry. Ship it to a fraction of traffic and watch CLS for three days.</p>
+
+        <p>The reason the order matters more than the individual techniques: the thing that made my kitchenware project go wrong wasn't the async CSS pattern, which is fine. It was doing the async CSS pattern before I understood how the LCP element was discovered. The blocking mechanism is simple. What's blocking on <em>your</em> page, and what happens when you remove it, is the part that takes a week to find out.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -227,7 +787,6 @@
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -261,6 +820,6 @@
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

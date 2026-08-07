@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>GraphQL vs. REST API Performance Optimization for E-Commerce | MODRACX</title>
-  <meta name="description" content="Detailed benchmark comparison of GraphQL vs REST APIs in Magento 2 and Shopify. Learn how to prevent N+1 queries, implement DataLoader batching, and cache GraphQL responses." />
+  <meta name="description" content="N+1 fan-out, DataLoader batching done properly, query cost limits, persisted queries over GET, entity caching, and the cases where REST is simply the better API." />
   <meta property="og:title" content="GraphQL vs. REST API Performance Optimization for E-Commerce | MODRACX" />
   <meta property="og:description" content="Detailed benchmark comparison of GraphQL vs REST APIs by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>GraphQL vs. REST API Performance Optimization for E-Commerce</h1>
-        <p class="lede">GraphQL prevents over-fetching payload bytes but can trigger N+1 database queries if un-batched. Learn how to implement DataLoader patterns and HTTP GET query hash edge caching.</p>
+        <p class="lede">A category query that read as eleven lines of GraphQL issued 3,100 database queries. Here is how the fan-out happens, how batching really works, and why caching GraphQL is the hard part.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,25 +205,634 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>DataLoader Batching Pattern Code</h2>
+        <h2>1. The 400ms Query That Was Actually 3,100 Database Queries</h2>
 
-        <pre><code class="language-javascript">// JavaScript DataLoader Pattern for Preventing N+1 Database Queries
-import DataLoader from 'dataloader';
+        <p>A packaging retailer called me in because their category pages had gone from acceptable to unusable over about four months. Nobody had shipped anything obviously heavy. The frontend team swore they'd changed nothing. The API team said their endpoint was fine — average response 180ms, well within budget.</p>
 
-const productLoader = new DataLoader(async (ids) => {
-  const products = await db.query('SELECT * FROM products WHERE id IN (?)', [ids]);
-  return ids.map(id => products.find(p => p.id === id));
+        <p>Both were telling the truth about their own numbers. The average <em>was</em> 180ms. The p95 was 4.2 seconds, and the p99 was a timeout.</p>
+
+        <p>The query in question asked for 48 products, and for each product its variants, and for each variant its inventory level per location. Three levels. Written out as a GraphQL document it looked like eleven lines of perfectly reasonable code. Executed against a resolver graph with no batching, it issued one query for the collection, 48 for the variants, and then — because the retailer had 63 warehouse locations — 3,024 individual inventory lookups. Each one taking about a millisecond and change, serially, because the resolver awaited inside a loop.</p>
+
+        <p>What made it insidious is that it had been fine at launch. The retailer had four locations when the storefront was built. They opened more. Nobody re-tested the query, because the query hadn't changed. The <em>data shape underneath it</em> had.</p>
+
+        <p>That is the thing about GraphQL performance that catches teams out. In REST, an endpoint's cost is roughly fixed and roughly knowable — you can look at the handler and reason about it. In GraphQL the cost is a function of the query the client sends, and the client is a different team, or an app you shipped eighteen months ago, or a scraper. You have handed cost control to the caller.</p>
+
+        <p>This article is about getting it back: N+1 elimination that actually works, why caching GraphQL is genuinely hard rather than just unfamiliar, and the specific cases where I'd throw the whole thing out and write a REST endpoint instead.</p>
+
+        <h2>2. What GraphQL Actually Fixes</h2>
+
+        <p>Worth being precise, because the marketing and the engineering reality diverge.</p>
+
+        <p>GraphQL solves one problem extremely well: the round-trip problem on high-latency connections with deeply related data. A mobile client that needs a product, its variants, its reviews and its recommendations makes four REST calls, each waiting for the previous one to know what to ask for, at 200ms of mobile latency each. That's 800ms of nothing but waiting. In GraphQL it's one round trip. On a 3G connection in a lift, that difference is the whole user experience.</p>
+
+        <p>It solves a second problem adequately: schema evolution without versioning. Clients ask for fields; you add fields without breaking anyone; you deprecate fields and watch the usage metrics until nobody asks for them. Compared to maintaining <code>/v1/</code>, <code>/v2/</code> and <code>/v3/</code> of an order endpoint, this is genuinely better.</p>
+
+        <p>And it solves a third problem that is mostly organisational: frontend teams stop filing tickets asking backend teams for a new endpoint shape. That's a real velocity gain, and it's the reason most GraphQL adoptions actually happen, whatever the technical justification in the proposal document.</p>
+
+        <p>What it does not solve: server-side cost. GraphQL moves work around; it does not remove it. A query asking for six related resources still touches six data sources. If anything, the flexible shape makes it easier to write an expensive query by accident, because the expensive part is invisible from the client's side. The client sees eleven lines. The server sees a fan-out.</p>
+
+        <h2>3. Over-Fetching: Real, But Usually Not Your Problem</h2>
+
+        <p>The canonical GraphQL pitch is over-fetching: REST gives you the whole object when you wanted three fields, GraphQL gives you exactly three. True. The question is whether it matters, and the answer depends entirely on where the bytes and the time are going.</p>
+
+        <p>On a real measurement from a Magento 2 REST endpoint versus its GraphQL equivalent, same 24-product category, in February 2025:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Approach</th><th>Payload (gzip)</th><th>Server time</th><th>Round trips</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>REST <code>/products?searchCriteria=…</code></td><td>184 KB</td><td>310 ms</td><td>1</td></tr>
+            <tr><td>REST + separate stock + media calls</td><td>241 KB</td><td>520 ms</td><td>3 (serial)</td></tr>
+            <tr><td>GraphQL, naive query</td><td>96 KB</td><td>870 ms</td><td>1</td></tr>
+            <tr><td>GraphQL, trimmed fields</td><td>31 KB</td><td>340 ms</td><td>1</td></tr>
+            <tr><td>GraphQL, trimmed + batched resolvers</td><td>31 KB</td><td>145 ms</td><td>1</td></tr>
+          </tbody>
+        </table>
+
+        <p>Read that table carefully, because it's the whole argument in miniature. The naive GraphQL query transferred half the bytes of REST and took nearly three times as long. Over-fetching bytes was never the expensive part. Over-fetching <em>work</em> was.</p>
+
+        <p>On a desktop connection, 150KB of extra JSON costs about 12ms of transfer and maybe 8ms of parse. On a slow mobile connection it's more like 400ms, which is why the mobile-first framing of the GraphQL pitch is the honest one. But if your traffic is desktop-heavy and your API is in the same datacentre as your renderer, cutting payload from 184KB to 31KB is not a user-visible win. Cutting server time from 870ms to 145ms is.</p>
+
+        <p>So: trim your queries, absolutely, but trim them because unrequested fields don't get resolved, not because of the bytes. The field you delete is a database join you don't run.</p>
+
+        <h2>4. The N+1 Problem, Properly Stated</h2>
+
+        <p>Everyone knows the name. Fewer people can spot it in a resolver, and almost nobody spots the second-order versions.</p>
+
+        <p>The mechanism: GraphQL execution walks the query tree, calling one resolver per field per object. If a query returns 50 products and each product has an <code>brand</code> field whose resolver does a lookup by <code>brand_id</code>, that resolver runs 50 times, independently, with no knowledge of the other 49.</p>
+
+        <pre><code class="language-javascript">// This looks completely fine and is a performance catastrophe at scale.
+const resolvers = {
+  Query: {
+    products: (_, { first }) =&gt; db.products.findMany({ take: first }), // 1 query
+  },
+  Product: {
+    // Runs once per product. 50 products = 50 queries.
+    brand: (product) =&gt; db.brands.findUnique({ where: { id: product.brandId } }),
+    // Runs once per product. 50 more.
+    variants: (product) =&gt; db.variants.findMany({ where: { productId: product.id } }),
+  },
+  Variant: {
+    // Runs once per variant. 50 products x 4 variants = 200 more.
+    inventory: (v) =&gt; db.inventory.findMany({ where: { variantId: v.id } }),
+  },
+};
+// Total: 1 + 50 + 50 + 200 = 301 queries for one HTTP request.</code></pre>
+
+        <p>Three things about this that are worth saying out loud.</p>
+
+        <p><strong>It is invisible in the query.</strong> The GraphQL document is six lines. Nothing in it suggests 301 database round trips. This is why "the query is simple" is never an answer to "the endpoint is slow".</p>
+
+        <p><strong>It multiplies down the tree.</strong> The damage at depth three is the product of the fan-outs above it, not the sum. Going from 4 variants per product to 12 doesn't add 400 queries, it adds 400 to one level and multiplies everything below.</p>
+
+        <p><strong>It gets worse without a deploy.</strong> The packaging retailer's query got 15 times slower because they opened warehouses. No code changed. This is the failure mode you cannot catch with a regression test on a small fixture dataset, and it's why I insist on load-testing against production-shaped data volumes rather than seed data.</p>
+
+        <h2>5. DataLoader, and What It Does Not Do</h2>
+
+        <p>The standard fix is batching: collect all the individual lookups fired during one tick of the event loop, issue them as one query, distribute the results back. DataLoader is the reference implementation and every language has an equivalent.</p>
+
+        <pre><code class="language-javascript">import DataLoader from 'dataloader';
+
+// The batch function receives ALL the keys requested in one tick.
+// It must return an array of the same length, in the same order.
+// Returning them in database order is the single most common bug here.
+function createBrandLoader(db) {
+  return new DataLoader(async (ids) =&gt; {
+    const rows = await db.brands.findMany({ where: { id: { in: ids } } });
+    const byId = new Map(rows.map(r =&gt; [r.id, r]));
+    // Missing rows become null, not a shifted array.
+    return ids.map(id =&gt; byId.get(id) ?? null);
+  });
+}
+
+// One-to-many needs grouping, not a Map lookup.
+function createVariantsLoader(db) {
+  return new DataLoader(async (productIds) =&gt; {
+    const rows = await db.variants.findMany({
+      where: { productId: { in: productIds } },
+      orderBy: { position: 'asc' },
+    });
+    const grouped = new Map(productIds.map(id =&gt; [id, []]));
+    for (const r of rows) grouped.get(r.productId)?.push(r);
+    return productIds.map(id =&gt; grouped.get(id));
+  });
+}</code></pre>
+
+        <p>Wire the loaders into the per-request context, never into module scope:</p>
+
+        <pre><code class="language-javascript">// Fresh loaders per request. This is not optional.
+// A module-scope DataLoader caches across requests and across users, which
+// means customer A's negotiated price can be served to customer B.
+const server = new ApolloServer({ schema });
+
+await startStandaloneServer(server, {
+  context: async ({ req }) =&gt; ({
+    viewer: await authenticate(req),
+    loaders: {
+      brand: createBrandLoader(db),
+      variants: createVariantsLoader(db),
+      inventory: createInventoryLoader(db),
+    },
+  }),
+});
+
+const resolvers = {
+  Product: {
+    brand: (p, _a, ctx) =&gt; ctx.loaders.brand.load(p.brandId),
+    variants: (p, _a, ctx) =&gt; ctx.loaders.variants.load(p.id),
+  },
+};
+// 301 queries becomes 4: products, brands, variants, inventory.</code></pre>
+
+        <p>Now the parts people get wrong.</p>
+
+        <p><strong>DataLoader batches within a tick, not within a request.</strong> If your resolver awaits something before calling <code>.load()</code>, that load lands in a later tick and batches separately. I have debugged a "why is DataLoader not working" issue that came down to an <code>await checkPermission()</code> at the top of a resolver, which staggered every load into its own batch and produced exactly the N+1 it was meant to prevent. Resolve permissions from data already in context, or batch the permission check itself.</p>
+
+        <p><strong>Batching is not caching.</strong> DataLoader's per-request memoisation deduplicates identical keys within one request. It does nothing across requests. If your homepage query loads the same twelve brands for every visitor, you're still hitting the database twelve times per visitor. That needs a separate cache layer, with its own TTL and its own invalidation.</p>
+
+        <p><strong>A batch of 3,000 keys is its own problem.</strong> <code>WHERE id IN (…)</code> with 3,000 values will get you a query planner that gives up and sequential-scans, or a parameter limit error, or a 40KB query string in your slow log. Set <code>maxBatchSize</code> to something your database is happy with — I use 100 to 500 depending on the table — and let DataLoader issue several batches.</p>
+
+        <pre><code class="language-javascript">new DataLoader(batchFn, {
+  maxBatchSize: 200,          // several IN queries beat one enormous one
+  cacheKeyFn: (k) =&gt; String(k), // object keys need normalising or they never hit
 });</code></pre>
 
-        <hr />
+        <h2>6. Batching at the Wrong Layer</h2>
+
+        <p>There's a version of this problem that DataLoader can't touch, and it shows up constantly in headless ecommerce: the N+1 is against an upstream HTTP API rather than a database.</p>
+
+        <p>Your GraphQL server resolves <code>Product.reviews</code> by calling a reviews SaaS. Fifty products, fifty HTTPS calls, each with TLS setup, each subject to the vendor's rate limit, each with a p99 you don't control. Batching helps only if the vendor offers a bulk endpoint, and about half of them don't.</p>
+
+        <p>What I do when there's no bulk endpoint, in order of preference:</p>
+
+        <p>Denormalise at write time. Subscribe to the vendor's webhooks, keep a local projection of review counts and ratings, resolve from your own store. This is more work and it's almost always correct. The read path stops depending on a third party entirely.</p>
+
+        <p>Cache aggressively with a shared cache. Review counts change slowly. A five-minute Redis TTL on <code>reviews:{productId}</code> turns fifty vendor calls into approximately zero, and the staleness is genuinely harmless.</p>
+
+        <p>Defer the field. If the data isn't needed for the initial render or for indexing, don't resolve it in the main query at all. Return it through a separate client-side request after paint. GraphQL's <code>@defer</code> directive does this within one request if your server and client both support it, which by 2025 most do.</p>
+
+        <p>Fail open with a timeout. Whatever else you do, put a per-resolver timeout around the third-party call and return null on expiry. A reviews vendor having a bad afternoon must not take your product pages down. I learned this one at 11pm on a Friday.</p>
+
+        <pre><code class="language-javascript">// A third party gets 400ms and no more. Null renders as "no reviews yet".
+async function withTimeout(promise, ms, fallback = null) {
+  const ac = new AbortController();
+  const timer = setTimeout(() =&gt; ac.abort(), ms);
+  try {
+    return await promise(ac.signal);
+  } catch (err) {
+    if (err.name !== 'AbortError') reportError(err);
+    return fallback;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const resolvers = {
+  Product: {
+    reviewSummary: (p, _a, ctx) =&gt;
+      withTimeout(
+        (signal) =&gt; ctx.loaders.reviews.load(p.id, { signal }),
+        400,
+        { count: 0, average: null },
+      ),
+  },
+};</code></pre>
+
+        <h2>7. Query Cost: Taking Control Back From the Client</h2>
+
+        <p>Once your resolvers are batched, the remaining exposure is that a caller can still ask for something enormous. Nested connections are the classic: products, each with variants, each with a product, each with variants. The schema permits it because graphs are cyclic. The server will happily attempt it.</p>
+
+        <p>Three defences, and I use all three on any public-facing endpoint.</p>
+
+        <h3>Depth limiting</h3>
+
+        <p>Cheap, blunt, effective against accidental recursion. Reject anything nested more than seven or eight levels. Almost no legitimate query needs more, and the ones that do can be special-cased.</p>
+
+        <h3>Cost analysis</h3>
+
+        <p>Assign a cost to each field, multiply by the connection sizes above it, reject queries over a budget. This is what Shopify's Storefront API does — every field has a documented point value, you get a bucket that refills at a fixed rate, and a query that's too expensive is rejected before execution rather than after.</p>
+
+        <pre><code class="language-javascript">import { createComplexityLimitRule } from 'graphql-validation-complexity';
+import depthLimit from 'graphql-depth-limit';
+
+const server = new ApolloServer({
+  schema,
+  validationRules: [
+    depthLimit(8),
+    createComplexityLimitRule(2000, {
+      // A scalar is cheap; a list multiplies its children by its size.
+      scalarCost: 1,
+      objectCost: 2,
+      listFactor: 10,       // used when the size cannot be inferred
+      onCost: (cost) =&gt; { metrics.histogram('gql.cost', cost); },
+    }),
+  ],
+});</code></pre>
+
+        <p>The practical difficulty with cost analysis is calibration. Set the budget too low and you break legitimate clients on deploy day; too high and it's decoration. What worked for me: run it in report-only mode for two weeks, chart the cost distribution of real production queries, and set the limit at roughly the 99.5th percentile. Then look at the queries above the line individually — usually two or three of them are genuine and need their own allowance, and the rest are things nobody meant to run.</p>
+
+        <h3>Timeouts and query cancellation</h3>
+
+        <p>A hard ceiling on execution time, with the abort signal propagated into your database driver so that cancelling the request actually cancels the query. Without propagation you've stopped waiting for a query that's still consuming a connection, which is worse than useless during an incident — you've made the request cheap for the client and expensive for you.</p>
+
+        <h2>8. Rate Limits Are a Cost Model, Not a Cap</h2>
+
+        <p>If you consume someone else's GraphQL API — Shopify's Storefront or Admin API, commercetools, BigCommerce — the throttle is not requests per minute. It's points per second, drawn from a bucket that refills at a fixed rate, with the cost of each query calculated from its shape before execution. Shopify's Storefront API gives you a bucket measured in cost points; the Admin API's is stricter still, and a bulk import will empty it in seconds if you let it.</p>
+
+        <p>The practical consequence: two clients making the same number of requests can have wildly different throttling behaviour, and a query that has always worked can start failing when someone adds a nested field to a shared fragment. The error, when it arrives, is a <code>THROTTLED</code> extension on a 200 response, which — as covered above under error visibility — your HTTP monitoring will not see.</p>
+
+        <p>What I build into any client that talks to a metered GraphQL API:</p>
+
+        <pre><code class="language-javascript">// Read the cost extension the API returns and pace yourself off it, rather
+// than guessing at a request-per-second number that has no relationship
+// to what you are actually spending.
+let bucket = { available: 1000, restoreRate: 50, lastSeen: Date.now() };
+
+function projectedAvailable() {
+  const elapsed = (Date.now() - bucket.lastSeen) / 1000;
+  return Math.min(1000, bucket.available + elapsed * bucket.restoreRate);
+}
+
+export async function metered(query, variables, estimatedCost = 100) {
+  while (projectedAvailable() &lt; estimatedCost) {
+    const deficit = estimatedCost - projectedAvailable();
+    await sleep((deficit / bucket.restoreRate) * 1000 + 50);
+  }
+
+  const res = await post(query, variables);
+  const throttle = res.extensions?.cost?.throttleStatus;
+  if (throttle) {
+    bucket = {
+      available: throttle.currentlyAvailable,
+      restoreRate: throttle.restoreRate,
+      lastSeen: Date.now(),
+    };
+  }
+
+  // A throttled response is a 200 with an error. Retry it, do not cache it.
+  if (res.errors?.some(e =&gt; e.extensions?.code === 'THROTTLED')) {
+    await sleep(1000);
+    return metered(query, variables, (res.extensions?.cost?.requestedQueryCost ?? estimatedCost) * 1.2);
+  }
+  return res.data;
+}</code></pre>
+
+        <p>Two details that matter more than they look. The estimate passed in should be updated from <code>requestedQueryCost</code> on the first successful call, because guessing is how you end up either sleeping needlessly or hammering a drained bucket. And the retry must not be unbounded — I cap at three attempts and then fail the operation, because an infinite retry against a throttle during a traffic spike is how a slow page becomes an outage.</p>
+
+        <p>The deeper lesson is that a metered API changes what "optimise the query" means. Trimming fields is no longer a nicety; it's directly buying you throughput. On one Shopify Plus build, removing four unused metafield lookups from a shared product fragment cut the requested query cost from 312 to 94, which tripled the rate at which our nightly catalogue sync could run and turned a four-hour job into eighty minutes. Nothing about the code got faster. We just stopped paying for things we weren't using.</p>
+
+        <h2>9. Caching GraphQL Is Genuinely Hard</h2>
+
+        <p>This is the part where I stop being even-handed. HTTP caching is one of the great pieces of infrastructure engineering — decades of proxies, CDNs and browsers all agreeing on a set of headers — and GraphQL, as conventionally deployed, throws all of it away.</p>
+
+        <p>The reasons are structural, not accidental:</p>
+
+        <p><strong>Everything is a POST to one URL.</strong> No intermediary caches POSTs, and correctly so. Your CDN sees every request as <code>POST /graphql</code> and can do nothing with it.</p>
+
+        <p><strong>The cache key is the request body.</strong> Two clients asking for the same product with differently-ordered fields, or different whitespace, or a different operation name, produce different bodies for identical results.</p>
+
+        <p><strong>Responses are heterogeneous.</strong> One response contains a product (cacheable for an hour), a cart (never cacheable) and a stock level (cacheable for a minute). There is no single <code>Cache-Control</code> value that's correct for that document. The best you can do is the minimum, which means the cart drags everything down to <code>no-store</code>.</p>
+
+        <p><strong>Invalidation has no natural unit.</strong> In REST, a price change invalidates <code>/products/123</code>. In GraphQL, it invalidates every cached response that happened to include product 123 — and you have no index of which those were unless you built one.</p>
+
+        <p>Let me be blunt about the consequence: a REST API with sane <code>Cache-Control</code> headers on a CDN will beat an uncached GraphQL API on almost every metric that matters for anonymous catalogue traffic, and it will do it with a fraction of the operational complexity. If your workload is "lots of anonymous readers, mostly the same data", REST's cacheability is a very large thumb on the scale.</p>
+
+        <h3>What you can actually do about it</h3>
+
+        <p>Persisted queries plus GET. Register the query document ahead of time, reference it by hash, send it as a GET with the variables in the query string. Now it's a cacheable URL and your CDN works again. This is the single highest-leverage change available and it's underused.</p>
+
+        <pre><code class="language-javascript">// Client side: automatic persisted queries. Try the hash, fall back once.
+import { ApolloClient, InMemoryCache, HttpLink } from '@apollo/client';
+import { createPersistedQueryLink } from '@apollo/client/link/persisted-queries';
+import { sha256 } from 'crypto-hash';
+
+const link = createPersistedQueryLink({
+  sha256,
+  useGETForHashedQueries: true, // the part that makes it cacheable
+}).concat(new HttpLink({ uri: '/graphql' }));
+
+export const client = new ApolloClient({ link, cache: new InMemoryCache() });</code></pre>
+
+        <pre><code class="language-javascript">// Server side: only accept known hashes in production. Allowing arbitrary
+// documents to be registered at runtime hands an attacker a cache-key
+// generator and a cost-analysis bypass in one.
+const REGISTERED = new Map(loadManifestFromBuild()); // hash -&gt; document
+
+app.get('/graphql', async (req, res) =&gt; {
+  const { sha256Hash } = JSON.parse(req.query.extensions ?? '{}').persistedQuery ?? {};
+  const document = REGISTERED.get(sha256Hash);
+  if (!document) {
+    return res.status(400).json({ errors: [{ message: 'PersistedQueryNotFound' }] });
+  }
+  const result = await execute(document, JSON.parse(req.query.variables ?? '{}'));
+  // Per-operation cache policy, decided by the operation name, not the response.
+  res.set('Cache-Control', CACHE_POLICY[document.operationName] ?? 'no-store');
+  res.json(result);
+});</code></pre>
+
+        <p>Separate the cacheable from the uncacheable at the query level. Don't put the cart in the same operation as the product. Two operations, two cache policies, and the fast one gets to be fast. This costs you a round trip and buys you a CDN hit rate, and on anything except a very high-latency mobile client that's a good trade.</p>
+
+        <p>Cache below the resolvers instead of above them. If you can't cache the response, cache the entities. A shared Redis layer keyed on <code>product:{id}:v{schemaVersion}</code>, invalidated by webhook, gets you most of the benefit and has an invalidation story you can explain to a colleague. It doesn't save you the GraphQL execution cost, but on a well-batched server that's 10–20ms.</p>
+
+        <pre><code class="language-javascript">// Entity cache under the loader. Two tiers: process memory for the hot set,
+// Redis for the shared set, database as the floor.
+const local = new LRUCache({ max: 5000, ttl: 30_000 });
+
+function createProductLoader(db, redis) {
+  return new DataLoader(async (ids) =&gt; {
+    const out = new Array(ids.length);
+    const missing = [];
+
+    ids.forEach((id, i) =&gt; {
+      const hit = local.get(`p:${id}`);
+      if (hit) out[i] = hit; else missing.push([id, i]);
+    });
+    if (!missing.length) return out;
+
+    const keys = missing.map(([id]) =&gt; `p:${id}`);
+    const cached = await redis.mget(keys);
+    const stillMissing = [];
+
+    cached.forEach((raw, n) =&gt; {
+      const [id, i] = missing[n];
+      if (raw) {
+        const v = JSON.parse(raw);
+        local.set(`p:${id}`, v);
+        out[i] = v;
+      } else {
+        stillMissing.push([id, i]);
+      }
+    });
+    if (!stillMissing.length) return out;
+
+    const rows = await db.products.findMany({
+      where: { id: { in: stillMissing.map(([id]) =&gt; id) } },
+    });
+    const byId = new Map(rows.map(r =&gt; [r.id, r]));
+    const pipe = redis.pipeline();
+    for (const [id, i] of stillMissing) {
+      const v = byId.get(id) ?? null;
+      out[i] = v;
+      if (v) {
+        local.set(`p:${id}`, v);
+        pipe.set(`p:${id}`, JSON.stringify(v), 'EX', 600);
+      }
+    }
+    await pipe.exec();
+    return out;
+  });
+}</code></pre>
+
+        <p>The <code>v{schemaVersion}</code> in the key is worth dwelling on. When you add a field to the cached entity shape, every existing cache entry is now missing it, and you get either a crash or a silently absent field. Version the key and old entries expire naturally instead of poisoning the deploy. I've been bitten by this exactly once, which was enough.</p>
+
+        <h2>10. Client-Side Caching and the Normalisation Trap</h2>
+
+        <p>Apollo Client and urql both maintain a normalised cache: responses are decomposed into entities keyed by <code>__typename</code> plus <code>id</code>, and subsequent queries can be answered from the store without a network request. When it works it's excellent — navigating from a category to a product is instant because the product was already partially in the cache.</p>
+
+        <p>Two things break it, both common.</p>
+
+        <p><strong>Entities without stable IDs.</strong> If a type has no <code>id</code> field, the cache can't normalise it and stores it inline under its parent. Now the same object exists in three places and updating one doesn't update the others. Every type that represents a thing needs an ID in the query, even when the UI doesn't display it. I add <code>id</code> to every fragment reflexively.</p>
+
+        <p><strong>Paginated lists.</strong> Fetching page 2 of a connection replaces page 1 in the cache by default, because Apollo treats <code>products(first: 24, after: "x")</code> as a different field value than <code>products(first: 24)</code>. You need an explicit merge policy, and the default without one is a list that flickers.</p>
+
+        <pre><code class="language-javascript">new InMemoryCache({
+  typePolicies: {
+    Query: {
+      fields: {
+        products: {
+          // Arguments that identify the list, excluding the cursor.
+          keyArgs: ['filters', 'sortKey'],
+          merge(existing = { nodes: [] }, incoming) {
+            return { ...incoming, nodes: [...existing.nodes, ...incoming.nodes] };
+          },
+        },
+      },
+    },
+    // A type the API returns without an id. Give it a key or it stays inline.
+    Money: { keyFields: false },
+    ProductVariant: { keyFields: ['id'] },
+  },
+});</code></pre>
+
+        <p>And a caution about server-side rendering with a normalised client cache: the cache you built on the server gets serialised into the HTML and rehydrated in the browser. If it contains anything customer-specific and the page is cached at the CDN, you have shipped one customer's data to everyone. Check what's in your <code>__APOLLO_STATE__</code> before you cache the document. Cart, customer, addresses, order history — none of those belong in a shared HTML payload.</p>
+
+        <h2>11. Pagination: Cursors, and Why Offsets Rot</h2>
+
+        <p>Offset pagination — <code>LIMIT 24 OFFSET 4800</code> — is fine for page 2 and terrible for page 200, because the database has to walk and discard 4,800 rows to find the ones you wanted. On a large table with a sort that isn't the primary key, deep offsets are the reason your "load more" button gets slower the more you click it.</p>
+
+        <p>Cursor pagination fixes the mechanics — you carry a sort key and ask for rows after it, which is an index seek regardless of depth — and it also fixes the correctness problem, where inserting a row shifts everything and page 3 shows you an item you already saw on page 2.</p>
+
+        <pre><code class="language-sql">-- Offset: the planner reads 4,824 rows to return 24.
+SELECT id, title, price FROM products
+WHERE category_id = 42
+ORDER BY created_at DESC, id DESC
+LIMIT 24 OFFSET 4800;
+
+-- Cursor: an index seek, constant cost at any depth.
+-- The tie-break on id is what makes it stable when created_at collides.
+SELECT id, title, price FROM products
+WHERE category_id = 42
+  AND (created_at, id) &lt; ('2024-11-03 09:12:44', 88214)
+ORDER BY created_at DESC, id DESC
+LIMIT 24;
+
+-- Requires a matching composite index or none of the above helps.
+CREATE INDEX products_cat_created_id_idx
+  ON products (category_id, created_at DESC, id DESC);</code></pre>
+
+        <p>The trade-off is that you lose "jump to page 7", which some merchandising teams care about a great deal and some don't care about at all. Ask before you decide. On a catalogue where SEO depends on crawlable numbered pagination, offsets on the server-rendered pages plus cursors on the "load more" path is an ugly but pragmatic hybrid, and it's what I usually end up shipping.</p>
+
+        <h2>12. Errors, Status Codes and the Monitoring You Lose</h2>
+
+        <p>GraphQL returns HTTP 200 for a response containing errors. This is by design — a partial result is still a result — and it quietly breaks a lot of infrastructure that assumes status codes mean something.</p>
+
+        <p>Your CDN caches the 200. Your load balancer's health check passes. Your uptime monitor is green. Your error rate dashboard, which counts non-2xx responses, shows zero. Meanwhile every product page is rendering with a null price because the pricing service is down.</p>
+
+        <p>I've watched this exact scenario run for six hours before anyone noticed, on a site with what everyone believed was good monitoring.</p>
+
+        <p>What to do about it:</p>
+
+        <pre><code class="language-javascript">// Apollo Server plugin: make GraphQL errors visible to the systems that
+// only understand HTTP and to the metrics that only count counters.
+const errorVisibility = {
+  async requestDidStart() {
+    return {
+      async willSendResponse({ response, request, contextValue }) {
+        const body = response.body;
+        const errors = body.kind === 'single' ? body.singleResult.errors : null;
+        if (!errors?.length) return;
+
+        for (const e of errors) {
+          metrics.increment('gql.error', {
+            code: e.extensions?.code ?? 'UNKNOWN',
+            path: e.path?.join('.') ?? 'root',
+            op: request.operationName ?? 'anonymous',
+          });
+        }
+        // Never let an errored response be cached by anything.
+        response.http.headers.set('Cache-Control', 'no-store');
+        // Give the edge something to key on without breaking spec-compliant clients.
+        response.http.headers.set('X-GraphQL-Errors', String(errors.length));
+      },
+    };
+  },
+};</code></pre>
+
+        <p>Then alert on <code>gql.error</code> by path. Per-path is the useful dimension — an error rate of 0.4% overall means nothing, but 100% of errors landing on <code>products.nodes.priceRange</code> tells you exactly which service is down.</p>
+
+        <p>The other half of this is deciding, per field, whether an error should be null-and-continue or should propagate. GraphQL's non-null semantics mean an error on a non-null field bubbles up and nulls the parent, and if the parent is also non-null it keeps bubbling until it hits something nullable — potentially wiping the entire response because one review count failed. Mark fields non-null only when you mean it. My rule: anything resolved from a system you don't operate is nullable, always.</p>
+
+        <h2>13. Measuring Where the Time Goes</h2>
+
+        <p>You cannot fix any of this without per-resolver timing, and the default observability on most GraphQL servers gives you a single duration for the whole request, which tells you nothing.</p>
+
+        <p>What I want on every GraphQL endpoint I operate:</p>
+
+        <p>Per-resolver duration and call count, aggregated by field path. If <code>Product.inventory</code> was called 3,024 times in one request, I want that number in a dashboard, not in a support ticket four months later.</p>
+
+        <p>Query cost recorded per operation, so I can see the distribution shift when a client team ships a new page.</p>
+
+        <p>Operation name on every request, enforced. Anonymous queries are unattributable and I reject them in production — it's a one-line validation rule and it makes every other piece of telemetry usable.</p>
+
+        <pre><code class="language-javascript">// A tracing plugin that gives you the fan-out counts, which is the number
+// that actually diagnoses N+1. Sample it — this is not free at full volume.
+const tracing = {
+  async requestDidStart({ request }) {
+    if (Math.random() &gt; 0.02) return {};      // 2% sample
+    const counts = new Map();
+    const started = new Map();
+
+    return {
+      async executionDidStart() {
+        return {
+          willResolveField({ info }) {
+            const path = `${info.parentType.name}.${info.fieldName}`;
+            counts.set(path, (counts.get(path) ?? 0) + 1);
+            const t0 = process.hrtime.bigint();
+            return () =&gt; {
+              const us = Number(process.hrtime.bigint() - t0) / 1000;
+              started.set(path, (started.get(path) ?? 0) + us);
+            };
+          },
+        };
+      },
+      async willSendResponse() {
+        for (const [path, n] of counts) {
+          metrics.gauge('gql.field.calls', n, { path, op: request.operationName });
+          metrics.gauge('gql.field.us', started.get(path) ?? 0, { path });
+        }
+      },
+    };
+  },
+};</code></pre>
+
+        <p>Sampling at 2% is deliberate. Field-level tracing on every request adds meaningful overhead — I've measured 6–9% on a resolver-heavy schema — and you don't need every request to spot a fan-out. What you do need is for the sample to be request-scoped rather than field-scoped, so a sampled request has complete data. Half a trace is worse than none.</p>
+
+        <p>The broader question of which metrics to watch and how to alert on them is a whole discipline of its own; I've set out how I build that in <a href="/blog/performance-monitoring/">the piece on performance monitoring</a>.</p>
+
+        <h2>14. A Worked Example: 870ms to 145ms</h2>
+
+        <p>Same sportswear retailer from the opening. 18,000 SKUs, 63 locations, Node GraphQL server in front of Postgres and three third-party services. Category page query, 48 products.</p>
+
+        <p>Starting state, measured over a week in March 2025 at p95:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Change</th><th>DB queries</th><th>p95 server time</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Baseline</td><td>3,121</td><td>4,240 ms</td><td>Serial inventory lookups</td></tr>
+            <tr><td>+ DataLoader on variants and brands</td><td>3,027</td><td>3,910 ms</td><td>Barely moved — wrong layer</td></tr>
+            <tr><td>+ DataLoader on inventory</td><td>53</td><td>780 ms</td><td>The actual fix</td></tr>
+            <tr><td>+ maxBatchSize 200</td><td>61</td><td>620 ms</td><td>One huge IN was scanning</td></tr>
+            <tr><td>+ trimmed 14 unused fields</td><td>44</td><td>410 ms</td><td>Fewer joins, not fewer bytes</td></tr>
+            <tr><td>+ Redis entity cache, 10 min</td><td>6</td><td>190 ms</td><td>Warm cache</td></tr>
+            <tr><td>+ persisted queries over GET</td><td>0</td><td>~20 ms</td><td>CDN hit, 71% of requests</td></tr>
+          </tbody>
+        </table>
+
+        <p>The second row is the one I'd point at. We spent a day and a half batching the obvious things — brands, variants — and moved p95 by 8%. The inventory resolver, three levels down and easy to overlook, was 97% of the problem. Without per-field call counts we'd have kept optimising the wrong resolver, and I'd have written a confident retro about diminishing returns.</p>
+
+        <p><strong>What went wrong.</strong> The Redis entity cache shipped with a bug that took nine days to surface. The inventory loader cached per variant, but the retailer ran location-scoped availability, and the cache key omitted the location. For nine days, roughly 3% of visitors — the ones whose nearest store had been resolved differently from the previous cache writer — saw availability for the wrong warehouse. It was reported as "the site says click and collect is available but the shop doesn't have it", which took a while to connect back to a cache key.</p>
+
+        <p>The lesson I actually took from it: every cache key should be derived by a single function that takes the full set of inputs the value depends on, and that function should live next to the resolver rather than being assembled inline. Inline key construction is where the missing dimension hides.</p>
+
+        <pre><code class="language-javascript">// One place to reason about what a cached value depends on.
+// Adding a dimension to the resolver forces you to add it here.
+export function inventoryKey({ variantId, locationGroupId, channel }) {
+  if (!locationGroupId) throw new Error('locationGroupId required for inventory key');
+  return `inv:v3:${channel}:${locationGroupId}:${variantId}`;
+}</code></pre>
+
+        <p><strong>What I'd do differently.</strong> Ship the tracing before the fixes. We reversed it, and the day and a half spent on the wrong resolvers was entirely avoidable. Field-level call counts took about three hours to add and would have pointed straight at the answer.</p>
+
+        <h2>15. When REST Is the Better Answer</h2>
+
+        <p>I use both, on the same systems, and I don't think that's a compromise. Here's where I reach for REST without hesitation.</p>
+
+        <p><strong>Anonymous, high-volume, cacheable reads.</strong> A product feed, a category listing, a sitemap, a store locator. One URL, one <code>Cache-Control</code> header, a CDN in front, done. GraphQL adds cost and subtracts cacheability for zero benefit, because the shape never varies.</p>
+
+        <p><strong>File uploads and binary responses.</strong> GraphQL has no native binary type. Every workaround — multipart specs, base64 in a string field — is worse than a plain <code>POST</code> to an endpoint.</p>
+
+        <p><strong>Webhooks and machine-to-machine events.</strong> The sender doesn't want to compose a query. They want to post a JSON body to a URL.</p>
+
+        <p><strong>Anything with a fixed, well-known shape consumed by one client.</strong> If the frontend and backend are the same team and the endpoint serves exactly one screen, GraphQL's flexibility is overhead. A tailored REST endpoint — a "backend for frontend" — returns precisely the right shape in one query the backend fully controls, and it's simpler in every dimension.</p>
+
+        <p><strong>When your team doesn't have the operational appetite.</strong> Running GraphQL well means query cost analysis, persisted query manifests, per-resolver tracing and a schema governance process. That's a real ongoing cost. If nobody is going to own it, an unmonitored GraphQL endpoint will be slower and less safe than a boring REST API, and you'll have spent the complexity budget for nothing.</p>
+
+        <p>Where GraphQL wins clearly: many clients with different data needs, deeply related data, high-latency callers, and a schema that changes faster than you can version endpoints. A mobile app, a storefront, a partner integration and an internal tool all hitting one schema is exactly the situation GraphQL was built for. That's also the situation where the cost controls stop being optional.</p>
+
+        <h2>16. The Shape I Actually Ship</h2>
+
+        <p>For a headless commerce build in 2025, this is my default, and it's a hybrid.</p>
+
+        <p>GraphQL for the storefront's data needs: product, collection, cart, customer. Persisted queries only, registered at build time, served over GET where the operation is cacheable. Cost analysis on, depth limit 8, per-resolver tracing sampled at 2%. DataLoader in request context for everything that fans out, entity caching in Redis under the loaders.</p>
+
+        <p>REST for the edges: webhooks in, product feed out, health checks, image transforms, sitemap generation, anything a third party consumes. These get plain URLs and CDN caching and nobody has to learn a schema to use them.</p>
+
+        <p>And the page itself, wherever possible, is not calling either at request time — it's static, regenerated on webhook, as I've described in more detail in the piece on <a href="/blog/headless-commerce-seo-performance/">headless commerce architecture</a>. The fastest API call is the one that happened fifteen minutes ago while nobody was waiting.</p>
+
+        <h2>17. Questions I Get Asked</h2>
+
+        <p><strong>"Is GraphQL slower than REST?"</strong> Per request, usually yes — there's parsing, validation and execution overhead REST doesn't have, typically 5–15ms on a warm server. Per user journey, often no, because you've eliminated round trips. And both numbers are noise next to whether your resolvers are batched and whether the response is cacheable. Those two questions determine the answer; the protocol barely registers.</p>
+
+        <p><strong>"Do I need DataLoader if I'm using an ORM with eager loading?"</strong> Sometimes not. Prisma's relation loading and Hibernate's fetch joins can collapse the fan-out if the ORM sees the whole query up front. GraphQL's resolver model usually prevents that, because each resolver runs independently and the ORM never sees the shape. Some tooling bridges the gap by inspecting the GraphQL AST and generating one SQL query — that works well and is worth investigating before you hand-roll loaders across a large schema.</p>
+
+        <p><strong>"Can I put a CDN in front of GraphQL without persisted queries?"</strong> Some CDNs will cache POST bodies with a custom cache key. It works and I'd still avoid it: you're keying on a body that includes whitespace and field order, so your hit rate depends on clients being byte-identical, and you've built something no other engineer will expect. Persisted queries get you the same outcome using mechanisms everything already understands.</p>
+
+        <p><strong>"How do I stop clients writing expensive queries?"</strong> Cost analysis in report-only mode first, then enforcing. But the more effective control is social: if all production queries are persisted from a build-time manifest, an expensive query can't reach production without going through a code review. Runtime limits catch what review misses; review is what actually prevents it.</p>
+
+        <p><strong>"Should the storefront talk to GraphQL directly from the browser?"</strong> For public catalogue data with a public token, yes. For anything requiring a privileged token, no — proxy it through a server route that adds the credential. And if you're proxying anyway, that route is a good place to enforce persisted queries, because now no arbitrary document can reach the backend at all.</p>
+
+        <p><strong>"Is federation worth it?"</strong> If you have several teams owning several subgraphs, yes, it beats the alternative of one team owning a monolithic schema and becoming a bottleneck. If you have one team, no — you've added a gateway hop, a composition build step and a class of cross-subgraph N+1 problems that are considerably harder to debug than the ordinary kind. I'd not introduce federation before the third team.</p>
+
+        <p><strong>"How do I test for N+1 in CI?"</strong> Count queries. Wrap the database client in a counter, execute a representative query against a fixture with realistic cardinality, and assert an upper bound. It's crude and it catches almost everything, provided your fixture has more than three rows per relation — which is the part teams get wrong.</p>
+
+        <h2>18. What I'd Do First</h2>
+
+        <p>Given a GraphQL endpoint that's misbehaving and a week to spend on it, this is my order.</p>
+
+        <p><strong>One.</strong> Add per-field call counts and durations, sampled. Do not optimise anything before this exists. Every hour spent here saves a day of optimising the wrong resolver, and I say that as someone who has lost the day.</p>
+
+        <p><strong>Two.</strong> Find the field with the highest call count per request. That's your N+1, and it's usually not the one you'd have guessed. Batch it with DataLoader, in request context, with a sane <code>maxBatchSize</code>.</p>
+
+        <p><strong>Three.</strong> Diff the query against the template. Delete every field nothing renders. This is a mechanical afternoon's work with a consistently large payoff, because unrequested fields are unresolved joins.</p>
+
+        <p><strong>Four.</strong> Turn on depth limiting immediately and cost analysis in report-only mode. Chart the cost distribution for a fortnight before you enforce anything.</p>
+
+        <p><strong>Five.</strong> Split the cacheable operations from the uncacheable ones. Get the cart out of the product query. Then put persisted queries over GET in front of the cacheable half and watch your CDN start doing work it was never previously allowed to do.</p>
+
+        <p><strong>Six.</strong> Add entity caching under the loaders, with keys built by a single function that takes every dimension the value depends on. Version the key prefix so a shape change expires cleanly.</p>
+
+        <p><strong>Seven.</strong> Make GraphQL errors visible to your HTTP-shaped monitoring, and set the alert on error rate per field path rather than per endpoint. Then go and check, honestly, whether your current alerting would have told you about a six-hour partial outage. Mine wouldn't have. That's why I write this bit last and mean it most.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>GraphQL integration with Next.js storefronts.</p>
             </li>
             <li>
@@ -230,7 +841,6 @@ const productLoader = new DataLoader(async (ids) => {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -264,6 +874,6 @@ const productLoader = new DataLoader(async (ids) => {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

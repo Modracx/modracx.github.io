@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Resource Hints Optimization: Preconnect & Preload | MODRACX</title>
-  <meta name="description" content="Technical guide on utilizing rel=preconnect, rel=dns-prefetch, and rel=preload resource hints to warm up TCP/TLS connections and accelerate LCP font assets." />
+  <meta name="description" content="The browser priority model behind preload, modulepreload, prefetch, fetchpriority and Speculation Rules, and how to audit the resource hints a site already has." />
   <meta property="og:title" content="Resource Hints Optimization: Preconnect & Preload | MODRACX" />
   <meta property="og:description" content="Technical guide on utilizing resource hints by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Resource Hints Optimization: Preconnect & Preload</h1>
-        <p class="lede">Resource hints tell the browser to initiate DNS lookups, TCP handshakes, and asset downloads ahead of render parsing. Learn how to optimize `<link rel="preconnect">` for Google Fonts and CDNs.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Resource Hints Optimization: Preconnect &amp; Preload</h1>
+        <p class="lede">Eleven preloads in the head and LCP had gone from 2.1s to 3.4s. The priority model underneath resource hints, and how to audit the ones you already have.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 34 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,19 +205,480 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Resource Hints HTML Implementation</h2>
+        <h2>1. Eleven Preloads and a Slower Page</h2>
 
-        <pre><code class="language-html">&lt;!-- Critical Resource Hints in Document Head --&gt;
-&lt;link rel="preconnect" href="https://fonts.googleapis.com" /&gt;
-&lt;link rel="preconnect" href="https://fonts.gstatic.com" crossorigin /&gt;
-&lt;link rel="preload" as="image" href="/hero-banner.avif" fetchpriority="high" /&gt;
-&lt;link rel="preload" as="style" href="/style.min.css" /&gt;</code></pre>
+        <p>A safety equipment brand asked me to look at their product listing template because LCP had gone from 2.1s to 3.4s over a quarter and nobody could explain it. No new images. No new scripts. The bundle had actually got smaller after a dependency cleanup in the same period.</p>
 
-        <hr />
+        <p>What had changed was the head. Somebody — well-intentioned, following a PageSpeed Insights recommendation — had added a preload. Then another. By the time I looked there were eleven <code>&lt;link rel="preload"&gt;</code> tags: two fonts, the hero image, the critical CSS, a carousel library, an analytics bundle, two icon sprites, a video poster, and two files that no longer existed on the origin and were 404ing on every single page view.</p>
+
+        <p>Every one of those tags was doing its job. That was the problem. <code>preload</code> is not a suggestion — it is an instruction to fetch this resource now, at high priority, ahead of things the browser would otherwise have chosen. Eleven high-priority fetches on a connection that can meaningfully carry two or three at a time means the browser starts everything and finishes nothing. The LCP image was in that queue, competing with an analytics bundle that nobody would notice arriving four seconds later.</p>
+
+        <p>Deleting eight of the eleven took LCP to 1.9s. Better than before the preloads existed, because the cleanup also removed the two 404s that had been burning a connection slot each.</p>
+
+        <p>This article is about the part of resource hints that gets skipped: the priority model underneath them, why <code>preload</code> behaves differently from every other hint, what <code>fetchpriority</code> and <code>modulepreload</code> and the Speculation Rules API actually do, and how to audit a site that already has hints scattered through it. The connection-warming hints — <code>preconnect</code> and <code>dns-prefetch</code> — I've covered in <a href="/blog/preconnect-dns-prefetch/">their own article</a>, and the dead-and-buried <code>Server Push</code> along with its successor <code>103 Early Hints</code> in <a href="/blog/http2-server-push/">another</a>. Here I'm assuming the connections are already sorted and the question is what to fetch, when, and in what order.</p>
+
+        <h2>2. The Priority Model Nobody Reads</h2>
+
+        <p>Every fetch a browser makes carries an internal priority. In Chromium there are five levels — VeryLow, Low, Medium, High, VeryHigh — and the value is assigned by the resource loader based on the type of resource, where it appears in the document, and whether it's currently visible. Firefox and Safari have equivalent schemes with different names and slightly different rules.</p>
+
+        <p>You cannot see these in the Network panel by default. Enable the Priority column. Once you do, most performance work on a page becomes a lot more obvious, because you're looking at the browser's actual plan rather than guessing at it.</p>
+
+        <p>The assignment rules in Chromium, roughly:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Resource</th><th>Initial priority</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>HTML document</td><td>VeryHigh</td><td>Always.</td></tr>
+            <tr><td>CSS in head</td><td>VeryHigh</td><td>Render-blocking.</td></tr>
+            <tr><td>CSS with a non-matching media query</td><td>VeryLow</td><td>Still downloaded, just not urgently.</td></tr>
+            <tr><td>Font (from CSS)</td><td>High</td><td>Only after layout discovers it needs the face.</td></tr>
+            <tr><td>Script in head, no attribute</td><td>High</td><td>Parser-blocking.</td></tr>
+            <tr><td>Script with <code>defer</code> or <code>async</code></td><td>Low</td><td>Deliberately deprioritised.</td></tr>
+            <tr><td>Image, in viewport</td><td>High</td><td>Only after layout. Starts Low.</td></tr>
+            <tr><td>Image, below the fold</td><td>Low</td><td>Stays Low.</td></tr>
+            <tr><td><code>fetch()</code> / XHR</td><td>High</td><td>Medium if <code>keepalive</code>.</td></tr>
+            <tr><td>Preload of any type</td><td>Type's high value</td><td>Overrides discovery order.</td></tr>
+            <tr><td>Prefetch</td><td>VeryLow (Idle)</td><td>Never competes with the current page.</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two things in that table cause most of the confusion I encounter.</p>
+
+        <p>Images start at Low and get promoted to High once layout determines they're in the viewport. That promotion happens after the first layout pass, which on a heavy page can be several hundred milliseconds after the image was discovered. The image is downloading the entire time, just slowly, behind everything else. That gap is exactly what <code>fetchpriority="high"</code> exists to close, and it's why a preload on the LCP image helps even though the browser was always going to fetch it.</p>
+
+        <p>Fonts are discovered late by design. A font file is only requested when the CSS Object Model has been built, styles have been matched to elements, and layout has determined that a particular face is needed for text that will actually render. That's three steps after the CSS arrived. On a site with a 90KB stylesheet, the font request can land 600ms after the stylesheet did, which is where the flash of unstyled text comes from.</p>
+
+        <h2>3. Hints Are Not All the Same Kind of Thing</h2>
+
+        <p>The word "hint" flattens a real distinction and I think it causes more bad configurations than any other single factor.</p>
+
+        <p><code>dns-prefetch</code> and <code>preconnect</code> are speculative. They set up infrastructure. If you get them wrong, you've wasted a DNS lookup or a TLS handshake — a few kilobytes and some connection slots, recoverable.</p>
+
+        <p><code>preload</code> is mandatory and immediate. The browser will fetch that exact URL, right now, at a priority derived from the <code>as</code> value. Get it wrong and you have downloaded a file you don't need, ahead of files you do.</p>
+
+        <p><code>prefetch</code> is mandatory but idle. The file will be fetched, at the lowest possible priority, and stored for a future navigation. It never competes with the current page's loading.</p>
+
+        <p>Speculation Rules are mandatory, idle, and go further — they can fetch and in the prerender case fully render a page in a hidden tab, executing its JavaScript.</p>
+
+        <p>So the risk profile runs: <code>dns-prefetch</code> costs almost nothing, <code>preconnect</code> costs a little, <code>prefetch</code> costs bandwidth you may not need, <code>preload</code> costs bandwidth and contention on the critical path, and <code>prerender</code> costs bandwidth, CPU, memory and possibly a skewed analytics number.</p>
+
+        <p>The instinct to treat them as a set — to add all of them because they're all "hints" — is what produced the safety equipment brand's head. They aren't a set. They're four different tools with one shared syntax.</p>
+
+        <h2>4. preload: The One That Bites</h2>
+
+        <p>Use it for exactly one situation: a resource that is needed early and cannot be discovered early.</p>
+
+        <p>That "cannot be discovered early" clause is doing all the work. The browser's preload scanner reads ahead through the raw HTML looking for URLs before the main parser gets there, and it's very good. It finds <code>&lt;img src&gt;</code>, <code>&lt;script src&gt;</code>, <code>&lt;link href&gt;</code> — anything in the markup. Preloading something the scanner already found gains you nothing except a duplicate entry in your head.</p>
+
+        <p>What the scanner cannot find:</p>
+
+        <p>Fonts, because they're referenced from inside a CSS file the scanner doesn't parse. Background images set in CSS, same reason. Anything injected by JavaScript. Anything behind a dynamic import. The LCP image on a page where it's set as a CSS background rather than an <code>&lt;img&gt;</code>. Resources whose URL is computed at runtime.</p>
+
+        <pre><code class="language-html">&lt;!-- Correct: font is inside CSS, invisible to the preload scanner --&gt;
+&lt;link rel="preload" href="/fonts/inter-var.woff2" as="font"
+      type="font/woff2" crossorigin&gt;
+
+&lt;!-- Correct: LCP image is a CSS background on a hero div --&gt;
+&lt;link rel="preload" href="/hero-1600.avif" as="image"
+      imagesrcset="/hero-800.avif 800w, /hero-1600.avif 1600w"
+      imagesizes="100vw" fetchpriority="high"&gt;
+
+&lt;!-- Pointless: the scanner finds this in the body anyway --&gt;
+&lt;link rel="preload" href="/js/app.js" as="script"&gt;
+&lt;script src="/js/app.js" defer&gt;&lt;/script&gt;</code></pre>
+
+        <p>That last pair is worse than pointless, actually. The preload fetches at High priority; the <code>defer</code> attribute on the script tag was your explicit instruction that this file is Low priority. You have overridden your own decision without meaning to, and pushed a deferred script ahead of the hero image.</p>
+
+        <h3>crossorigin on fonts is not optional</h3>
+
+        <p>Fonts are fetched in CORS mode regardless of where they're hosted. A preload without <code>crossorigin</code> is fetched in a different mode, so it does not match the font request that follows, and the file is downloaded twice. Every byte, twice, both on the critical path.</p>
+
+        <p>I have found this on more sites than any other preload error, including sites where someone had already been paid to do a performance audit. It's silent — the page works, it's just slower — and the only way to see it is to look for two entries with the same URL in the network panel.</p>
+
+        <h3>as is not optional either</h3>
+
+        <p>Omit <code>as</code> and the browser fetches at low priority, doesn't apply the right Accept header, and often fails to match the eventual request, giving you the double download again. Chrome logs a console warning about a preloaded resource not being used within a few seconds, and that warning is the single most useful diagnostic in this whole area.</p>
+
+        <p>If you see "The resource was preloaded using link preload but not used within a few seconds" in a console, you have either a hint you should delete or a mismatch you should fix. Both are worth ten minutes.</p>
+
+        <h2>5. modulepreload, and Why It Isn't Just preload</h2>
+
+        <p>ES modules changed the shape of the problem. When the browser loads a module, it has to fetch it, parse it, discover its imports, fetch those, discover theirs, and so on. Each level of that dependency graph is a network round trip. A four-deep import chain on a 60ms RTT connection costs you 240ms before anything executes, and no amount of bandwidth fixes it.</p>
+
+        <pre><code class="language-html">&lt;link rel="modulepreload" href="/js/app.js"&gt;
+&lt;link rel="modulepreload" href="/js/cart-store.js"&gt;
+&lt;link rel="modulepreload" href="/js/api-client.js"&gt;
+&lt;script type="module" src="/js/app.js"&gt;&lt;/script&gt;</code></pre>
+
+        <p>The difference from <code>preload as="script"</code> is that <code>modulepreload</code> does more than download. It fetches, parses, and puts the module into the module map, ready to execute. And it recursively fetches the static imports, so a single tag on your entry point can warm the whole graph — though support for that recursion has been inconsistent enough that I list the important modules explicitly rather than relying on it.</p>
+
+        <p>Vite and Rollup generate these automatically for route chunks. If you're on a modern build tool the tags are probably already in your output, and the useful work is checking that they're not being generated for routes the user will never visit. I've seen a Vite config produce 40 <code>modulepreload</code> tags on a homepage because the manifest walked every lazy route.</p>
+
+        <p>A subtlety worth knowing: <code>modulepreload</code> executes nothing. The module is parsed and its dependencies fetched, but top-level code does not run until something imports it. That makes it safe in a way that a plain script preload followed by an eager execution would not be.</p>
+
+        <h2>6. fetchpriority: The Precise Instrument</h2>
+
+        <p>Shipped in Chrome 102 in May 2022, and in Safari from version 17.2 at the end of 2023. It takes <code>high</code>, <code>low</code>, or <code>auto</code>, and it adjusts the browser's computed priority for a fetch rather than replacing it.</p>
+
+        <p>The single highest-value use of it in ecommerce, and the one I reach for first on any product page:</p>
+
+        <pre><code class="language-html">&lt;!-- The LCP image. No preload needed — the scanner finds it.
+     fetchpriority just skips the Low-then-promote dance. --&gt;
+&lt;img src="/product/hero-1200.avif" fetchpriority="high"
+     width="1200" height="1200" alt="Suede derby, tan"&gt;
+
+&lt;!-- Everything below the fold: leave alone, the browser is right --&gt;
+&lt;img src="/product/detail-3.avif" loading="lazy"
+     width="800" height="800" alt="Sole detail"&gt;</code></pre>
+
+        <p>That one attribute has been worth 200 to 500ms of LCP on every product template I've applied it to. It costs nothing, requires no head changes, degrades to nothing in browsers that don't support it, and it is strictly better than preloading the same image because it doesn't add a second discovery path that can go stale.</p>
+
+        <p>The other direction matters too. <code>fetchpriority="low"</code> on a third-party script, a chat widget, or a carousel below the fold pushes it behind the things that determine whether the page feels loaded:</p>
+
+        <pre><code class="language-html">&lt;script src="https://widget.chatvendor.com/loader.js"
+        fetchpriority="low" async&gt;&lt;/script&gt;</code></pre>
+
+        <p>And it works on <code>fetch()</code>, which is where it gets genuinely interesting for single-page storefronts:</p>
+
+        <pre><code class="language-javascript">// Product data the customer is looking at right now.
+const product = await fetch(`/api/products/${sku}`, { priority: 'high' });
+
+// Recommendations that render in a rail 800px down the page.
+// Same origin, same connection — but it must not compete.
+const recs = await fetch(`/api/recommendations/${sku}`, { priority: 'low' });
+
+// Analytics. Should never compete with anything.
+navigator.sendBeacon('/collect', payload);</code></pre>
+
+        <p>One rule I've settled on: use <code>fetchpriority</code> on at most one element per page for <code>high</code>. If you mark three things high, you've marked nothing high. The whole mechanism is relative.</p>
+
+        <h2>7. prefetch: Betting on the Next Page</h2>
+
+        <p><code>prefetch</code> fetches a resource for a future navigation at the lowest priority the browser has, and stores it in a cache that survives the navigation. Nothing on the current page slows down.</p>
+
+        <pre><code class="language-html">&lt;!-- On a category page: the customer will probably open a product --&gt;
+&lt;link rel="prefetch" href="/products/derby-tan/" as="document"&gt;
+
+&lt;!-- On a cart page: the next step is nearly certain --&gt;
+&lt;link rel="prefetch" href="/checkout/" as="document"&gt;</code></pre>
+
+        <p>The hit rate is everything. A prefetch that isn't used is pure waste — bandwidth for the customer, egress for you, and a request against an origin that has to serve it. On mobile data that waste has a real cost to a real person, and I've become noticeably more conservative about it over the last few years.</p>
+
+        <p>Where the odds are good: the checkout step from the cart, the first product in a listing where the click-through is concentrated, the next page of a paginated set when the customer is already scrolling. Where they aren't: prefetching every visible link, which some libraries still do by default and which on a category page of 48 products means 48 speculative document fetches.</p>
+
+        <p>Two constraints people trip over. Chrome enforces a limit on how many prefetches it will hold and evicts aggressively — you can't queue twenty and expect them all. And prefetched resources land in a separate cache with a short lifetime, currently around five minutes in Chrome, so prefetching on page load for a click that happens ten minutes later gains you nothing.</p>
+
+        <h2>8. Speculation Rules: The Big One</h2>
+
+        <p>This is the hint that actually changes how a site feels, and it's underused. Chrome 109 shipped the prefetch half in January 2023; prerender followed, and the document-rules syntax that makes it practical landed in Chrome 121 in early 2024.</p>
+
+        <p>Instead of a link tag per URL, you write a JSON block describing which links to speculate on and how eagerly.</p>
+
+        <pre><code class="language-html">&lt;script type="speculationrules"&gt;
+{
+  "prerender": [{
+    "where": { "selector_matches": ".product-card a, .btn-checkout" },
+    "eagerness": "moderate"
+  }],
+  "prefetch": [{
+    "where": {
+      "and": [
+        { "href_matches": "/*" },
+        { "not": { "href_matches": "/checkout/*" } },
+        { "not": { "href_matches": "/customer/*" } },
+        { "not": { "selector_matches": "[data-no-prefetch]" } }
+      ]
+    },
+    "eagerness": "conservative"
+  }]
+}
+&lt;/script&gt;</code></pre>
+
+        <p>The <code>eagerness</code> value is the entire safety mechanism and it deserves to be understood properly.</p>
+
+        <p><code>immediate</code> starts as soon as the rules are parsed. Use only for a small, certain set.</p>
+
+        <p><code>eager</code> is nearly the same in current implementations — it begins right away for matching links.</p>
+
+        <p><code>moderate</code> triggers on hover after about 200ms, or on touchstart. This is the sweet spot for ecommerce. A customer who has hovered a product card for a fifth of a second is very likely to click it, and 200ms of prerender head start is often the whole page.</p>
+
+        <p><code>conservative</code> triggers on pointerdown. That's roughly 80 to 100ms before the click completes on desktop, less on touch. Small win, almost no waste.</p>
+
+        <p>The prerender case is qualitatively different from everything else in this article. The browser loads the page in a hidden tab and runs its JavaScript. When the customer clicks, the navigation is instant — not fast, instant, because the page already exists. On a Magento product page with a 900ms server response and 1.4s to interactive, a moderate-eagerness prerender on the category grid turns a click into a paint.</p>
+
+        <h3>What you must exclude</h3>
+
+        <p>Never prerender anything with a side effect. Add-to-cart URLs, logout links, anything with a token in the query string, one-click reorder buttons. The browser will execute the page. If your "add to basket" is a GET request — and on older Magento themes it sometimes still is — a prerender adds the item to the basket for a customer who never clicked.</p>
+
+        <p>I found exactly that on a client's site three weeks after enabling speculation rules, in the form of a slow rise in cart abandonment that turned out to be items nobody had chosen. That was my mistake: I'd written the rules against a selector rather than an explicit denylist, and the add-to-cart control on quick-view cards matched it.</p>
+
+        <p>Handle it in code as well as in the rules, because rules are easy to get wrong:</p>
+
+        <pre><code class="language-javascript">// Anything with a side effect should refuse to run during prerender
+// and wait for actual activation.
+if (document.prerendering) {
+  document.addEventListener('prerenderingchange', initAnalytics, { once: true });
+} else {
+  initAnalytics();
+}
+
+// Server side, the header tells you a speculative load is happening.
+// Sec-Purpose: prefetch;prerender
+// Do not count it as a session. Do not decrement stock. Do not send email.</code></pre>
+
+        <p>The <code>Sec-Purpose</code> request header is your server-side control. Check it, and make sure your analytics, your rate limiter and your stock reservation logic all know about it. Ignoring it produces inflated pageviews, and a WAF that doesn't know about it will occasionally decide a browser fetching eight pages in two seconds is a scraper.</p>
+
+        <h2>9. The Contention Math</h2>
+
+        <p>People ask how many hints is too many, and want a number. The number depends on the connection, but the shape of the answer doesn't.</p>
+
+        <p>Over HTTP/2 and HTTP/3 you have one connection per origin and unlimited concurrent streams on it. That sounds like it removes the constraint. It doesn't, because the bottleneck moved from connection count to bandwidth and to the server's ability to prioritise the multiplexed streams sensibly.</p>
+
+        <p>A 4G connection at 8 Mbps carries 1MB per second. If you preload 400KB of resources at high priority, everything else on the page — including the LCP image, if it isn't one of them — waits behind roughly 400ms of transfer. That's not a subtle effect. It is the whole LCP budget for a page that was otherwise going to be fast.</p>
+
+        <p>The rule I use: the sum of everything at High priority before first paint should be under 170KB. That number comes from the initial TCP congestion window of 10 packets — about 14KB — multiplied out over the first two round trips, and it's the same reasoning behind the old advice to keep critical CSS small. It isn't precise. It's a budget you can check.</p>
+
+        <p>Which in practice means: two fonts, or one font and the LCP image, or the critical CSS and one font. Not eleven of anything.</p>
+
+        <p>There's a second-order effect worth naming. Preloading pulls a resource forward in time but it doesn't create bandwidth. If you preload the hero image and it arrives 300ms earlier, something else arrived 300ms later. On a well-built page that something is a below-fold image nobody was waiting for, and the trade is excellent. On a page with eleven preloads, the thing arriving later is whatever you actually needed.</p>
+
+        <h2>10. Auditing a Site That Already Has Hints</h2>
+
+        <p>Most of my resource-hint work is subtraction. Here's the process, in the order I run it.</p>
+
+        <h3>Step one: enumerate</h3>
+
+        <p>Pull every hint off every page type. Not just the homepage — templates diverge, and the worst offenders are usually the ones nobody profiles.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# hints-audit.sh — list every resource hint on a set of URLs.
+for url in "$@"; do
+  echo "=== $url"
+  curl -sSL "$url" \
+    | grep -oiE '&lt;link[^&gt;]*rel="?(preload|prefetch|preconnect|dns-prefetch|modulepreload)"?[^&gt;]*&gt;' \
+    | sed -E 's/.*(rel="?[a-z-]+"?).*(href="[^"]*").*/\1 \2/'
+done</code></pre>
+
+        <p>Run it against ten URLs covering home, category, product, cart, checkout, account, search results, a CMS page, a blog post and a 404. Ten minutes, and it routinely turns up hints that were added for a campaign in 2022.</p>
+
+        <h3>Step two: check every URL resolves</h3>
+
+        <p>The safety equipment brand had two 404ing preloads. That's not rare — asset paths change during a theme update and the head doesn't get updated because nothing visibly breaks.</p>
+
+        <pre><code class="language-bash"># Every preloaded URL must return 200. A 404 costs a connection slot
+# and a round trip on every page view, forever, silently.
+grep -oE 'href="[^"]*"' hints.txt | cut -d'"' -f2 | sort -u | while read -r u; do
+  code=$(curl -o /dev/null -sS -w '%{http_code}' "https://example.com${u}")
+  [ "$code" = "200" ] || echo "BROKEN $code $u"
+done</code></pre>
+
+        <h3>Step three: look for the unused-preload warning</h3>
+
+        <p>Load each page in Chrome with the console open. Every "preloaded but not used within a few seconds" warning is either a deletion or a bug. Both are quick.</p>
+
+        <p>The most common cause of the warning on a working site is a missing or wrong <code>as</code> value, or a missing <code>crossorigin</code> on a font. The second most common is a preload for something a media query means this device never loads.</p>
+
+        <h3>Step four: sort the network panel by priority</h3>
+
+        <p>Load the page throttled to Fast 3G — not because customers are on 3G, but because throttling exposes ordering that a fast connection hides. Then read down the priority column.</p>
+
+        <p>What you want to see: document, critical CSS, LCP image and fonts at the top, in that neighbourhood, all starting within the first couple of hundred milliseconds. What you usually see: a chat widget at High because someone preloaded it, and the LCP image at Low because it's a CSS background nobody hinted.</p>
+
+        <h3>Step five: measure, don't assume</h3>
+
+        <p>Every change gets a before and after on the same connection profile, five runs each, median taken. Resource hints produce effects in the 100–400ms range, which is small enough to disappear inside run-to-run variance if you measure once. I've been fooled by a single lucky run more than once, and the fix is boring discipline rather than a better tool.</p>
+
+        <pre><code class="language-javascript">// PerformanceObserver you can paste into a console to see what the
+// browser actually did, including the priority it assigned.
+new PerformanceObserver((list) =&gt; {
+  for (const e of list.getEntries()) {
+    if (e.initiatorType === 'link' || e.initiatorType === 'img') {
+      console.log(
+        e.name.split('/').pop().padEnd(34),
+        `start=${Math.round(e.startTime)}ms`,
+        `dur=${Math.round(e.duration)}ms`,
+        `size=${Math.round(e.transferSize / 1024)}KB`,
+        e.renderBlockingStatus || ''
+      );
+    }
+  }
+}).observe({ type: 'resource', buffered: true });</code></pre>
+
+        <h2>11. Where Hints Sit Relative to Everything Else</h2>
+
+        <p>A comparison, because the choice between these is the part people get wrong rather than the syntax.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Hint</th><th>Priority</th><th>Fetches?</th><th>Use when</th><th>Cost of getting it wrong</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>dns-prefetch</code></td><td>n/a</td><td>No</td><td>Third-party origin used later in the page</td><td>Negligible</td></tr>
+            <tr><td><code>preconnect</code></td><td>n/a</td><td>No</td><td>Origin needed within ~2s, max 3–4 of them</td><td>Wasted handshake, held socket</td></tr>
+            <tr><td><code>preload</code></td><td>High (by <code>as</code>)</td><td>Yes, now</td><td>Late-discovered critical resource</td><td>Delays everything else</td></tr>
+            <tr><td><code>modulepreload</code></td><td>High</td><td>Yes, plus parse</td><td>ES module dependency chains</td><td>Same as preload, plus parse cost</td></tr>
+            <tr><td><code>prefetch</code></td><td>Lowest</td><td>Yes, idle</td><td>Likely next navigation</td><td>Wasted bandwidth only</td></tr>
+            <tr><td><code>fetchpriority</code></td><td>Adjusts</td><td>No, modifies</td><td>Reordering a fetch that already happens</td><td>Mild reordering harm</td></tr>
+            <tr><td>Speculation prefetch</td><td>Lowest</td><td>Yes, idle</td><td>Multi-link next-navigation guesses</td><td>Bandwidth, analytics noise</td></tr>
+            <tr><td>Speculation prerender</td><td>Lowest</td><td>Yes, plus render</td><td>High-confidence next page, no side effects</td><td>Executes a page you didn't want run</td></tr>
+          </tbody>
+        </table>
+
+        <h2>12. Fonts, Specifically</h2>
+
+        <p>Fonts are the canonical preload case and they're still the one I most often find done wrong, so it's worth walking the whole chain.</p>
+
+        <p>The sequence without a hint: HTML arrives, CSS is discovered and fetched, CSS is parsed, style is computed, layout runs, layout determines a text node needs Inter Regular, the font is requested. Six steps, two of them network round trips.</p>
+
+        <p>With a preload, the font request starts alongside the CSS request. On a 60ms RTT connection that's a saving of one full round trip plus however long the CSS took to parse — typically 150 to 400ms of text either invisible or shown in a fallback face.</p>
+
+        <pre><code class="language-html">&lt;link rel="preload" href="/fonts/inter-var-latin.woff2"
+      as="font" type="font/woff2" crossorigin&gt;</code></pre>
+
+        <pre><code class="language-css">@font-face {
+  font-family: 'Inter';
+  /* Variable font, one file instead of four weights. */
+  src: url('/fonts/inter-var-latin.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  /* swap: show fallback immediately, swap when the file lands.
+     optional: use fallback and never swap if it's slow — no layout
+     shift at all, at the cost of some visitors never seeing your face. */
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F;
+}</code></pre>
+
+        <p>Preload only the faces used above the fold. On a storefront that's usually one weight of one family — the body face — and occasionally a display face if it's in the header. Preloading four weights because the design system defines four is how you spend your entire high-priority budget on text that renders below the scroll.</p>
+
+        <p>Subset ruthlessly. A full Inter variable file with every script is over 300KB. Latin-only with the range above is around 30KB. That single change is worth more than any hint you can add, which is a theme in this work: the fastest resource is the one you didn't need.</p>
+
+        <p><code>font-display: optional</code> deserves a mention because it interacts with hints in a way that surprises people. With <code>optional</code>, the browser gives the font a very short window and then commits to the fallback permanently for that page view. Preloading widens the chance of hitting that window. Without a preload, <code>optional</code> means most first-time visitors never see your typeface at all. With one, most do. If you care about CLS above all, that pairing — preload plus <code>optional</code> — is the strongest combination available, and I use it on templates where layout stability matters more than brand fidelity.</p>
+
+        <h2>13. The LCP Image, and the Discovery Problem</h2>
+
+        <p>Roughly three quarters of pages have an image as their LCP element. Getting that one file to start downloading early is the single highest-leverage thing in this article.</p>
+
+        <p>Three situations, three different answers.</p>
+
+        <p><strong>The image is an <code>&lt;img&gt;</code> in the initial HTML.</strong> The preload scanner finds it. Don't preload. Add <code>fetchpriority="high"</code> and be done. Also make sure it does not have <code>loading="lazy"</code>, which is the most common self-inflicted LCP wound I encounter — a lazy attribute on the hero image defers it until layout, costing 300ms or more for nothing.</p>
+
+        <p><strong>The image is a CSS background.</strong> The scanner cannot see it. Preload with <code>as="image"</code>, and use <code>imagesrcset</code> and <code>imagesizes</code> so you preload the same variant the CSS will pick. Getting those wrong means you download two versions of the hero.</p>
+
+        <p><strong>The image is rendered by JavaScript.</strong> A carousel, a personalised hero, a React component that hydrates. The scanner sees nothing and neither does layout until the bundle runs. This is the case where preload earns its keep most dramatically, and where server-rendering the first slide is a better fix than any hint. If the framework can emit the first image into the initial HTML, do that instead; I've written about the render-path side of this in the piece on <a href="/blog/critical-css-optimization/">critical CSS and the render path</a>.</p>
+
+        <p>One more thing about responsive images. If your <code>srcset</code> offers five widths and you preload one, you have made a device-independent decision about a device-dependent resource. <code>imagesizes</code> lets the preload respect the same sizing logic, and it is the only correct way to preload a responsive image:</p>
+
+        <pre><code class="language-html">&lt;link rel="preload" as="image"
+      imagesrcset="/hero-640.avif 640w, /hero-1024.avif 1024w, /hero-1600.avif 1600w"
+      imagesizes="(max-width: 700px) 100vw, 60vw"
+      fetchpriority="high"&gt;</code></pre>
+
+        <h2>14. What Priority Means on the Wire</h2>
+
+        <p>Browser-side priority is only half the story. The server has to honour it.</p>
+
+        <p>HTTP/2 shipped with a dependency-tree prioritisation scheme that was complex, hard to implement, and implemented inconsistently or not at all. Several major CDNs and origin servers ignored the client's tree entirely and served round-robin. That meant a browser could correctly decide the LCP image mattered most and the server would still interleave it evenly with a below-fold sprite sheet.</p>
+
+        <p>HTTP/3 replaced it with something far simpler: an urgency value from 0 to 7 plus an incremental flag, sent as a <code>Priority</code> header or a PRIORITY_UPDATE frame. Simple enough that implementations actually do it.</p>
+
+        <pre><code class="language-http">Priority: u=1, i</code></pre>
+
+        <p>Practical consequence: on HTTP/3 with a CDN that implements extensible priorities, your <code>fetchpriority</code> hints propagate to the wire and produce measurably better ordering under constrained bandwidth. On older HTTP/2 stacks they affect the order the browser issues requests and not much else. Both are worth having, but the effect size differs, and if you measured a hint change on an HTTP/2 origin and saw nothing, the transport may be why.</p>
+
+        <p>Worth checking what your CDN does before attributing a null result to the hint. Cloudflare, Fastly and Akamai have all changed behaviour here within the last few years.</p>
+
+        <h2>15. A Worked Example</h2>
+
+        <p>The safety equipment brand again. Magento 2.4.7, Hyvä theme, Cloudflare, product listing page as the target because it takes 38% of organic entries.</p>
+
+        <p>Baseline, median of five runs on a throttled 4G profile with 150ms RTT: LCP 3.4s, FCP 1.9s, TTFB 620ms. Eleven preloads in the head, 640KB of them.</p>
+
+        <p><strong>Change one.</strong> Deleted the two 404ing preloads and the analytics bundle preload. LCP 3.4s to 3.1s. Nothing but subtraction.</p>
+
+        <p><strong>Change two.</strong> Deleted the carousel library preload and the two icon sprite preloads, moving all three to <code>defer</code>. LCP 3.1s to 2.7s.</p>
+
+        <p><strong>Change three.</strong> The hero on this template is an <code>&lt;img&gt;</code> in the markup, and it had <code>loading="lazy"</code> applied by a global rule in the theme. Removed it for the first card in the grid and added <code>fetchpriority="high"</code>. LCP 2.7s to 2.15s. Biggest single win, and it was an attribute removal.</p>
+
+        <p><strong>Change four.</strong> Two font preloads, both missing <code>crossorigin</code>. Added it. Both fonts had been downloading twice. LCP unchanged — the fonts weren't the LCP element — but FCP moved 1.9s to 1.65s and the layout shift from the font swap disappeared.</p>
+
+        <p><strong>Change five.</strong> Subset the fonts to latin, dropping 210KB to 44KB across the two faces. FCP 1.65s to 1.5s.</p>
+
+        <p><strong>Change six.</strong> Speculation rules with moderate eagerness on product card links. Doesn't affect the listing page's own metrics at all — it affects the next page, where measured LCP for prerendered navigations was effectively zero and for the 63% of clicks that weren't prerendered, unchanged.</p>
+
+        <p><strong>What went wrong.</strong> Change six is the one that bit me, and I described it above: the selector matched quick-view add-to-cart controls, which were GET requests in that theme. Over eleven days, 340 phantom cart additions. Nobody complained, because the affected customers just saw an item in their cart they didn't remember adding and removed it, but the abandonment rate on the cart page moved by nearly a point and it took me two days to connect it to the deployment. Fixed by switching the rule to an explicit <code>href_matches</code> on <code>/products/*</code> plus a <code>data-no-prefetch</code> denylist attribute, and by making the add-to-cart endpoint POST-only, which it should have been anyway.</p>
+
+        <p>Final state: LCP 2.15s, FCP 1.5s, three resource hints in the head where there had been eleven. The net change was removing 596KB of high-priority preloading and adding one attribute.</p>
+
+        <h2>16. What Breaks</h2>
+
+        <p><strong>Duplicate downloads from mismatched preloads.</strong> Wrong <code>as</code>, missing <code>crossorigin</code>, a different URL than the one the CSS resolves to, a preload of an absolute URL where the page requests a relative one. Every mismatch is a full second copy of the file.</p>
+
+        <p><strong>Preloads for resources behind media queries.</strong> A preload has no media awareness unless you add a <code>media</code> attribute. Preload a desktop hero and every mobile visitor downloads it, then downloads the mobile one too.</p>
+
+        <p><strong>Cache-busting mismatches.</strong> Your build appends a content hash to filenames. Your head was written by hand. After a deploy, the preload points at the old hash, 404s, and the browser fetches the new one normally. The site works. You've just added a round trip to every page view. Generate hints from the same manifest that generates the asset names, always.</p>
+
+        <p><strong>Prerender and analytics.</strong> If you don't gate on <code>document.prerendering</code>, your pageview count inflates by however many prerenders fire, your bounce rate drops artificially, and any funnel measurement built on pageviews becomes wrong in a direction that looks like an improvement. That last part is genuinely dangerous, because nobody investigates a metric that got better.</p>
+
+        <p><strong>Prerender and rate limiting.</strong> A browser fetching several documents in a burst looks like a scraper. I've had a WAF rule challenge real customers because speculation rules made them look automated. Exempt requests carrying <code>Sec-Purpose</code>, or at least count them separately.</p>
+
+        <p><strong>Third-party tag managers adding hints.</strong> GTM can inject <code>&lt;link rel="preconnect"&gt;</code> and preload tags, and marketing teams add them without telling anyone. Your head audit needs to run against the rendered DOM as well as the served HTML, or you'll miss half of them.</p>
+
+        <p><strong>Preload on a page served from bfcache.</strong> Back-forward navigations restore the page wholesale; hints don't re-run and don't need to. Harmless, but it's why your field data for repeat navigations won't show the improvement your lab test did.</p>
+
+        <h2>17. What About HTTP Link Headers?</h2>
+
+        <p>Every hint in this article can also be delivered as a <code>Link</code> response header rather than a markup tag.</p>
+
+        <pre><code class="language-nginx">add_header Link '&lt;/fonts/inter-var-latin.woff2&gt;; rel=preload; as=font; type="font/woff2"; crossorigin' always;
+add_header Link '&lt;/css/critical.css&gt;; rel=preload; as=style' always;</code></pre>
+
+        <p>The advantage is that the header arrives with the response's first bytes, before any HTML has been parsed, which can start the fetch a few milliseconds earlier. The bigger advantage is that it's the mechanism <code>103 Early Hints</code> uses, so if you're going down that road the header form is what you'll be emitting anyway.</p>
+
+        <p>The disadvantage is that headers are set in infrastructure and markup is set in templates, and infrastructure changes get forgotten. A preload in a Nginx config outlives the theme it was written for. If you use header-based hints, they need to be in the same review process as the code.</p>
+
+        <p>My default is markup for anything template-specific and headers only for things that are genuinely global. And I'd note that on most stacks the difference in start time is under 20ms — real, but not worth restructuring your deployment over.</p>
+
+        <h2>18. Questions That Come Up</h2>
+
+        <p><strong>"Should I preload my critical CSS?"</strong> No. A stylesheet link in the head is already discovered by the preload scanner and already assigned the highest priority the browser has. There's nothing to gain. The exception is CSS loaded via JavaScript or via an <code>@import</code>, in which case fix that instead.</p>
+
+        <p><strong>"How many preconnects can I have?"</strong> Three or four, and that's covered properly in the <a href="/blog/preconnect-dns-prefetch/">connection-setup article</a>. Each holds a socket open for ten seconds whether you use it or not.</p>
+
+        <p><strong>"Does prefetch work cross-origin?"</strong> Partially, and it has got more restricted. Cross-site prefetches are subject to storage partitioning, and Chrome will not use a cross-site prefetched response if cookies would differ. For same-site navigation it works well. For a prefetch of a different registrable domain, assume it may not be used.</p>
+
+        <p><strong>"Can I preload something that requires credentials?"</strong> Yes, with the <code>crossorigin="use-credentials"</code> value, and the credentials mode must match the eventual request exactly. This is the same matching problem as fonts and it fails in the same silent way.</p>
+
+        <p><strong>"Do resource hints help Core Web Vitals scores directly?"</strong> They help LCP, which is a third of the score. They can hurt CLS if a preloaded font arrives at an awkward moment without <code>size-adjust</code> set on the fallback. They don't touch INP, which is a main-thread problem and needs different work entirely.</p>
+
+        <p><strong>"Is Speculation Rules safe for a store with limited stock?"</strong> Only if your stock reservation happens on POST rather than on page view, and only if you check <code>Sec-Purpose</code>. Some Magento extensions reserve inventory on the product page render, which is a bad idea generally and becomes an outage with prerendering enabled.</p>
+
+        <p><strong>"Which browsers support Speculation Rules?"</strong> Chromium only, as things stand. Firefox and Safari have shown interest and neither has shipped it. That's fine — it's a progressive enhancement and non-supporting browsers simply get the current behaviour. But don't build a UX that depends on instant navigation.</p>
+
+        <p><strong>"Should I use a library that prefetches links on hover?"</strong> Not any more. Speculation Rules does the same thing natively, with better eviction, proper partitioning, and no JavaScript on the main thread. If you have quicklink or instant.page installed, replacing it with a speculation rules block is a straight upgrade.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>On a site with existing hints, in this order, and note that the first three are all deletions.</p>
+
+        <p>One. Run the enumeration script across ten page types and delete every hint whose URL doesn't return 200. Free.</p>
+
+        <p>Two. Delete every preload that duplicates something the preload scanner already finds — anything with a matching <code>src</code> or <code>href</code> in the body. Also free, and it's usually half of them.</p>
+
+        <p>Three. Fix the fonts: <code>crossorigin</code> present, <code>as="font"</code>, <code>type</code> set, and only the faces used above the fold.</p>
+
+        <p>Four. Find your LCP element and make sure it is not lazy-loaded and does carry <code>fetchpriority="high"</code>. If it's a CSS background or JavaScript-rendered, preload it with correct <code>imagesrcset</code>.</p>
+
+        <p>Five. Total up what's left at high priority. If it's over about 170KB before first paint, cut until it isn't.</p>
+
+        <p>Six. Add <code>fetchpriority="low"</code> to the third-party scripts you can't remove.</p>
+
+        <p>Seven, and only once the above is done: speculation rules with <code>moderate</code> eagerness, on an explicit allowlist of URL patterns, with side-effect URLs excluded and <code>Sec-Purpose</code> handled server-side.</p>
+
+        <p>The step people want to start at is seven, because it's the one that produces a demonstration you can show someone. It's also the one that can add items to a customer's basket if you get it wrong. Do the subtraction first — it's where most of the time is, and it can't break anything.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -228,7 +691,6 @@
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -262,6 +724,6 @@
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

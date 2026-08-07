@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Micro-Frontend Architecture for Enterprise E-Commerce Storefronts | MODRACX</title>
-  <meta name="description" content="Technical guide on decoupling enterprise e-commerce UI into independent micro-frontends using Webpack Module Federation and Single-SPA framework." />
+  <meta name="description" content="When micro-frontends are the wrong choice, and how to implement Module Federation on a storefront without paying a megabyte of duplicated framework code." />
   <meta property="og:title" content="Micro-Frontend Architecture for Enterprise E-Commerce Storefronts | MODRACX" />
   <meta property="og:description" content="Technical guide on micro-frontend architecture by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Micro-Frontend Architecture for Enterprise E-Commerce Storefronts</h1>
-        <p class="lede">Scaling front-end engineering teams across massive e-commerce monoliths leads to deployment bottlenecks. Micro-frontends break UI domains (Cart, Checkout, Catalog) into independently deployed apps.</p>
+        <p class="lede">A storefront split across five teams was shipping three copies of React and a megabyte of duplicated framework code. The architecture was working exactly as designed.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 31 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,42 +205,701 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Webpack Module Federation Configuration</h2>
+        <h2>1. The Storefront That Shipped Three Copies of React</h2>
 
-        <pre><code class="language-javascript">// Webpack 5 Module Federation Plugin Configuration
+        <p>A tiles and stone retailer brought me in because their product listing page had gone from a 1.9s Largest Contentful Paint to something north of 5s on mobile, and nobody could explain why. The team had spent six weeks on it. They had compressed images, moved to AVIF, added preconnect hints, and shaved maybe 200ms. The number would not move.</p>
+
+        <p>I opened the network panel and counted the JavaScript. 1.4MB compressed. Inside it were three separate copies of React — 17.0.2, 18.2.0, and 18.3.1 — two copies of a date library, and two different versions of their own design system package, one of which shipped its own copy of the icon set. The storefront had been split into five micro-frontends eighteen months earlier: header, search, product grid, cart drawer, and a recommendations strip. Each was owned by a different squad, each deployed independently, and each had drifted onto its own dependency tree because nobody enforced the shared scope.</p>
+
+        <p>The architecture was working exactly as designed. Teams shipped without coordinating. Releases were independent. The deployment pipeline was genuinely nice to use. And the customer was downloading a megabyte of duplicated framework code before they could see a price.</p>
+
+        <p>I want to be careful about the lesson here, because the easy version of it is wrong. Micro-frontends did not make that site slow. A specific set of decisions inside a micro-frontend implementation made it slow, and those decisions were all reversible. But the reason they went unmade for eighteen months is structural: the architecture removed the shared checkpoint where somebody would have noticed. That is the honest trade. You buy team autonomy and you pay with the loss of a single place where the whole page gets looked at.</p>
+
+        <p>This article is about when that trade is worth making, how to implement it so the bill stays small, and — the part most articles on this topic skip — how to recognise that you are not the kind of organisation this pattern was invented for. Most storefronts are not. I have advised against micro-frontends more often than I have implemented them, and I do not regret a single one of those conversations.</p>
+
+        <h2>2. What the Pattern Actually Is</h2>
+
+        <p>Strip away the conference talks and a micro-frontend architecture is one claim: independently deployable units of user interface, composed into a single page at runtime, each owned end to end by a separate team.</p>
+
+        <p>The three words that matter are <em>independently deployable</em>. If your "micro-frontends" are npm packages that get versioned into a host application which then gets rebuilt and redeployed, you do not have micro-frontends. You have a modular monolith with extra steps, and — this is not an insult — a modular monolith is very often the correct answer. It gives you most of the code-organisation benefit with none of the runtime cost. The distinguishing feature of a real micro-frontend is that team B can push to production at 2pm and the code running in the customer's browser changes without team A rebuilding anything.</p>
+
+        <p>Everything difficult about the pattern follows from that one property. If team B's code can change without a build step that sees team A's code, then no build step can deduplicate their dependencies, type-check across the boundary, tree-shake globally, or tell you that a shared prop shape changed. All of those guarantees move from compile time to runtime, which means they move from "the build fails" to "the customer sees a broken page". You are trading a class of errors that are cheap to find for a class of errors that are expensive to find.</p>
+
+        <p>The compensating benefit is organisational. A hundred-engineer commerce organisation with eight product squads has a coordination problem that no amount of clever code structure solves. Every release is a negotiation. Every shared file is a merge conflict. Every regression is an argument about whose change caused it. Micro-frontends convert that coordination cost into a technical cost, and technical costs are ones engineers can attack.</p>
+
+        <h2>3. When I'd Tell You Not To</h2>
+
+        <p>I want this section early rather than buried at the end, because the honest answer for most readers is "not this".</p>
+
+        <p><strong>You have fewer than four frontend teams.</strong> Not four engineers — four teams, each with its own backlog, its own product owner, and its own release cadence. Below that, the coordination cost you are trying to eliminate is a standup conversation. A single repository with clear module boundaries and code ownership rules will serve you better, and you can adopt micro-frontends later when the pain is real. Architecture that solves a problem you do not have is just cost.</p>
+
+        <p><strong>Your storefront is one page type that matters.</strong> A lot of ecommerce revenue concentrates in the product detail page and checkout. If the majority of your commercial value sits on two templates, splitting those templates across teams creates a coordination problem rather than solving one, because every change to the page involves everyone anyway.</p>
+
+        <p><strong>You are performance-constrained and near the edge.</strong> If your Core Web Vitals are marginal — an LCP hovering around 2.5s, an INP that occasionally crosses 200ms — a micro-frontend layer will push you over. It adds bytes, adds a runtime composition step, and makes the critical path harder to reason about. Get the page fast first. The work in <a href="/blog/core-web-vitals/">fixing Core Web Vitals</a> is not optional groundwork you can defer until after the re-architecture; a slow micro-frontend storefront is much harder to diagnose than a slow monolithic one.</p>
+
+        <p><strong>You do not have platform engineering capacity.</strong> This pattern requires someone to own the shell, the shared dependency contract, the design system distribution, the observability story, and the deployment tooling. If nobody owns that, each team solves it locally and you get the three-copies-of-React outcome. That ownership is roughly one to two engineers permanently, not a project.</p>
+
+        <p><strong>Your teams are not actually independent.</strong> If every feature requires backend changes from a central team, splitting the frontend achieves nothing. The bottleneck moves, it does not disappear. Conway's Law works in both directions: an architecture that does not match your communication structure will be fought by it.</p>
+
+        <p>The uncomfortable version of this list: micro-frontends are an organisational tool implemented in JavaScript. If your problem is technical, you want a different technique.</p>
+
+        <h2>4. The Composition Choices</h2>
+
+        <p>There are four ways to get independently built UI onto one page, and the choice constrains everything after it.</p>
+
+        <h3>Build-time composition</h3>
+
+        <p>Each team publishes an npm package; the shell installs them and builds. Deduplication works, tree-shaking works, types work. It is by far the safest option and it is not a micro-frontend architecture, because deploying a change requires rebuilding the shell. I mention it because it is the right answer more often than teams want to hear, and because it is a legitimate intermediate step: split the code first, decouple the deployments later, when you can prove the deployment coupling is what hurts.</p>
+
+        <h3>Server-side composition</h3>
+
+        <p>The server assembles fragments from multiple services into one HTML document before it goes out. Edge-side includes, Nginx SSI, or a purpose-built composition layer. This is the oldest approach and it is enjoying a quiet revival because it is very good for what ecommerce actually needs: HTML arrives complete, the browser renders it immediately, and the JavaScript cost is whatever each fragment chooses to add. If your priority is a fast first paint on a content-heavy catalogue page, look here before you look at anything client-side.</p>
+
+        <h3>Runtime composition via Module Federation</h3>
+
+        <p>Webpack (or Rspack, or Vite via plugin) exposes modules from one build and consumes them in another over HTTP at runtime. Shared dependencies are negotiated at load time against a declared version range. This is the mainstream choice and most of this article assumes it.</p>
+
+        <h3>Web components as the boundary</h3>
+
+        <p>Each micro-frontend registers a custom element; the shell writes tags. Framework-agnostic, browser-native, and the style isolation is real rather than conventional. The cost is that passing rich data across a custom element boundary is awkward, Shadow DOM makes global styling and some third-party scripts unhappy, and SSR support is uneven. I like this for genuinely independent widgets — a store locator, a review panel — and dislike it for anything that needs to share deep state with the page.</p>
+
+        <p>A fifth option deserves one honest sentence: iframes are correct for embedding something you do not control, and wrong for first-party storefront UI — separate layout, separate accessibility tree, terrible responsive behaviour.</p>
+
+        <h2>5. Module Federation Without the Foot-Guns</h2>
+
+        <p>The core configuration is small, which is misleading. Almost every problem I have debugged in a federated storefront traces back to four lines of it.</p>
+
+        <pre><code class="language-javascript">// webpack.config.js — the product grid micro-frontend
 const { ModuleFederationPlugin } = require('webpack').container;
+const deps = require('./package.json').dependencies;
 
 module.exports = {
+  output: {
+    // Must be absolute. A relative publicPath resolves against the *host's*
+    // URL at runtime and every chunk 404s the moment you deploy separately.
+    publicPath: 'https://mfe-catalog.shop.example.com/',
+  },
   plugins: [
     new ModuleFederationPlugin({
-      name: 'checkoutApp',
+      name: 'catalog',
       filename: 'remoteEntry.js',
       exposes: {
-        './CheckoutWidget': './src/CheckoutWidget',
+        './ProductGrid': './src/ProductGrid',
+        './FacetPanel': './src/FacetPanel',
       },
-      shared: ['react', 'react-dom'],
+      shared: {
+        react: {
+          singleton: true,        // one copy in the page, always
+          strictVersion: true,    // fail loudly instead of silently double-loading
+          requiredVersion: deps.react,
+        },
+        'react-dom': {
+          singleton: true,
+          strictVersion: true,
+          requiredVersion: deps['react-dom'],
+        },
+        '@shop/design-system': {
+          singleton: true,
+          requiredVersion: deps['@shop/design-system'],
+        },
+      },
     }),
   ],
 };</code></pre>
 
-        <hr />
+        <p><code>singleton: true</code> is the setting that would have saved the retailer at the top of this article. Without it, Module Federation is perfectly happy to load two copies of React side by side, and it will not warn you, because from its point of view two remotes wanting incompatible versions is a situation it has resolved rather than a problem it has found.</p>
+
+        <p><code>strictVersion: true</code> is the one people turn off after their first bad afternoon, and turning it off is how you end up eighteen months later with a megabyte of duplicates. Without it, a version mismatch produces a console warning and a second copy. With it, you get a hard failure at load time — which is unpleasant in development and exactly what you want in CI, because it turns a silent performance regression into a build that fails.</p>
+
+        <p>My rule: <code>strictVersion</code> stays on everywhere, and the framework version is not a per-team decision. It is a platform decision with a coordinated upgrade window. Teams own their features; they do not own which React the page runs.</p>
+
+        <h3>Consuming a remote</h3>
+
+        <pre><code class="language-javascript">// shell/webpack.config.js
+new ModuleFederationPlugin({
+  name: 'shell',
+  remotes: {
+    // The URL is injected at build time per environment, not hardcoded.
+    catalog: `catalog@${process.env.CATALOG_URL}/remoteEntry.js`,
+  },
+  shared: { react: { singleton: true, strictVersion: true } },
+});</code></pre>
+
+        <p>Hardcoding remote URLs into the shell bundle is the mistake that quietly recouples everything. The moment a URL is baked into the shell's build output, promoting the catalog remote to a new version requires a shell rebuild — and you have reinvented build-time composition while paying the runtime cost of federation. Load the manifest at runtime instead.</p>
+
+        <pre><code class="language-javascript">// Dynamic remote loading: the shell learns about remotes at runtime
+async function loadRemote(scope, module, url) {
+  // Inject the remote entry only once per scope
+  if (!window[scope]) {
+    await new Promise((resolve, reject) =&gt; {
+      const el = document.createElement('script');
+      el.src = url;
+      el.onload = resolve;
+      el.onerror = () =&gt; reject(new Error(`remote ${scope} failed to load`));
+      document.head.appendChild(el);
+    });
+    // Share the host's dependency scope with the remote before first use
+    await __webpack_init_sharing__('default');
+    await window[scope].init(__webpack_share_scopes__.default);
+  }
+  const factory = await window[scope].get(module);
+  return factory();
+}</code></pre>
+
+        <p>The two <code>__webpack_*</code> calls are the whole mechanism. <code>init_sharing</code> populates the shared scope from the host; <code>init</code> hands that scope to the remote so it can decide whether to use the host's React or load its own. Call them out of order and the remote loads its own copy, silently. This is the single most common cause of "why do I have two Reacts" and it never produces an error.</p>
+
+        <h2>6. The Shell Is a Product, Not Plumbing</h2>
+
+        <p>Teams treat the shell as a thin router that happens to boot other applications. Then it accumulates responsibilities — auth, layout, analytics, feature flags, error handling — and becomes the least-owned, most-critical code in the estate.</p>
+
+        <p>Decide early and write it down: the shell owns routing, the document shell, authentication state, the shared dependency contract, and error isolation. It owns nothing that renders a product. If a shell change is required to ship a feature, that is a design smell and it will recur.</p>
+
+        <pre><code class="language-javascript">// A minimal shell mount with error isolation.
+// If one micro-frontend explodes, the rest of the page survives.
+class MicroFrontendBoundary extends React.Component {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error, info) {
+    // Tag the report with the owning team so it routes correctly
+    reportError(error, {
+      mfe: this.props.name,
+      team: this.props.team,
+      componentStack: info.componentStack,
+    });
+  }
+
+  render() {
+    if (this.state.failed) return this.props.fallback ?? null;
+    return this.props.children;
+  }
+}</code></pre>
+
+        <p>Error boundaries are not optional here in the way they are optional in a monolith. In a single application, an unhandled render error is your bug and you will see it in your own error tracking within minutes. In a federated page, it is another team's bug, it takes down the whole page, and the team who owns the shell gets the incident call. Boundaries turn a page outage into a missing recommendations strip.</p>
+
+        <p>The fallback matters too, and it is worth arguing about per slot. A missing recommendations strip should render nothing. A missing product grid should render a static server-rendered fallback or a link to the category sitemap, not an empty div — because an empty product grid is indistinguishable from "we have no stock" and customers leave.</p>
+
+        <h2>7. Shared State Is Where This Gets Genuinely Hard</h2>
+
+        <p>The cart is the problem. It is read by the header, written by the product page, displayed by the drawer, validated at checkout, and every one of those might be a different deployment unit.</p>
+
+        <p>I have seen four approaches and I only like one of them.</p>
+
+        <p><strong>A shared state library imported by everyone</strong> couples all micro-frontends to one version of that library and to one shape of state. The moment team A needs a new field, everyone upgrades together. You have recreated the coordination problem inside a package.</p>
+
+        <p><strong>Props drilled from the shell</strong> works for small, stable data and makes the shell the owner of domain state, which it should not be. Every cart feature now needs a shell change.</p>
+
+        <p><strong>A global event bus</strong> is the pattern everyone reaches for and the one that ages worst. Events are untyped, unordered, and untraceable. Six months in, nobody knows who listens to <code>cart:updated</code>, and removing an emit is a production incident. If you use one, it needs a versioned schema and a registry of subscribers, at which point you have built a message broker in the browser and should ask whether you wanted that.</p>
+
+        <p><strong>The server is the source of truth and each micro-frontend fetches it</strong> is the approach I would defend. The cart lives on the backend, every consumer reads it through a shared cache keyed on the same endpoint, and mutations invalidate the key. Nobody shares JavaScript state at all; they share an HTTP resource, which is a contract you can version, test, and monitor.</p>
+
+        <pre><code class="language-javascript">// Cross-MFE cache invalidation without a shared store.
+// Each micro-frontend owns its own query client; the only shared
+// surface is the URL, which is a contract the backend already publishes.
+const CART_KEY = '/api/cart';
+
+export function useCart() {
+  return useSWR(CART_KEY, fetchJson, {
+    revalidateOnFocus: true,
+    dedupingInterval: 2000, // collapse the header + drawer double-fetch
+  });
+}
+
+// After a mutation, tell every listener the resource changed.
+// A BroadcastChannel keeps other *tabs* honest too, which matters
+// more on ecommerce than people expect.
+const channel = new BroadcastChannel('cart');
+
+export async function addToCart(sku, qty) {
+  await postJson('/api/cart/items', { sku, qty });
+  channel.postMessage({ type: 'invalidate' });
+  mutate(CART_KEY);
+}
+
+channel.onmessage = (e) =&gt; {
+  if (e.data?.type === 'invalidate') mutate(CART_KEY);
+};</code></pre>
+
+        <p>Yes, this means more network requests than a shared in-memory store. On a storefront that is usually the right trade: cart state that is subtly wrong is a support ticket and a lost order, and the request is a few hundred bytes against a stale-cart bug that takes a week to reproduce. Deduplicate aggressively, cache at the edge where you safely can, and accept the chattiness.</p>
+
+        <h2>8. Routing Across Boundaries</h2>
+
+        <p>Two models, and mixing them is where the URL bar starts lying to people.</p>
+
+        <p>In <strong>shell-owned routing</strong>, the shell parses the URL and decides which micro-frontend mounts. Micro-frontends receive a base path and may route within it. This keeps deep links predictable and makes the routing table one artefact you can read.</p>
+
+        <p>In <strong>distributed routing</strong>, each micro-frontend registers its own routes with a central router — this is what single-spa does well — and the composition is emergent. More flexible, harder to reason about, and route collisions become a runtime discovery.</p>
+
+        <p>I use shell-owned routing with a declarative table, because on a storefront the URL structure is an SEO asset and it should not be an emergent property of who deployed last.</p>
+
+        <pre><code class="language-javascript">// One readable routing table in the shell. Path ownership is explicit.
+const ROUTES = [
+  { path: '/',                mfe: 'home',     module: './HomePage' },
+  { path: '/c/:slug',         mfe: 'catalog',  module: './CategoryPage' },
+  { path: '/p/:sku',          mfe: 'catalog',  module: './ProductPage' },
+  { path: '/cart',            mfe: 'checkout', module: './CartPage' },
+  { path: '/checkout/*',      mfe: 'checkout', module: './CheckoutFlow' },
+  { path: '/account/*',       mfe: 'account',  module: './AccountShell' },
+];
+
+// Prefetch the remote entry on link hover: the composition penalty
+// mostly disappears if the bundle is already warm when the click lands.
+document.addEventListener('mouseover', (e) =&gt; {
+  const link = e.target.closest('a[href^="/"]');
+  if (!link) return;
+  const route = matchRoute(ROUTES, new URL(link.href).pathname);
+  if (route) warmRemote(route.mfe);
+}, { passive: true });</code></pre>
+
+        <p>The hover prefetch is worth more than it looks. Median hover-to-click on desktop is a few hundred milliseconds, which is often enough to have fetched and parsed a remote entry. It does not help on touch, where you want an intersection-observer-driven prefetch of the likely next route instead. Neither technique removes the cost; both move it out of the interaction.</p>
+
+        <h2>9. What This Costs in Performance</h2>
+
+        <p>Here is the part most articles hand-wave. Concrete numbers from a mid-sized storefront I measured, comparing a monolithic build against the same features split into four remotes, on a throttled 4G profile with a mid-range Android device.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Monolith</th><th>Federated (naive)</th><th>Federated (tuned)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>JS transferred, first load</td><td>318 KB</td><td>742 KB</td><td>391 KB</td></tr>
+            <tr><td>Requests before LCP</td><td>14</td><td>23</td><td>17</td></tr>
+            <tr><td>LCP (p75, mobile)</td><td>2.1s</td><td>3.8s</td><td>2.4s</td></tr>
+            <tr><td>INP (p75)</td><td>140ms</td><td>310ms</td><td>180ms</td></tr>
+            <tr><td>Main-thread blocking</td><td>410ms</td><td>1,180ms</td><td>520ms</td></tr>
+          </tbody>
+        </table>
+
+        <p>Read the third column honestly. Tuned federation is still worse than the monolith on every metric. It is close enough to be acceptable, and it is nowhere near free. If somebody tells you micro-frontends have no performance cost, they have either not measured or they are comparing against a monolith that was already badly built.</p>
+
+        <p>The gap between naive and tuned came from four things, in order of impact: enforcing singletons; eliminating a manifest-then-entry-then-chunk waterfall; server-rendering the above-the-fold region; and deferring the recommendations and reviews remotes until after first interaction.</p>
+
+        <p>That last one is the cheapest win available and it applies whatever your architecture. Most storefronts have two or three page regions that no customer sees within the first four seconds. Loading them eagerly is a habit, not a requirement — the same reasoning that drives <a href="/blog/lazy-loading-code-splitting/">lazy loading and code splitting</a> in a single-bundle app applies with more force here, because in a federated page each deferred region is a whole separate network fetch you are removing from the critical path.</p>
+
+        <h3>The waterfall nobody sees on localhost</h3>
+
+        <p>Federation has a structural latency issue that is easy to miss in development, where everything is on localhost.</p>
+
+        <p>To render a federated component the browser must: load the shell bundle, execute it, discover it needs a remote, fetch <code>remoteEntry.js</code> from a different origin, execute that, resolve the shared scope, fetch the actual module chunk, and only then render. That is at minimum two extra sequential round trips, on a connection that may need a fresh DNS lookup and TLS handshake for each new origin.</p>
+
+        <p>On a good fixed connection this costs perhaps 60ms and nobody notices. On a 4G connection with 100ms RTT, two extra sequential round trips plus a cold connection is comfortably 400–600ms added to your LCP, and it lands squarely on the critical path.</p>
+
+        <p>Three mitigations, in order of how much they buy you.</p>
+
+        <p><strong>Serve every remote from the same origin.</strong> Path-based routing at the CDN — <code>/mfe/catalog/</code>, <code>/mfe/checkout/</code> — rather than subdomains. This eliminates the DNS and TLS cost entirely and lets the connection be reused. It requires CDN configuration rather than DNS records, which teams find less convenient and which is worth the inconvenience.</p>
+
+        <pre><code class="language-nginx"># Same-origin remotes: the browser reuses one connection for everything.
+location /mfe/catalog/ {
+    proxy_pass https://catalog-mfe.internal/;
+    # remoteEntry.js must never be cached long: it is the pointer to
+    # everything else, and a stale one pins customers to an old release.
+    location ~ /remoteEntry\.js$ {
+        proxy_pass https://catalog-mfe.internal/remoteEntry.js;
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+}
+
+# The hashed chunks it points at, however, are immutable and cache forever.
+location ~ ^/mfe/[^/]+/static/.*\.[0-9a-f]{8,}\.(js|css)$ {
+    add_header Cache-Control "public, max-age=31536000, immutable";
+}</code></pre>
+
+        <p>That cache split is the important detail. <code>remoteEntry.js</code> is a manifest and must be revalidated; the chunks it names are content-hashed and should be cached for a year. Get this backwards — a long TTL on the entry file — and you will deploy a fix and watch it not reach anyone for hours, with no way to tell which customers are on which version.</p>
+
+        <p><strong>Preload the entry files for the current route.</strong> The shell knows from its routing table which remotes this URL needs. Emit link hints in the initial HTML rather than discovering them in JavaScript.</p>
+
+        <pre><code class="language-html">&lt;!-- Rendered server-side, based on the matched route --&gt;
+&lt;link rel="modulepreload" href="/mfe/catalog/remoteEntry.js"&gt;
+&lt;link rel="preload" as="script" href="/mfe/catalog/static/ProductGrid.8f3c2a91.js"&gt;</code></pre>
+
+        <p>The second line requires the shell to know the current chunk hash, which means reading each remote's build manifest at render time. That is real infrastructure work, and it is the difference between a federated page that feels fine and one that feels sluggish.</p>
+
+        <p><strong>Inline the critical fragment.</strong> If the above-the-fold region belongs to one micro-frontend, render its HTML server-side and stream it with the document. The remote then hydrates rather than mounts, and the round trips overlap with rendering instead of blocking it.</p>
+
+        <h2>10. Server-Side Rendering Across Remotes</h2>
+
+        <p>This is the hardest part of the whole pattern and the reason several teams I know quietly reverted.</p>
+
+        <p>Client-side federation is a solved problem with documented configuration. Server-side federation means your Node process must load another team's server bundle, at runtime, over the network, and execute it — with all the version-skew, cold-start, and failure-isolation questions that implies, in a process where a crash takes out every request in flight rather than one browser tab.</p>
+
+        <p>Options, from most to least conservative.</p>
+
+        <p><strong>Do not SSR the federated parts.</strong> Server-render the shell and the shared chrome; client-render the remotes with a proper skeleton. Simple, reliable, and it costs you the LCP benefit on whichever region matters most. Fine if your LCP element is a hero image the shell owns.</p>
+
+        <p><strong>Compose fragments over HTTP.</strong> Each micro-frontend exposes an endpoint that returns rendered HTML plus a manifest of the assets that hydrate it. The shell fetches those in parallel, with a timeout, and stitches them.</p>
+
+        <pre><code class="language-javascript">// Fragment composition with a hard timeout and a per-fragment fallback.
+// A slow team must not be able to slow the whole page down.
+async function fetchFragment(name, url, timeoutMs = 250) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() =&gt; ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`${name} returned ${res.status}`);
+    return await res.json(); // { html, assets: { js: [], css: [] } }
+  } catch (err) {
+    metrics.increment('fragment.fallback', { fragment: name });
+    // Empty HTML plus the client assets: the region will fill in
+    // after hydration rather than blocking the document.
+    return { html: '', assets: assetManifest[name], degraded: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const fragments = await Promise.all(
+  route.fragments.map(f =&gt; fetchFragment(f.name, f.ssrUrl))
+);</code></pre>
+
+        <p>The 250ms timeout is a deliberate policy choice, not a tuning parameter. It says: any team whose server render takes longer than a quarter of a second forfeits their server-rendered HTML for that request. Without a number like that, one team's slow database query becomes everyone's slow page, and the political conversation that follows is worse than the technical one.</p>
+
+        <p><strong>Streaming composition.</strong> Send the document shell immediately, stream each fragment into place as it resolves. This is the best answer for a storefront and the most work, because you need out-of-order streaming, placeholder slots, and hydration that tolerates arriving late.</p>
+
+        <p>My honest position: if you need server rendering for SEO and LCP on your highest-value pages, and you also need micro-frontends, do server-side fragment composition and do not attempt runtime server-side Module Federation. The people who make the latter work well are running platform teams with a dedicated budget for it. The people who try it with one engineer and a deadline produce something that pages someone at 3am.</p>
+
+        <h2>11. Styling, and How the Design System Becomes the Real Boundary</h2>
+
+        <p>The moment you split the frontend, your CSS becomes a distributed system, and CSS has no module system worth the name.</p>
+
+        <p>Global styles are the obvious hazard: a reset shipped by two remotes applies twice, a utility class defined slightly differently in two builds resolves by source order, and source order in a federated page is a function of load timing, which is a function of network conditions. That produces the worst bug class available — visual differences that only reproduce on slow connections.</p>
+
+        <p>What works, in order of preference.</p>
+
+        <p><strong>CSS custom properties as the contract.</strong> The design system publishes tokens as custom properties on <code>:root</code>. Every micro-frontend consumes tokens and never hardcodes a value. Tokens can change centrally without any team rebuilding — one of the very few genuinely free wins in this architecture.</p>
+
+        <pre><code class="language-css">/* Published once by the shell. Every remote reads these and owns none. */
+:root {
+  --shop-color-accent: #0b6b53;
+  --shop-space-3: 0.75rem;
+  --shop-radius-card: 6px;
+  --shop-font-body: "Inter var", system-ui, sans-serif;
+}
+
+/* Inside a remote: no literals, ever. A token change ships without a rebuild. */
+.product-card {
+  border-radius: var(--shop-radius-card);
+  padding: var(--shop-space-3);
+  font-family: var(--shop-font-body);
+}</code></pre>
+
+        <p><strong>Scoped class names, enforced by build config.</strong> CSS Modules or a hashed prefix per remote, checked in CI. Cheap and effective.</p>
+
+        <pre><code class="language-javascript">// Every remote prefixes its generated class names with its own name.
+// A collision then becomes impossible rather than unlikely.
+{
+  loader: 'css-loader',
+  options: {
+    modules: {
+      localIdentName: 'catalog__[local]__[hash:base64:5]',
+    },
+  },
+}</code></pre>
+
+        <p><strong>Shadow DOM</strong> gives true isolation and takes global styling away with it, including your design system's tokens unless you explicitly pierce through. Custom properties do inherit through shadow boundaries, which is precisely why the token approach pairs well with it.</p>
+
+        <p>What consistently fails: a written agreement that everyone will use the design system. Six months later there are three button variants that look almost the same, because a designer wanted 2px more padding and writing CSS was faster than filing a request. That is a friction problem, not a discipline one.</p>
+
+        <h2>12. Versioning and the Contract Between Teams</h2>
+
+        <p>Independent deployment means every pair of micro-frontends is running some combination of versions that nobody tested together. On a page with five remotes each having three live versions in rotation, that is 243 combinations. You will not test them. You need to constrain them instead.</p>
+
+        <p>Three constraints that make this tractable.</p>
+
+        <p><strong>Shared dependencies are pinned by the platform, not negotiated.</strong> React, the router, the design system: one version, upgraded on a schedule with a deprecation window. Teams that cannot upgrade in the window get help, not an exemption.</p>
+
+        <p><strong>The interface between shell and remote is a versioned contract, tested from both sides.</strong> Whatever props the shell passes and whatever the remote exposes gets a schema, and both sides test against a shared fixture.</p>
+
+        <pre><code class="language-typescript">// contracts/catalog@2.ts — published as a versioned package,
+// consumed by the shell AND by the catalog team's own tests.
+export interface CatalogMountProps {
+  readonly version: 2;
+  readonly basePath: string;
+  readonly locale: string;
+  readonly currency: string;
+  /** Present only for signed-in sessions. */
+  readonly customerId?: string;
+  onNavigate(path: string): void;
+  onAddToCart(sku: string, qty: number): Promise&lt;void&gt;;
+}
+
+// The remote validates at mount rather than trusting the host.
+// A shell that ships a v1 payload to a v2 remote fails visibly,
+// in that one region, instead of corrupting state silently.
+export function assertProps(p: unknown): asserts p is CatalogMountProps {
+  const c = p as CatalogMountProps;
+  if (c?.version !== 2) {
+    throw new Error(`catalog: expected contract v2, got ${c?.version}`);
+  }
+}</code></pre>
+
+        <p><strong>Expand and contract, never rename.</strong> Adding a field is safe. Removing or changing one requires publishing the new shape alongside the old, migrating consumers, then deleting — over at least two release cycles. This is the same discipline as evolving a public API, because that is what this is. The teams that skip it discover that a "quick prop rename" broke a page they have never opened.</p>
+
+        <p>Consumer-driven contract testing helps more here than unit tests do. The shell publishes what it sends; each remote's CI verifies it can handle those payloads; a change on either side fails the other's pipeline before it reaches an environment. The same discipline that makes <a href="/blog/graphql-rest-api-performance/">API contracts between services</a> survivable applies unchanged when the consumer happens to be a browser.</p>
+
+        <h2>13. Deployment and Rollback</h2>
+
+        <p>The pitch is that each team deploys independently. The reality is that you now have N deployment pipelines and one blast radius, and rollback semantics that nobody thought about until they needed them.</p>
+
+        <p>The important property: because the shell resolves remotes at runtime from a manifest, deploying is publishing assets plus updating a pointer. That makes rollback nearly instant, if you keep old versions addressable.</p>
+
+        <pre><code class="language-bash"># Deploy: publish immutable, versioned assets; then move the pointer.
+VERSION="$(git rev-parse --short HEAD)"
+
+aws s3 sync ./dist "s3://mfe-assets/catalog/${VERSION}/" \
+  --cache-control "public, max-age=31536000, immutable"
+
+# The manifest is the only mutable object in the whole system.
+cat &gt; manifest.json &lt;&lt;JSON
+{ "catalog": "/mfe/catalog/${VERSION}/remoteEntry.js" }
+JSON
+
+aws s3 cp manifest.json s3://mfe-assets/manifests/production.json \
+  --cache-control "no-cache, must-revalidate"
+
+# Rollback is the same command with an older VERSION. Assets are
+# never deleted, so every previous release stays reachable.</code></pre>
+
+        <p>Two rules that come from getting this wrong. Never delete old versioned assets on deploy — a customer mid-session holds the old chunk hashes in memory and will request them; deleting the directory turns your deploy into their 404. Keep the manifest small enough to inline into the HTML.</p>
+
+        <p>Canary deployment works nicely because the manifest is per-request: serve a manifest naming the new version to 5% of sessions, keyed on a stable session identifier so a customer does not flip between versions mid-journey. That last detail is not fussiness. A customer who gets v2 on the listing page and v1 on the product page hits a contract mismatch, and it looks like a random bug.</p>
+
+        <h2>14. Observability When Nobody Owns the Page</h2>
+
+        <p>In a monolith, a stack trace tells you where the bug is. In a federated page, a stack trace points into a minified chunk built by a pipeline you do not have access to, and the first forty minutes of every incident is establishing whose code it is.</p>
+
+        <p>What you need before you go to production, not after.</p>
+
+        <p><strong>Attribution on every error.</strong> Every micro-frontend tags its reports with name, version, and owning team, and the shell tags anything it catches from a boundary.</p>
+
+        <pre><code class="language-javascript">// Attribute uncaught errors by walking the stack for a known remote path.
+// Crude, and better than the alternative of guessing in a war room.
+const REMOTE_PATTERNS = [
+  { re: /\/mfe\/catalog\//,  mfe: 'catalog',  team: 'discovery' },
+  { re: /\/mfe\/checkout\//, mfe: 'checkout', team: 'payments' },
+  { re: /\/mfe\/account\//,  mfe: 'account',  team: 'identity' },
+];
+
+window.addEventListener('error', (e) =&gt; {
+  const frame = e.error?.stack ?? e.filename ?? '';
+  const owner = REMOTE_PATTERNS.find(p =&gt; p.re.test(frame));
+  reportError(e.error, {
+    mfe: owner?.mfe ?? 'shell',
+    team: owner?.team ?? 'platform',
+    versions: window.__MFE_VERSIONS__, // full version map, every report
+  });
+});</code></pre>
+
+        <p>Shipping the whole version map with every error report costs a few hundred bytes and repeatedly pays for itself. "This only happens when catalog 4.2 runs alongside checkout 3.9" is a sentence you can only say if you recorded it.</p>
+
+        <p><strong>Per-micro-frontend performance attribution.</strong> Total page LCP is not actionable when five teams contribute. Use the Long Animation Frames API or, at minimum, wrap each mount in a performance mark, so you can say which region cost what.</p>
+
+        <pre><code class="language-javascript">performance.mark(`mfe:${name}:start`);
+await mount(el, props);
+performance.mark(`mfe:${name}:end`);
+const m = performance.measure(`mfe:${name}`, `mfe:${name}:start`, `mfe:${name}:end`);
+reportMetric('mfe_mount_ms', m.duration, { mfe: name, version });</code></pre>
+
+        <p><strong>Source maps uploaded from each pipeline to one place.</strong> Every team publishes maps to the shared error tracker on build, tagged with the same version string that appears in the manifest. Without this, minified traces are all you get and every investigation starts from nothing.</p>
+
+        <p><strong>A synthetic check that renders the composed page.</strong> Each team's tests pass in isolation; the page can still be broken. One headless browser run per environment, asserting that every expected region rendered, catches integration failures that no unit test will. Wire it into your <a href="/blog/cicd-pipeline-ecommerce/">deployment pipeline</a> as a gate on the manifest update rather than on each team's build, because the composition is what you are actually shipping.</p>
+
+        <h2>15. A Migration That Half Worked</h2>
+
+        <p>A B2B distributor, roughly 40,000 SKUs, Magento 2 backend, a React storefront that had grown to about 180,000 lines with four squads treading on each other. Release cadence had degraded to fortnightly because every release needed a full regression pass across everyone's work. That is a genuine micro-frontend problem, and I supported the decision.</p>
+
+        <p><strong>What we did.</strong> Strangler-fig, not big bang. The existing app became the shell. We extracted in order of independence: account area first (self-contained, low traffic, forgiving), then search and facets, then the product grid, then the cart drawer. Checkout was deliberately left in the shell and never extracted, because it is where the money is and the coordination cost of touching it is a feature.</p>
+
+        <p><strong>Timeline.</strong> Account took five weeks, mostly building tooling rather than moving code. Search took three. The product grid took nine, because it turned out to share state with the facet panel in ways nobody had documented and untangling that was most of the work. Total elapsed, about seven months alongside normal delivery.</p>
+
+        <p><strong>What went right.</strong> Deployment frequency went from every two weeks to a median of nine deploys a week across the four teams. Time from a merged PR to production dropped from around nine days to under four hours. The account team, previously blocked constantly, shipped a customer-specific pricing feature in a fortnight that had been on the backlog for over a year. Those are real numbers and they are the reason the project was worth doing.</p>
+
+        <p><strong>What went wrong.</strong> Three things, and I own the first two.</p>
+
+        <p>I underestimated the design system work. We started extraction with a component library that was documented but not versioned properly and had no visual regression testing. Within two months there were two subtly different product cards in production, and a customer complaint about inconsistent pricing display turned out to be two components formatting currency differently — one respected the locale's decimal separator, one did not. We stopped feature work for three weeks to fix the design system properly. That should have been phase zero.</p>
+
+        <p>I let the first two extractions ship without SSR and told myself we would add it later. Organic traffic to category pages fell about 8% over the following two months. Google was rendering the pages, but the delay between HTML and content pushed those pages down. Retrofitting fragment-based server rendering onto a client-only design took longer than building it that way would have, and we lost a quarter of traffic in the meantime. If a page matters for search, its server rendering story is a launch requirement, not a follow-up.</p>
+
+        <p>The third thing was not my call but was predictable. The organisation reorganised eleven months in, merging two of the four squads. The micro-frontend boundaries had been drawn along the old team lines, so one team now owned two remotes that would have been simpler as one, with a network boundary and a versioned contract between two halves of the same team's work. We merged them back six months later. Architecture that mirrors your org chart inherits your org chart's instability, and org charts change more often than codebases.</p>
+
+        <p><strong>Would I do it again?</strong> For that client, yes — the delivery improvement was decisive. For a client with two squads and the same technical setup, no, and I have told two clients exactly that since.</p>
+
+        <h2>16. What Breaks for Crawlers and Screen Readers</h2>
+
+        <h3>Search engines</h3>
+
+        <p>Search engines are the constituency most likely to be forgotten in this architecture, because they do not file bug reports.</p>
+
+        <p>Googlebot renders JavaScript, so a client-composed page will eventually be indexed. "Eventually" is the problem: rendering happens in a separate pass with its own queue, and on large catalogues that pass can lag the crawl by days. For a category page whose stock and pricing change weekly, indexing content days late is a real commercial cost.</p>
+
+        <p>Practical rules I hold to.</p>
+
+        <p>Anything you want indexed should be in the initial HTML response. Not hydrated — present. If the product grid is a client-mounted remote, the category page's actual content is invisible until render, and if any remote fails to load, the crawler sees an empty page and may well interpret it as thin content.</p>
+
+        <p>Structured data belongs to whoever owns the source of truth for that data, and it must appear exactly once. Two remotes each emitting a <code>Product</code> JSON-LD block for the same item produces duplicate entities and unpredictable rich results. I put schema generation in the server composition layer, reading from the same API the visual components use.</p>
+
+        <p>Canonical tags, <code>hreflang</code>, meta descriptions and the title belong to the shell, because they are document-level and there must be one authority. A remote that sets <code>document.title</code> after mount is a race condition against the crawler.</p>
+
+        <pre><code class="language-javascript">// Document metadata is shell-owned. Remotes *request* changes through a
+// narrow API rather than writing to the document directly, so the shell
+// stays the single writer and can ignore late arrivals.
+export function requestMetadata(mfe, patch) {
+  if (document.readyState === 'complete' &amp;&amp; patch.title) {
+    // Too late to matter for a crawler; log it so we can fix the source.
+    reportWarning('late_title_write', { mfe });
+  }
+  shellBus.emit('metadata', { mfe, patch });
+}</code></pre>
+
+        <p>And test what the crawler sees rather than what your browser shows. Fetch the page with JavaScript disabled and read the HTML. If your product names, prices and descriptions are not in it, you have a problem that no amount of technical elegance offsets.</p>
+
+        <h3>Assistive technology</h3>
+
+        <p>This is the failure mode nobody writes about, and it is one of the most reliable consequences of splitting a page across teams.</p>
+
+        <p>Accessibility is a property of the composed page, not of any component. Heading hierarchy, focus order, landmark regions, live-region announcements — every one of them is global, and every one of them can be correct in isolation and wrong in composition.</p>
+
+        <p>Concretely: three teams each independently decide their region deserves an <code>&lt;h1&gt;</code>, and now the page has three. Two teams each add an <code>aria-live</code> region for status messages, and a screen reader user hears cart updates twice. Each team implements a modal with its own focus trap, and opening one from inside another loses focus entirely.</p>
+
+        <p>The fixes are conventions plus enforcement.</p>
+
+        <p>The shell owns the landmark structure and the <code>h1</code>. Remotes start their heading hierarchy at <code>h2</code> and are linted for it. The shell provides one announcer service and one modal manager; remotes call them rather than implementing their own.</p>
+
+        <pre><code class="language-javascript">// One live region for the whole document, owned by the shell.
+// Remotes announce through it, so two simultaneous updates queue
+// instead of racing each other into silence.
+const region = document.getElementById('shell-announcer');
+let queue = Promise.resolve();
+
+export function announce(message, priority = 'polite') {
+  queue = queue.then(() =&gt; new Promise((resolve) =&gt; {
+    region.setAttribute('aria-live', priority);
+    region.textContent = message;
+    // Clearing after a beat lets an identical repeat message re-announce
+    setTimeout(() =&gt; { region.textContent = ''; resolve(); }, 1200);
+  }));
+}</code></pre>
+
+        <p>And run the automated accessibility check against the <em>composed</em> page in CI, not each remote's storybook. I have seen a storefront where every team's axe run was green and the real page had four <code>h1</code> elements.</p>
+
+        <h2>17. Testing a System With No Single Build</h2>
+
+        <p>Test strategy has to change shape, because the thing you ship is not the thing any pipeline builds.</p>
+
+        <p><strong>Unit and component tests stay where they are.</strong> Each team tests its own components in isolation, as before. This is necessary and proves nothing about the page.</p>
+
+        <p><strong>Contract tests replace integration tests at the boundary.</strong> The shell publishes the payloads it sends; each remote verifies it accepts them; each remote publishes what it emits; the shell verifies it handles that. Both sides run these in their own pipeline against a shared fixture, so a breaking change fails the other side's build before anything is deployed.</p>
+
+        <p><strong>Composed end-to-end tests, but few of them.</strong> Load the real shell with the real remotes and walk the two or three journeys that carry the revenue. These are slow and flaky and you still need them, because they are the only tests that exercise what a customer gets. Keep the number small enough that nobody is tempted to skip them when they go red.</p>
+
+        <pre><code class="language-javascript">// The composed smoke test: every region must actually appear.
+// Run against staging on every manifest update, not on every team's build.
+test('category page composes all regions', async ({ page }) =&gt; {
+  const failures = [];
+  page.on('console', (m) =&gt; { if (m.type() === 'error') failures.push(m.text()); });
+
+  await page.goto('/c/hand-tools');
+
+  await expect(page.locator('[data-mfe="header"]')).toBeVisible();
+  await expect(page.locator('[data-mfe="catalog"] [data-testid="product-card"]'))
+    .toHaveCount(24, { timeout: 5000 });
+  await expect(page.locator('[data-mfe="cart-drawer"]')).toBeAttached();
+
+  // A page that renders but logs errors is a page halfway to broken.
+  expect(failures).toEqual([]);
+});</code></pre>
+
+        <p><strong>A version-matrix check in staging.</strong> Before promoting a remote, run the smoke test against the incoming version combined with the current production versions of everything else. This catches the class of bug that only exists between versions, which is the class no team's own pipeline can see.</p>
+
+        <p>What I would not do: try to reproduce every version combination. It is combinatorially hopeless. Test the combination you are about to create, keep contracts narrow so combinations matter less, and invest the saved effort in fast rollback.</p>
+
+        <h2>18. Alternatives First, Then an Order to Migrate In</h2>
+
+        <h3>Three patterns that may solve it more cheaply</h3>
+
+        <p>Before committing, three cheaper patterns solve overlapping problems.</p>
+
+        <p><strong>A modular monolith with enforced boundaries.</strong> One repository, one build, strict module rules enforced by tooling — dependency-cruiser, ESLint boundary plugins, or a build system with explicit package graphs. Teams own directories; imports across boundaries fail CI. You get code ownership and mental separation, keep global optimisation and type safety, and give up independent deployment. For most storefronts this is the right answer and it takes weeks rather than quarters.</p>
+
+        <p><strong>Independent pages rather than independent regions.</strong> Split by route instead of by region: the account section is a separate application at <code>/account</code>, the checkout is another at <code>/checkout</code>, the catalogue is a third. Full page loads between them, shared session via cookies, shared look via a design system package. No runtime composition, no shared-dependency negotiation, and each team genuinely ships independently. The cost is a page transition at the boundaries — which on a storefront is usually acceptable, because customers already expect one when moving from browsing to buying. I recommend this more often than Module Federation and it is unglamorous enough that teams resist it.</p>
+
+        <p><strong>Server-driven UI.</strong> The backend describes what to render and the client interprets it. Excellent for merchandising surfaces that change often — promotional strips, recommendation rails — and poor for interaction-heavy interfaces.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Approach</th><th>Independent deploy</th><th>Runtime cost</th><th>Ops burden</th><th>Fits when</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Modular monolith</td><td>No</td><td>None</td><td>Low</td><td>1–3 teams, one product</td></tr>
+            <tr><td>Route-level split</td><td>Yes</td><td>Page transitions</td><td>Low</td><td>Clear functional areas</td></tr>
+            <tr><td>Server composition</td><td>Yes</td><td>Backend latency</td><td>Medium</td><td>SEO-critical, content-heavy</td></tr>
+            <tr><td>Module Federation</td><td>Yes</td><td>Bytes and waterfalls</td><td>High</td><td>4+ teams sharing a page</td></tr>
+            <tr><td>Web components</td><td>Yes</td><td>Moderate</td><td>Medium</td><td>Mixed frameworks, isolated widgets</td></tr>
+          </tbody>
+        </table>
+
+        <h3>If you have decided anyway: the extraction order</h3>
+
+        <p>If you have decided to do this, sequence matters more than technique. Extraction order determines whether you learn cheaply or expensively.</p>
+
+        <p>Start with the region that has the fewest inbound dependencies and the least commercial exposure. Account pages, order history, a help centre. You are extracting it to build the pipeline, the manifest, the observability and the rollback path against something forgiving. Expect it to take three to five times longer than the code justifies.</p>
+
+        <p>Second, take something with real traffic but a simple contract. Search results, a category grid. This is where you discover your performance budget was optimistic and your shared state assumptions were wrong.</p>
+
+        <p>Only then consider the product detail page, and think hard before touching checkout at all. Checkout benefits least from independent deployment — you want changes there to be slow and heavily reviewed — and suffers most from an extra failure mode. Leaving checkout in the monolith forever is a defensible permanent decision, not a compromise.</p>
+
+        <p>Throughout, keep the old path working behind a traffic flag. If you cannot measure conversion per variant, you cannot claim the migration was safe — only that nobody complained.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"Can different micro-frontends use different frameworks?"</strong> Technically yes. Practically, do not. Every framework you add is another runtime in the browser, another hiring constraint, another set of upgrade schedules, and another way for two components to disagree about how forms work. The framework-agnostic promise is the most-cited benefit and the least-used one. The teams I know who deliberately mixed React and Vue in one storefront standardised within eighteen months.</p>
+
+        <p><strong>"How big should a micro-frontend be?"</strong> Big enough that one team can own it and ship meaningful features without touching another. If you have a micro-frontend for a button, you have made a component and given it a network boundary. My rough test: if it does not correspond to something a product manager would call a feature area, it is too small.</p>
+
+        <p><strong>"What about the bundle size penalty — can it ever be zero?"</strong> No. Even perfectly configured, you lose cross-remote tree-shaking and cross-remote code splitting, and you pay for the federation runtime. Best case in my experience is 15–25% more JavaScript than an equivalent monolith. Budget for it explicitly rather than being surprised.</p>
+
+        <p><strong>"Should the shell be a framework application or plain JavaScript?"</strong> Plain, or as close as you can manage. A shell built in React that mounts React remotes silently makes React a hard requirement of the architecture rather than a current choice, and it makes the shell heavier than it needs to be. The shell's job is routing, mounting, and error isolation, and none of that needs a UI framework.</p>
+
+        <p><strong>"Monorepo or separate repositories?"</strong> Either works and it matters less than people argue. I lean monorepo with independent pipelines per package, because the discipline problem is easier to solve than the tooling problem.</p>
+
+        <p><strong>"How do we handle a team that consistently ships slow code?"</strong> With a performance budget enforced in their pipeline, expressed per micro-frontend: transferred bytes, mount duration, long tasks. The architecture makes this easier than a monolith does, because attribution is clean. The uncomfortable part is that this is a management conversation with a technical instrument, and the instrument does not have the conversation for you.</p>
+
+        <p><strong>"We already have three copies of React in production. What now?"</strong> Do exactly what I did on the job at the top of this article. Audit what is loaded from a real session, not from a build report. Turn on <code>singleton</code> and <code>strictVersion</code> in a branch and see what breaks — the failures tell you the true dependency graph. Then align versions one remote at a time, cheapest first. It took that retailer six weeks and removed 380KB. Nobody's feature work stopped.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>If you are considering this architecture, in order:</p>
+
+        <p><strong>One.</strong> Write down the specific delivery problem you are solving and how you will measure whether it improved. "Teams are blocked" is not measurable. "Median time from merge to production is nine days and we want it under one" is. If you cannot write that sentence, the answer is not micro-frontends.</p>
+
+        <p><strong>Two.</strong> Count your teams. Fewer than four with independent backlogs, stop and build a modular monolith instead. You can revisit in a year and you will have lost nothing.</p>
+
+        <p><strong>Three.</strong> Fix the design system before you split anything. Versioned, visually regression-tested, tokens published as custom properties, and easy enough to contribute to that working around it is the harder path. This is phase zero, and skipping it is the mistake I made.</p>
+
+        <p><strong>Four.</strong> Establish the performance budget before the first extraction. Bytes per remote, mount time, and a composed-page Core Web Vitals target measured in the field. Enforce it in CI from the first commit, because a budget introduced later is a budget that gets negotiated away.</p>
+
+        <p><strong>Five.</strong> Build the platform capabilities — manifest, deploy, rollback, error attribution, composed smoke test — against a low-risk region. Account pages. Accept that this first extraction is mostly infrastructure work and resist the pressure to make it deliver a feature.</p>
+
+        <p><strong>Six.</strong> Only then extract something that matters, behind a traffic flag, with conversion measured on both paths.</p>
+
+        <p>And keep asking the uncomfortable question at each step: is the delivery metric actually improving? If deployment frequency has not moved after two extractions, the bottleneck was never the frontend build, and you are paying a permanent runtime tax for an organisational fix that did not fix anything. Stopping at that point is a good outcome, not a failure. The worst version of this project is the one that runs to completion because it was announced, long after the evidence stopped supporting it.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO & Performance Strategies</a></strong>
+              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
               <p>Decoupled front-end architecture patterns.</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>GraphQL fetchers and edge rendering.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -272,6 +933,6 @@ module.exports = {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

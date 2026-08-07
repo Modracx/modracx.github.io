@@ -57,9 +57,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Headless Architecture: Decoupling Front-End & Back-End | MODRACX</title>
-  <meta name="description" content="An exhaustive technical engineering guide to Headless E-Commerce architecture, GraphQL API orchestration, Next.js storefronts, and Magento 2 / Shopify headless backends." />
+  <meta name="description" content="An honest engineering assessment of headless commerce: what decoupling genuinely buys you, the real cost in money and people, rendering and cache design, and when a monolith is the right answer." />
   <meta property="og:title" content="Headless Architecture: Decoupling Front-End & Back-End | MODRACX" />
   <meta property="og:description" content="Headless e-commerce architecture guide by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -191,17 +193,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Headless Architecture: Decoupling Front-End & Back-End</h1>
-        <p class="lede">The enterprise architectural guide to Headless E-Commerce: GraphQL API layers, Next.js edge rendering, and decoupling Magento 2 / Shopify Plus backends.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Headless Architecture: Decoupling Front-End &amp; Back-End</h1>
+        <p class="lede">A retailer spent £180,000 going headless and ended up with category pages slower than the theme they replaced. This is the decision, not the build — what decoupling buys, what it costs, and when the monolith wins.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -226,276 +228,503 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
+        <h2>1. The Rebuild That Made Everything Slower</h2>
 
-<h2>1. Monolithic Bottlenecks vs Decoupled Freedom</h2>
-<p>In traditional monolithic architectures, systems like classic Magento Luma or conventional Shopify Liquid themes tightly couple the frontend HTML presentation layer with backend database queries and PHP runtime execution. While this unified structure simplifies initial deployment, it inevitably introduces severe performance bottlenecks as traffic scales. Every page load triggers synchronous backend operations, memory allocations, and database queries that stall the Time to First Byte (TTFB) and block the main rendering thread.</p>
-<p>Decoupling the frontend into a standalone application—typically a lightweight Next.js or Nuxt.js framework communicating via strict GraphQL or REST APIs—radically alters this paradigm. By severing the presentation layer from the business logic layer, engineers can push pre-rendered static HTML directly to global edge Content Delivery Networks (CDNs). This architectural shift often reduces TTFB to under 50ms, effectively isolating the user experience from backend latency spikes or database lockups during aggressive flash sales.</p>
-<p>Furthermore, an API-first approach enables multi-channel syndication. A single robust backend commerce engine can serve a web storefront, a native mobile application, a Point of Sale (POS) system, and emerging channels like IoT devices simultaneously, without duplicating business logic.</p>
+        <p>In February 2024 I was asked to look at a storefront that had gone headless nine months earlier. A textiles retailer, about 6,000 SKUs, Magento 2.4.6 on the back and a Next.js 13 app on the front, deployed to Vercel. The rebuild had cost them a little over £180,000 and eleven months. The pitch had been performance.</p>
 
-<h2>2. Designing the Next.js App Router Storefront</h2>
-<p>Next.js, particularly with its App Router architecture, has established itself as the premier framework for headless e-commerce storefronts. By supporting Server Components natively, Next.js allows developers to execute heavy data fetching operations securely on the server, significantly reducing the JavaScript bundle size shipped to the client.</p>
-<p>In a headless configuration, the Next.js application acts as the orchestration layer. It receives incoming requests, determines the optimal rendering strategy (Static, Server, or Client), and fetches the requisite data from the backend commerce engine via API calls.</p>
-<p>Consider the product detail page (PDP), a critical conversion touchpoint. Instead of rendering the PDP dynamically on every request, we can leverage Next.js to generate these pages statically at build time or lazily via ISR. The initial HTML is served instantly from the edge cache.</p>
-<pre><code class="language-tsx">
-// app/products/[sku]/page.tsx
-import { notFound } from 'next/navigation';
-import { fetchProductBySku } from '@/lib/api/magento';
-import { ProductGallery } from '@/components/ProductGallery';
-import { AddToCartButton } from '@/components/AddToCartButton';
-import { generateProductStructuredData } from '@/lib/seo/structuredData';
+        <p>Their category pages were slower than the Luma theme they had replaced. Not marginally. The old site's largest contentful paint on a mid-range Android over 4G was around 2.9 seconds. The new one was 4.4. Their Core Web Vitals field data had gone from 68% of URLs passing to 31%, and organic traffic to category pages was down 22% year on year in a market that had grown.</p>
 
-export const revalidate = 3600; // Next.js ISR: Revalidate cache every hour
+        <p>Nothing about that was inevitable and nothing about it was Next.js's fault. What had happened was ordinary. Category pages were server-rendered on every request. Each render made four GraphQL calls to Magento in sequence — products, aggregations, CMS blocks, then a customer-group price lookup — and Magento's GraphQL endpoint took between 400ms and 1.9 seconds depending on the query. There was no cache in front of it because the price lookup was customer-specific, so somebody had marked the whole route as dynamic. The edge network they were paying for was serving a cache miss on every single request.</p>
 
-interface ProductPageProps {
-  params: { sku: string };
-}
+        <p>The fix took four weeks: split the page into a cached shell and a client-side price fragment, move aggregations to a build-time index, and put a 60-second stale-while-revalidate on the product data. LCP went to 1.6 seconds, better than either previous number. But the interesting question is not how we fixed it. It is whether they should have done the rebuild at all.</p>
 
-export async function generateMetadata({ params }: ProductPageProps) {
-  const product = await fetchProductBySku(params.sku);
-  if (!product) return {};
-  
-  return {
-    title: `${product.name} | Premium Gear`,
-    description: product.meta_description || product.short_description,
-    openGraph: {
-      images: [product.image.url],
-    },
-  };
-}
+        <p>My honest answer for that retailer is no. Six thousand SKUs, one market, one language, a small in-house team, no mobile app, no marketplace, and a merchandising team who wanted to edit a homepage banner without a deployment. Everything they actually needed was available from a fast monolithic theme at a fraction of the cost. They went headless because it was 2023 and going headless was what serious brands did.</p>
 
-export default async function ProductPage({ params }: ProductPageProps) {
-  const product = await fetchProductBySku(params.sku);
-  
-  if (!product) {
-    notFound();
-  }
+        <p>This article is the decision, not the build. What decoupling genuinely buys you, what it costs in money and people, what the platform quietly did for you that becomes your problem, and the cases — most cases — where the monolith is the correct engineering answer. If you have already made the decision and want the Shopify-specific mechanics, that is <a href="/blog/headless-shopify-hydrogen/">the Hydrogen and Oxygen build</a>, and the content layer sits in <a href="/blog/headless-cms-seo-performance/">headless CMS for SEO and performance</a>.</p>
 
-  const structuredData = generateProductStructuredData(product);
+        <h2>2. What Decoupling Actually Means</h2>
 
-  return (
-    &lt;main className="product-container max-w-7xl mx-auto px-4 py-8"&gt;
-      &lt;script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
-      /&gt;
-      
-      &lt;div className="grid grid-cols-1 md:grid-cols-2 gap-12"&gt;
-        &lt;ProductGallery images={product.media_gallery} /&gt;
-        
-        &lt;section className="product-details"&gt;
-          &lt;h1 className="text-4xl font-bold mb-4"&gt;{product.name}&lt;/h1&gt;
-          &lt;div className="price-block text-2xl font-semibold mb-6"&gt;
-            {product.price_range.minimum_price.final_price.currency}
-            {product.price_range.minimum_price.final_price.value}
-          &lt;/div&gt;
-          
-          &lt;div 
-            className="description prose mb-8"
-            dangerouslySetInnerHTML={{ __html: product.description.html }} 
-          /&gt;
-          
-          &lt;AddToCartButton sku={product.sku} /&gt;
-        &lt;/section&gt;
-      &lt;/div&gt;
-    &lt;/main&gt;
-  );
-}
-</code></pre>
-<p>This implementation ensures that the initial request is incredibly fast. The database is shielded from the frontend request volume because Next.js serves the cached HTML. When the ISR timer expires, the next request triggers a background regeneration, updating the cache asynchronously.</p>
-<p>For more detailed insights on how these rendering strategies affect search visibility, refer to our comprehensive guide on <a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce</a>.</p>
+        <p>Strip the marketing off and headless commerce is one structural change: the code that renders HTML no longer runs in the same process as the code that owns the data. That is it. Everything else — GraphQL, edge rendering, React, a separate CMS, microservices — is a consequence people chose, not part of the definition.</p>
 
-<h2>3. Magento 2 GraphQL API Orchestration & Batching</h2>
-<p>When acting as the headless backend, Magento 2 (Adobe Commerce) relies heavily on its GraphQL implementation to serve frontend requests. While REST APIs are available, GraphQL is specifically engineered for frontend orchestration, preventing the notorious over-fetching problem inherent in REST. A client application can precisely request the fields it needs—sku, name, and price—without downloading megabytes of irrelevant backend attribute data.</p>
-<p>One critical technique is query batching. Instead of sending five separate HTTP requests for header navigation, footer links, product data, cross-sells, and user session state, developers should batch these distinct GraphQL queries into a single HTTP POST request. Next.js supports this natively, but it requires careful structuring of the GraphQL client.</p>
-<pre><code class="language-typescript">
-// lib/api/magento.ts
-const MAGENTO_GRAPHQL_ENDPOINT = process.env.MAGENTO_URL + '/graphql';
+        <p>In a monolith, a request for <code>/kitchen/pans</code> arrives at PHP, which loads a category model, runs a product collection query, applies price rules for the logged-in customer group, and renders a template. One process, one memory space, one deployment, one place to look when it breaks. The template can reach into any object it likes because everything is in scope.</p>
 
-const GET_PRODUCT_QUERY = `
-  query getProductBySku($sku: String!) {
-    products(filter: { sku: { eq: $sku } }) {
-      items {
-        id
-        sku
-        name
-        url_key
-        description { html }
-        short_description { html }
-        media_gallery {
-          url
-          label
-        }
-        price_range {
-          minimum_price {
-            final_price {
-              value
-              currency
-            }
-          }
-        }
-      }
-    }
-  }
-`;
+        <p>Decoupled, the same request arrives at a Node process that has no database credentials and no domain model. It knows how to make HTTP calls. It asks the commerce backend for a category, gets JSON, asks for products, gets JSON, maybe asks a CMS for a banner, and assembles HTML from that. The boundary is the whole point and the whole cost. Every piece of data now has a serialisation format, a network hop, a failure mode, a cache policy, and a versioning problem.</p>
 
-export async function fetchHeadlessProduct(sku: string) {
-  try {
-    const res = await fetch(MAGENTO_GRAPHQL_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Store': 'default',
-      },
-      body: JSON.stringify({ 
-        query: GET_PRODUCT_QUERY, 
-        variables: { sku } 
-      }),
-      next: { 
-        tags: [`product-${sku}`],
-        revalidate: 3600 
-      }
-    });
+        <p>Three things follow from that boundary and they are worth naming before anyone draws a diagram.</p>
 
-    if (!res.ok) {
-      throw new Error(`Magento API responded with status: ${res.status}`);
-    }
+        <p><strong>You have converted in-process function calls into network calls.</strong> A Magento block that fetched related products used to cost half a millisecond. Over GraphQL it costs 40 to 400ms and can fail. This is not a detail; it is the dominant fact of the architecture. Every design decision downstream is about hiding, batching, or caching that cost.</p>
 
-    const json = await res.json();
-    
-    if (json.errors) {
-      console.error('GraphQL Errors:', json.errors);
-      throw new Error('Failed to fetch product data from Magento');
-    }
+        <p><strong>You have two deployables where you had one.</strong> Two pipelines, two rollback procedures, two on-call rotations if you are honest about it, and a contract between them that both sides can break independently.</p>
 
-    const items = json.data?.products?.items;
-    return items && items.length > 0 ? items[0] : null;
-    
-  } catch (error) {
-    console.error(`[Magento API Error] Fetching SKU ${sku}:`, error);
-    return null;
-  }
-}
-</code></pre>
-<p>Notice the inclusion of the <code>next: { tags: [\`product-${sku}\`] }</code> option. This implements Next.js On-Demand Revalidation. When a product is updated in the Magento Admin panel, a Magento observer or webhook can fire a lightweight request to the Next.js API route to invalidate only that specific tag.</p>
+        <p><strong>You have gained the ability to change one without the other.</strong> Which is the actual prize, and whether it is worth the first two things is the entire question.</p>
 
-<h2>4. Vercel Edge Middleware Caching and Personalization</h2>
-<p>One of the persistent challenges of static rendering is personalization. If a page is cached globally at the edge, how do we serve localized pricing, correct currency symbols, or user-specific promotional banners without sacrificing performance?</p>
-<p>The solution lies in Edge Middleware. By intercepting requests at the CDN level before they reach the Node.js server, middleware can execute lightweight logic—such as inspecting cookies, evaluating geolocation headers, or reading JWT tokens. It can then transparently rewrite the request to a localized variant of the statically generated page.</p>
-<pre><code class="language-typescript">
-// middleware.ts
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+        <h2>3. The Four Things Decoupling Genuinely Buys You</h2>
 
-export function middleware(request: NextRequest) {
-  const url = request.nextUrl;
-  
-  // Extract the viewer's country from Vercel's geolocation header
-  const country = request.geo?.country || 'US';
-  
-  // Check for an existing currency preference cookie
-  const cookieCurrency = request.cookies.get('currency')?.value;
-  
-  // Determine target currency based on logic
-  let targetCurrency = 'USD';
-  if (cookieCurrency) {
-    targetCurrency = cookieCurrency;
-  } else if (country === 'GB') {
-    targetCurrency = 'GBP';
-  } else if (country === 'EU') {
-    targetCurrency = 'EUR';
-  }
+        <p>I want to be precise here because most of the claimed benefits are either not real or are available more cheaply another way.</p>
 
-  // Rewrite the URL to a localized sub-path which is statically generated
-  if (!url.pathname.startsWith('/api') && !url.pathname.match(/^\/(en-US|en-GBP|en-EUR)/)) {
-    const localePrefix = `en-${targetCurrency}`;
-    url.pathname = `/${localePrefix}${url.pathname}`;
-    return NextResponse.rewrite(url);
-  }
+        <h3>Multiple front ends over one commerce core</h3>
 
-  return NextResponse.next();
-}
+        <p>This is the strongest case and the one that actually justifies the cost. If you have a web storefront, a native app, an in-store kiosk, a partner white-label site, and a marketplace feed that all need the same catalogue, pricing, and cart, then an API-first backend is not a luxury. The alternative — a monolith plus a bolted-on API layer plus three integrations that each reimplement price logic slightly differently — is worse in every dimension.</p>
+
+        <p>The test I apply: do you have at least two consumers of commerce data today, in production, owned by different teams? Not planned. Not on the roadmap. Today. If the answer is one, this benefit is hypothetical and you should not pay for it yet.</p>
+
+        <h3>Front-end release cadence independent of the platform</h3>
+
+        <p>On a monolithic Magento build, a copy change on the homepage goes through the same deployment pipeline as a database schema change. That pipeline has a maintenance window, a cache warm, and a rollback plan, and it takes twenty minutes on a good day. Teams respond to that friction by batching releases weekly, which means a two-word copy fix waits five days.</p>
+
+        <p>Decoupled, the front end deploys in ninety seconds with an atomic swap and instant rollback. That changes behaviour more than it changes engineering. Teams that can ship in ninety seconds ship twenty times a week and run experiments they would not otherwise bother with.</p>
+
+        <p>But note that a headless CMS with a monolithic storefront gets you most of this for a tenth of the cost, which is why the middle path covered further down deserves more consideration than it usually gets.</p>
+
+        <h3>Freedom in the rendering layer</h3>
+
+        <p>Server components, partial hydration, streaming, per-route rendering strategies, edge execution close to the user. A PHP monolith rendering full HTML per request cannot do any of it, and on a content-heavy storefront the difference in time-to-first-byte between a cached static render at the edge and an origin round trip to a datacentre three thousand kilometres away is real — I have measured 40ms against 320ms on the same site in the same week.</p>
+
+        <p>The catch is that this benefit is conditional on doing the caching work. The retailer at the top of this article had all the rendering freedom in the world and used it to build something slower than PHP. Rendering freedom is a lever, not a result.</p>
+
+        <h3>Replacing back-end components without a front-end rewrite</h3>
+
+        <p>The composable argument. Swap search from Magento's native to Algolia, swap the CMS, swap the review provider, eventually swap the commerce engine itself, all behind a stable API contract that the front end does not notice.</p>
+
+        <p>This is real, and I have done exactly one of these swaps cleanly — search, which is genuinely well-isolated. I have never seen anyone swap a commerce engine without a substantial front-end rewrite, because the front end inevitably depends on the shape of the data the engine returns, not just on the fact that data exists. Treat this benefit as "swapping peripheral services is much easier" rather than "the core is interchangeable", because the second claim does not survive contact with a real migration.</p>
+
+        <h2>4. The Bill, Itemised</h2>
+
+        <p>Nobody publishes this honestly, so here are the numbers I have actually seen on mid-market projects — meaning £2m to £30m of annual online revenue, which is where most of these decisions get made badly.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Line</th><th>Monolith (Magento/Shopify theme)</th><th>Decoupled</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Initial build</td><td>£40k–£90k</td><td>£120k–£350k</td></tr>
+            <tr><td>Elapsed time to launch</td><td>3–5 months</td><td>7–14 months</td></tr>
+            <tr><td>Front-end hosting per year</td><td>Included in platform</td><td>£3k–£25k</td></tr>
+            <tr><td>Extra services (CMS, search, image CDN)</td><td>£0–£6k</td><td>£12k–£45k</td></tr>
+            <tr><td>Engineers needed to keep it alive</td><td>0.5–1 FTE</td><td>2–3 FTE</td></tr>
+            <tr><td>Time to add a standard feature</td><td>Days, often an extension</td><td>Weeks, usually bespoke</td></tr>
+            <tr><td>Third-party app compatibility</td><td>Full ecosystem</td><td>Roughly a third of it</td></tr>
+          </tbody>
+        </table>
+
+        <p>The two rows that surprise people are the last two. On Shopify, an extension that injects a size-guide modal into product pages via the theme's app-embed mechanism installs in four minutes on a Liquid theme and is simply unavailable on a custom front end. On Magento, a Marketplace module that adds a checkout step ships PHP, templates, and layout XML — the PHP still works, and the templates and layout XML are dead weight you now have to reimplement in React.</p>
+
+        <p>I have watched a team spend six weeks rebuilding functionality that existed as a £280 module, because the module's front end was Knockout templates and their storefront was not. Nobody costed that in the business case. Nobody ever does, because at business-case time the answer to "what about apps?" is always "we'll build what we need", which is true and expensive.</p>
+
+        <p>The FTE row is the one that actually kills projects. A monolithic Shopify store can be run by a competent theme developer at half a day a week. A decoupled storefront needs somebody who understands React rendering modes, cache invalidation, a build pipeline, a CDN configuration, and the API contract, and that person needs a colleague because they take holidays. If you cannot fund two front-end engineers indefinitely, you cannot fund this architecture, and the pattern I see is that the agency who built it becomes a permanent retainer at £6k a month because nobody in-house can safely touch it.</p>
+
+        <h2>5. Things The Platform Was Doing That Are Now Yours</h2>
+
+        <p>This is the section I wish somebody had shown me in 2019. A commerce platform's theme layer does a lot of unglamorous work, and none of it appears in a feature comparison. When you take over rendering, you take over all of it.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Capability</th><th>Monolith</th><th>Now your job</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>XML sitemaps</td><td>Generated, paginated, scheduled</td><td>Build a generator, handle 50k limits</td></tr>
+            <tr><td>Canonical tags on filtered URLs</td><td>Config setting</td><td>Per-route logic you must write</td></tr>
+            <tr><td>301 redirects from URL-key changes</td><td>Automatic on save</td><td>Webhook, store, and middleware</td></tr>
+            <tr><td>Product structured data</td><td>Theme partial</td><td>Your JSON-LD, your validation</td></tr>
+            <tr><td>Pagination rel tags, robots on facets</td><td>Built in</td><td>Yours</td></tr>
+            <tr><td>Customer session and cart cookie</td><td>Framework-managed</td><td>Token handling across a boundary</td></tr>
+            <tr><td>Cache invalidation on price change</td><td>Tag-based, automatic</td><td>Webhook to purge, which you build</td></tr>
+            <tr><td>Preview of unpublished content</td><td>Admin toggle</td><td>Draft mode plumbing</td></tr>
+            <tr><td>Cookie consent gating of scripts</td><td>App or extension</td><td>Yours, including consent mode</td></tr>
+            <tr><td>Search result page behaviour</td><td>Built in</td><td>Yours, plus a search provider</td></tr>
+          </tbody>
+        </table>
+
+        <p>Redirects are the one that bites hardest and earliest. In Magento, changing a product's URL key writes a rewrite row and the old URL 301s forever. Decoupled, the front end never sees that table. Unless you explicitly consume it, every URL change in six years of catalogue history becomes a 404 the day you launch, and you find out from Search Console three weeks later when the rankings have already gone.</p>
+
+        <pre><code class="language-typescript">// middleware.ts — consume the platform's own rewrite table rather than
+// maintaining a second list of redirects that will drift from it.
+import { NextRequest, NextResponse } from 'next/server';
+import { redirectFor } from '@/lib/redirects';
 
 export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico).*)',
-  ],
+  // Do not run middleware on assets. Middleware invocations are billed and
+  // adding 30ms to every image request is a real cost at scale.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|svg|webp)).*)'],
 };
-</code></pre>
-<p>With this middleware in place, the Next.js application can utilize dynamic segments to generate static pages for multiple currencies. When a user in London requests the product page, the edge network immediately serves the pre-rendered GBP version.</p>
-<p>For more details on optimizing asset delivery, consult our guide on <a href="/blog/performance-optimization/">Performance Optimization Strategies</a>.</p>
 
-<h2>5. Security Posture and Infrastructure Hardening</h2>
-<p>Exposing backend commerce APIs directly to a frontend application demands rigorous security protocols. The decoupling process expands the attack surface, requiring explicit protection against DDoS attacks, GraphQL introspection abuse, and Cross-Site Request Forgery (CSRF).</p>
-<p>First, configure Cross-Origin Resource Sharing (CORS) on your backend to strictly accept requests only from authorized frontend domains. Never use wildcard origins in production environments.</p>
-<pre><code class="language-nginx">
-# Nginx API Gateway Security Configuration
-server {
-    listen 443 ssl http2;
-    server_name api.store.com;
+export async function middleware(req: NextRequest) {
+  const path = req.nextUrl.pathname;
 
-    # Strict CORS Headers
-    set $cors_origin "";
-    if ($http_origin ~* (https://store\.com|https://www\.store\.com)$) {
-        set $cors_origin $http_origin;
-    }
+  // KV lookup, single key, ~2ms at the edge. A database call here would
+  // put origin latency on every uncached page view.
+  const target = await redirectFor(path);
+  if (target) {
+    const url = req.nextUrl.clone();
+    url.pathname = target.to;
+    // 301 only when the platform marked it permanent; guessing wrong here
+    // is very hard to undo because browsers cache permanent redirects.
+    return NextResponse.redirect(url, target.permanent ? 301 : 302);
+  }
+  return NextResponse.next();
+}</code></pre>
 
-    add_header Access-Control-Allow-Origin $cors_origin always;
-    add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
-    add_header Access-Control-Allow-Headers "Authorization, Content-Type, Store" always;
-    add_header Access-Control-Allow-Credentials "true" always;
+        <p>The table behind <code>redirectFor</code> gets populated by a nightly export of Magento's <code>url_rewrite</code> table plus a webhook on product save. Neither is difficult. Both have to be somebody's explicit decision, and on three of the five headless launches I have reviewed after the fact, neither existed.</p>
 
-    # Handle Preflight OPTIONS requests
-    if ($request_method = 'OPTIONS') {
-        return 204;
-    }
+        <h2>6. The Rendering Decision Is The Architecture</h2>
 
-    # Timeouts to prevent Slowloris attacks
-    client_body_timeout 10s;
-    client_header_timeout 10s;
-    keepalive_timeout 15s;
-    send_timeout 10s;
+        <p>Once you own rendering, you make a per-route choice that determines your performance, your infrastructure bill, and how stale your prices are. Get this wrong and no amount of edge network fixes it.</p>
 
-    # Limit payload size to prevent buffer overflow attacks
-    client_max_body_size 2M;
+        <p>There are four modes worth distinguishing and the vocabulary is a mess across frameworks, so here is what I mean.</p>
 
-    location /graphql {
-        # Rate limiting zone (defined in http block)
-        limit_req zone=graphql_limit burst=20 nodelay;
-        
-        proxy_pass http://backend_upstream;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+        <p><strong>Static.</strong> HTML generated at build, served from CDN, identical for everyone. Time to first byte around 20–40ms anywhere in the world. Content is as fresh as your last build.</p>
+
+        <p><strong>Incremental or revalidated static.</strong> Static, but a request after the revalidation window triggers a background regeneration while still serving the stale copy. This is the mode most commerce pages should use and the one most often skipped because it requires thinking about what "stale" costs you on that specific page.</p>
+
+        <p><strong>Server-rendered per request.</strong> Fresh, personal, and as slow as your slowest upstream call. Correct for cart, account, and checkout. Almost never correct for a category page.</p>
+
+        <p><strong>Client-rendered fragment.</strong> Shell is static, a specific piece fetches after hydration. Correct for anything customer-specific on an otherwise public page.</p>
+
+        <p>The mistake in the opening story was treating personalisation as a page-level property. One customer-specific price on a category page had made the entire route dynamic. The right decomposition is to keep the page static and let the personal bit arrive separately.</p>
+
+        <pre><code class="language-typescript">// app/[category]/page.tsx
+// The page itself is public and cacheable. Nothing customer-specific renders
+// here, so it can be shared by every visitor and every bot.
+export const revalidate = 300; // seconds
+
+export default async function CategoryPage({ params }: { params: { category: string } }) {
+  const { products, facets } = await getCategory(params.category);
+
+  return (
+    &lt;div&gt;
+      &lt;Facets data={facets} /&gt;
+      &lt;ul&gt;
+        {products.map((p) =&gt; (
+          &lt;li key={p.sku}&gt;
+            &lt;ProductCard product={p} /&gt;
+            {/* Customer-group price arrives client-side after hydration.
+                Renders list price first so there is no layout shift and
+                no blank space if the price service is slow or down. */}
+            &lt;CustomerPrice sku={p.sku} fallback={p.price} /&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+
+        <p>That single change took their category TTFB from a median of 780ms to 34ms. It also meant a logged-in customer sees the list price for roughly 200ms before their contract price replaces it, which the client's commercial team had to agree to. They agreed instantly once they saw the traffic numbers, but they had to be asked, and this is the kind of trade that architecture decisions are actually made of.</p>
+
+        <h3>Choosing a revalidation window</h3>
+
+        <p>The question is not "how fresh do we want it" — everyone wants it instant. The question is what a stale value costs. A product title that is five minutes out of date costs nothing. A price that is five minutes out of date costs whatever the difference is, times the orders placed in those five minutes, and may be a legal problem in some jurisdictions. Stock that is five minutes stale costs you an oversell.</p>
+
+        <p>So: long windows plus event-driven purging. Set revalidation to an hour, and purge the specific tag when the platform tells you something changed.</p>
+
+        <pre><code class="language-typescript">// app/api/webhooks/product/route.ts
+import { revalidateTag } from 'next/cache';
+import { verifyHmac } from '@/lib/hmac';
+
+export async function POST(req: Request) {
+  const raw = await req.text();
+  // Verify before parsing. An unauthenticated purge endpoint is a free
+  // origin-load amplifier for anyone who finds the URL.
+  if (!verifyHmac(raw, req.headers.get('x-webhook-hmac'))) {
+    return new Response('bad signature', { status: 401 });
+  }
+
+  const { sku, categories } = JSON.parse(raw);
+  revalidateTag(`product:${sku}`);
+  // Purge every listing the product appears on, or the grid keeps the old
+  // price for the rest of the revalidation window.
+  for (const c of categories) revalidateTag(`category:${c}`);
+
+  return Response.json({ ok: true });
+}</code></pre>
+
+        <p>The line people forget is the second purge. Purging the product detail page and leaving the category grid stale produces the specific bug where a customer clicks a £24 tile and lands on a £29 page, which generates support tickets and, if you are unlucky, a trading standards complaint.</p>
+
+        <h2>7. Caching Is Where The Performance Comes From</h2>
+
+        <p>Nearly every headless storefront that is fast is fast because of caching, and nearly every one that is slow is slow because somebody assumed the framework handled it. There are four layers and they need explicit design.</p>
+
+        <p><strong>The CDN edge cache.</strong> Full HTML documents, keyed by path plus whatever varies. This is where the 30ms TTFB lives. The killer is the cache key: add a <code>Vary: Cookie</code> and your hit rate collapses to near zero, because every visitor has a session cookie and every response becomes a private copy.</p>
+
+        <p><strong>The framework's data cache.</strong> Results of upstream fetches, shared across renders. Cheap and effective, and the layer where tag-based invalidation actually happens.</p>
+
+        <p><strong>A shared cache in front of the commerce API.</strong> Redis or equivalent, so that when ten regenerations fire simultaneously they do not all hammer the origin.</p>
+
+        <p><strong>The browser cache.</strong> Mostly assets, and mostly free if your build hashes filenames.</p>
+
+        <pre><code class="language-nginx"># The cache key is the whole game. Strip cookies that do not change the
+# response, or the hit rate goes to zero and the CDN is decoration.
+map $http_cookie $cache_bypass {
+    default                    0;
+    "~*customer_logged_in=1"   1;   # logged-in HTML is private
+    "~*cart_items=[1-9]"       1;   # a non-empty cart changes the header
 }
-</code></pre>
-<p>Furthermore, disable GraphQL introspection in production. Introspection allows developers to query the schema structure, which is invaluable during development but exposes backend field names and undocumented queries to malicious actors in a live environment.</p>
 
-<hr />
+proxy_cache_key "$scheme$request_method$host$request_uri";
+proxy_cache_bypass $cache_bypass;
+proxy_no_cache    $cache_bypass;
 
-<h2>6. Frequently Asked Questions (FAQ)</h2>
+# Serve stale while revalidating, and keep serving stale if the origin dies.
+# The second directive is what turns a backend outage into a degraded
+# experience instead of a 502 page.
+proxy_cache_use_stale updating error timeout http_500 http_502 http_503;
+proxy_cache_background_update on;
+proxy_cache_lock on;   # one request repopulates; the rest wait for it</code></pre>
 
-<h3>1. What are the core performance advantages of Headless Commerce over Monolithic setups?</h3>
-<p>Headless commerce decouples the frontend presentation layer from the backend ecommerce engine via GraphQL APIs. Serving static HTML from global edge CDNs drops TTFB to under 50ms while insulating the frontend from backend database lockups during flash sales. This ensures optimal Core Web Vitals and resilient scalability.</p>
+        <p>That <code>proxy_cache_lock</code> line is worth more than it looks. Without it, a popular page expiring during a traffic spike sends every concurrent request to the origin at once. I have seen a Magento instance fall over from a cache stampede on a single category page during a Black Friday email send — 4,000 concurrent requests for one URL that had expired eleven seconds earlier.</p>
 
-<h3>2. How does GraphQL reduce network payload size compared to REST APIs?</h3>
-<p>GraphQL enables client applications to request exact fields required for rendering, eliminating REST over-fetching and under-fetching. Furthermore, it consolidates multiple REST endpoints into a single HTTP POST request, drastically reducing network latency and round-trip times.</p>
+        <p>The measurement that matters is edge hit rate on HTML documents specifically, not on all requests. All-request hit rate is always 95%+ because images dominate the count, and it tells you nothing. If your HTML hit rate is under 80% on category and product routes, your architecture is not doing the thing you paid for.</p>
 
-<h3>3. How do we manage SEO when the frontend is decoupled?</h3>
-<p>Search Engine Optimization relies on server-side rendering (SSR) or Static Site Generation (SSG). Frameworks like Next.js execute these processes, delivering fully formed HTML documents with optimized metadata, canonical tags, and structured JSON-LD data directly to search engine crawlers, bypassing the need for client-side JavaScript execution.</p>
+        <h2>8. The API Layer, And Why You Probably Want a BFF</h2>
 
-<h3>4. Is headless architecture appropriate for all businesses?</h3>
-<p>Not necessarily. Headless architectures introduce significant operational complexity, requiring specialized frontend engineering teams and distributed systems knowledge. Smaller organizations with standardized requirements may find traditional monolithic themes more cost-effective. Headless is ideally suited for enterprise operations demanding custom workflows, high-velocity performance, and multi-channel content syndication.</p>
+        <p>The naive shape is: front end calls commerce GraphQL directly, from the browser. It works in a demo and it fails in production for three reasons.</p>
 
-<hr />
+        <p>First, you have published your commerce API's shape to the internet, including its rate limits and its schema introspection. Second, the front end now needs six round trips for a page because the API was designed around resources, not screens. Third, any secret — a search API key, a CMS token, a review provider credential — either lives in the browser or does not get used.</p>
 
-<div class="blog-suggested-reads">
-  <h3>Suggested & Related Reading</h3>
+        <p>A backend-for-frontend is a thin server-side layer that speaks screens. One call per screen, composed server-side, with secrets held server-side.</p>
+
+        <pre><code class="language-typescript">// lib/commerce/category.ts — one function per screen, not per resource.
+// The two upstream calls run concurrently; sequential awaits here were the
+// single biggest cause of slow SSR on the project in the opening story.
+export async function getCategory(handle: string) {
+  const [cat, content] = await Promise.all([
+    commerce.query(CATEGORY_QUERY, { handle }, {
+      next: { revalidate: 3600, tags: [`category:${handle}`] },
+    }),
+    cms.getBanner(handle), // may legitimately return null
+  ]);
+
+  if (!cat) return null;
+
+  return {
+    title: content?.heading ?? cat.name,
+    products: cat.products.items.map(toCard), // narrow the payload here,
+    facets: cat.aggregations.filter(usable),  // not in the component
+    banner: content ?? null,
+  };
+}</code></pre>
+
+        <p>The <code>toCard</code> mapping matters more than it looks. Magento's GraphQL product node, requested naively, comes back at 4–6KB per product. Forty-eight of those is 250KB of JSON that then gets serialised into the HTML payload for hydration. Narrowing to the eleven fields a card actually renders takes it to about 400 bytes each. On one project that change alone removed 190KB from the document and took Interaction to Next Paint from 340ms to 180ms on mid-range Android, because the browser was spending real time parsing JSON it never used.</p>
+
+        <h3>Where the BFF should run</h3>
+
+        <p>Two defensible answers. Co-located with the front end, as route handlers in the same app — simplest, one deployable, and the default I reach for. Or as a separate service, which you want when more than one front end consumes it, or when the front-end team and the integration team are different teams with different release cadences.</p>
+
+        <p>What I would not do is put it in a separate repository owned by the backend team while the front end is owned by an agency. That arrangement means every screen change is a two-team negotiation, and within a year the front end will have started calling the commerce API directly to route around it, and you will have both layers with neither authoritative.</p>
+
+        <h2>9. Carts, Sessions and the Boundary Problem</h2>
+
+        <p>State is where decoupling stops being elegant. A monolith has a PHP session; every page has the cart in scope for free. Decoupled, you need to decide where cart state lives, who owns the identifier, and how it survives a customer logging in halfway through.</p>
+
+        <p>The pattern that works: the commerce backend owns the cart and issues an opaque token; the front end stores the token and nothing else. Never model the cart in front-end state as the source of truth. I have seen a build that kept the cart in a client-side store and synced it to the backend on a debounce, and it produced a class of bug — items reappearing after removal, quantities doubling on a flaky connection — that took months to fully kill.</p>
+
+        <pre><code class="language-typescript">// The token is httpOnly so no client script can read it, SameSite=Lax so it
+// survives the return trip from a hosted payment page, and scoped to the
+// apex domain so the checkout subdomain sees the same cart.
+import { cookies } from 'next/headers';
+
+const CART_COOKIE = 'cart_token';
+
+export async function ensureCart() {
+  const jar = cookies();
+  const existing = jar.get(CART_COOKIE)?.value;
+  if (existing) {
+    const cart = await commerce.getCart(existing);
+    // A token can expire or be invalidated server-side; falling through to
+    // creation is the difference between a graceful empty cart and a 500.
+    if (cart) return cart;
+  }
+
+  const cart = await commerce.createCart();
+  jar.set(CART_COOKIE, cart.token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    domain: '.example.com',
+    maxAge: 60 * 60 * 24 * 30,
+  });
+  return cart;
+}</code></pre>
+
+        <p>The merge-on-login case needs an explicit decision from the business, not from engineering. A customer with three items as a guest logs in and has two items saved from last week. Do you union them, replace, or ask? Every platform has a default and it is usually union, which produces the "why is this in my basket" support ticket. Ask the merchandising team. Write it down. Test it, because it is the single most commonly broken flow on headless builds and it is invisible in every demo.</p>
+
+        <h2>10. Checkout: The Part You Mostly Cannot Own</h2>
+
+        <p>On Shopify, checkout is not yours. That is a hard boundary and I will cover the specifics in the Hydrogen piece, but the architectural consequence belongs here: your beautiful decoupled storefront hands off to a hosted checkout at the exact moment the customer is most likely to abandon, and everything about that handoff — the domain change, the visual discontinuity, the second page load, the analytics session stitching — is a conversion risk you have introduced and mostly cannot control.</p>
+
+        <p>On Magento or commercetools you can own checkout, and then the question is whether you should. Checkout is where PCI scope, fraud screening, address validation, tax calculation, payment method rules, and every regional payment quirk live. It is the most tested, most regulated, most edge-case-ridden code in the platform, and rebuilding it in React means reimplementing all of that.</p>
+
+        <p>My default: keep checkout on the platform for as long as you can bear it. Run the decoupled storefront up to the cart, then hand off. It is aesthetically unsatisfying and it removes about 40% of the risk from a headless migration. The teams I have seen do this successfully then revisit checkout as a separate project eighteen months later, with real conversion data to justify it, and that is a much better-informed decision than the one you would make on day one.</p>
+
+        <p>There is a measurable cost to the handoff and you should quantify it before deciding. On a textiles retailer I worked with, moving from an inline checkout to a hosted one on a different subdomain cost 1.4 percentage points of cart-to-order conversion, measured over four weeks with a 50/50 split. On roughly £9m of annual revenue that is a six-figure decision, and it deserves an experiment rather than an opinion.</p>
+
+        <h2>11. SEO Is Not Automatic Any More</h2>
+
+        <p>Google renders JavaScript. That argument has been settled since about 2019 and I am not relitigating it. The problems are not about whether Googlebot can see your content; they are about everything around the content.</p>
+
+        <p><strong>Rendering budget is real even if rendering works.</strong> Server-rendered HTML is indexed on the first pass. Client-rendered content goes into a render queue, and on a large site the queue delay is measured in days. For a 6,000-product catalogue this does not matter much. For a 400,000-URL catalogue with weekly price changes it matters enormously.</p>
+
+        <p><strong>Facet URLs multiply without supervision.</strong> A monolith usually ships sensible defaults for what is indexable. A custom front end will happily generate <code>/pans?colour=red&amp;size=24cm&amp;sort=price&amp;page=3</code> as a crawlable, linked, canonical-free URL, and Googlebot will find several hundred thousand of them.</p>
+
+        <pre><code class="language-typescript">// app/[category]/page.tsx — the robots decision belongs in code, on every
+// route, because there is no admin checkbox for it any more.
+export async function generateMetadata({ params, searchParams }) {
+  const filtered = Object.keys(searchParams).some(
+    (k) =&gt; k !== 'page' &amp;&amp; k !== 'sort',
+  );
+
+  return {
+    // Canonical always points at the unfiltered, unsorted path. Sort order
+    // is presentation, not a distinct document.
+    alternates: { canonical: `https://example.com/${params.category}` },
+    robots: filtered
+      ? { index: false, follow: true }   // crawl through, do not index
+      : { index: true, follow: true },
+  };
+}</code></pre>
+
+        <p><strong>Structured data becomes handwritten.</strong> Which is fine, and also means it can be wrong for months without anyone noticing. Put a schema validation step in CI against a sample of real URLs; it takes an afternoon and catches the day somebody refactors the price formatter and starts emitting <code>"29.99 GBP"</code> where a number was expected.</p>
+
+        <p><strong>Sitemaps stop existing until you build them.</strong> And the naive implementation — query every product at request time — times out at about 30,000 URLs. Generate them on a schedule, split at 45,000 entries, and reference them from an index.</p>
+
+        <h2>12. Observability Across Two Systems</h2>
+
+        <p>In a monolith, a slow page shows up in one APM trace. Decoupled, "the site is slow" could be the CDN, the front-end render, the BFF, the commerce API, the search provider, or the CMS, and each has its own dashboard owned by a different vendor.</p>
+
+        <p>The fix is boring and works: one trace identifier that crosses every boundary, and real-user monitoring on the front end that can be joined to it.</p>
+
+        <pre><code class="language-typescript">// Propagate a single id from edge to origin. Without it, correlating a slow
+// page view with the upstream call that caused it means matching timestamps
+// across three vendors and hoping.
+export async function commerceFetch(query: string, vars: object, traceId: string) {
+  const started = performance.now();
+  const res = await fetch(COMMERCE_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-trace-id': traceId,
+      // Magento logs this against the request; without it the backend team
+      // cannot tell your traffic from a bot's.
+      'x-client': 'storefront-web',
+    },
+    body: JSON.stringify({ query, variables: vars }),
+    signal: AbortSignal.timeout(2500), // bounded, always
+  });
+
+  metrics.histogram('commerce.latency', performance.now() - started, {
+    operation: query.slice(0, 40),
+    status: String(res.status),
+  });
+  return res.json();
+}</code></pre>
+
+        <p>Two alerts earn their keep more than any dashboard. First, edge cache hit rate on HTML dropping below its baseline — that is almost always somebody accidentally making a route dynamic, and it will be a deploy from the last hour. Second, p95 upstream latency by operation, because a commerce API that degrades from 200ms to 900ms turns a fast site slow without producing a single error.</p>
+
+        <p>And a process point. Decide before launch who is paged when the storefront is up but showing stale prices, because that failure sits precisely between the two teams and belongs to neither by default.</p>
+
+        <h2>13. When The Monolith Is The Right Answer</h2>
+
+        <p>Most storefronts should not go headless. I will defend that.</p>
+
+        <p>A modern monolithic theme is not what it was in 2018. Shopify's Online Store 2.0 with a well-built theme routinely hits 2.0–2.5s LCP on mobile with no custom engineering. Magento with <a href="/blog/magento-hyva-themes/">a Hyvä theme</a> ships around 30KB of JavaScript against Luma's 400KB and hits Core Web Vitals thresholds on standard hardware. The performance gap that justified headless in 2019 has narrowed to the point where, for a single-storefront retailer, it is often not there at all.</p>
+
+        <p>Stay monolithic when most of these are true:</p>
+
+        <p><strong>One storefront, one market, one language.</strong> The multi-consumer argument does not apply and it was the strongest one.</p>
+
+        <p><strong>Fewer than about 20,000 SKUs and no complex faceting.</strong> Below that scale, platform-native search and category rendering are usually adequate, and the cache hit rates are high enough that origin latency rarely surfaces.</p>
+
+        <p><strong>You rely on platform apps.</strong> Subscriptions, loyalty, reviews, back-in-stock, wishlists, upsell widgets. If your store runs eight apps that inject front-end UI, headless deletes all eight and you rebuild what you can and drop the rest.</p>
+
+        <p><strong>Your team is one or two developers, or an agency on a small retainer.</strong> Two FTE minimum is not a guideline I made up; it is what the ongoing work actually requires.</p>
+
+        <p><strong>Nobody has produced a number.</strong> If the case for headless is "performance" without a measurement of what the current site does and what a fixed monolith would do, the case is aspiration. Spend two weeks fixing the existing theme first. On four of the six audits I have run where headless was being proposed, a fortnight of unglamorous work on the existing site — deferring third-party scripts, fixing image sizing, removing an unused slider library, turning on full-page caching properly — closed most of the gap for under £8,000.</p>
+
+        <p>The strongest version of this argument: headless is a way of spending money to buy flexibility. If you do not have a specific, named, funded use for that flexibility within twelve months, you are buying an option you will not exercise, and paying the carrying cost every month.</p>
+
+        <h2>14. The Middle Path Nobody Sells You</h2>
+
+        <p>Between "PHP renders everything" and "React renders everything" there is a large territory, and it is where I would put most projects that feel constrained by their monolith.</p>
+
+        <p><strong>Headless CMS, monolithic storefront.</strong> The commerce platform keeps rendering products, cart and checkout; a content platform serves landing pages, editorial and campaign content through a template partial or a lightweight route. Marketing gets the workflow and preview they actually wanted; engineering does not take on rendering. This gets 70% of the practical benefit for maybe 12% of the cost, and it is the single most under-used option in the market.</p>
+
+        <p><strong>Islands.</strong> Server-rendered HTML from the platform, with specific interactive components hydrated in place — search-as-you-type, a configurator, a cart drawer. Hyvä plus Alpine on Magento is exactly this. You get modern interaction where interaction matters and pay nothing for it on the 90% of the page that is static.</p>
+
+        <p><strong>Edge personalisation over a cached monolith.</strong> Cache the monolith's HTML at the edge, then rewrite a handful of fragments per visitor at the edge worker. I have used this for geo-based delivery messaging and returning-customer banners on a site that was otherwise entirely conventional, and it delivered the personalisation the marketing team wanted without touching the rendering architecture. There is more on the mechanics in <a href="/blog/edge-personalization/">edge personalisation</a>.</p>
+
+        <p><strong>Partial decoupling by route.</strong> Decouple only the routes that justify it — a campaign microsite, a store locator, a configurator — and leave the catalogue where it is. Route at the CDN by path prefix. This is unfashionable because it is not a clean architecture, and it is frequently the right call because it lets you buy the flexibility only where you need it.</p>
+
+        <h2>15. A Worked Example, Including What Went Wrong</h2>
+
+        <p>A B2B distributor of electrical components. About 40,000 SKUs, Magento 2.4.5, £14m annual online revenue, customer-specific contract pricing, and — the fact that actually decided it — a field-sales tablet app and a punchout catalogue for three large customers, both of which needed the same pricing logic the storefront used.</p>
+
+        <p>That is a genuine multi-consumer case, so decoupling was defensible. Here is what we did and what it cost.</p>
+
+        <p><strong>Shape.</strong> Next.js on the front, Magento GraphQL behind a BFF, Algolia for search and faceting, Sanity for editorial pages. Checkout stayed on Magento. The tablet app and the punchout integration consumed the same BFF.</p>
+
+        <p><strong>Rendering.</strong> Category and product pages statically generated with a one-hour revalidation and tag purges on price or stock webhooks. Contract prices client-side per customer. Account and cart server-rendered per request.</p>
+
+        <p><strong>Numbers after four months live.</strong> Category LCP on mobile 4G went from 3.6s to 1.5s. TTFB median 41ms against 690ms. Edge HTML hit rate 91%. Organic sessions up 18% over the following two quarters, though I would not attribute all of that to the rebuild — they also fixed a long-standing canonicalisation mess at the same time, which is exactly the kind of confounder that makes headless case studies untrustworthy.</p>
+
+        <p><strong>What went wrong, item one.</strong> The build. Statically generating 40,000 product pages took 71 minutes, which meant that fixing a typo in the footer was an hour-and-a-quarter deployment. We had not thought about build time at all during design. The fix was to generate only the top 4,000 products by traffic at build and let the rest generate on first request with a fallback, which took builds to nine minutes. That should have been the design from day one and it is now the first thing I ask about on any static commerce build.</p>
+
+        <p><strong>What went wrong, item two.</strong> Contract pricing was fetched client-side per product card. On a 48-product listing that was 48 requests. We batched it into one call per page — obvious in hindsight, and it survived code review because in development, with six products and a local API, it was imperceptible. Load-test with production-shaped data or you will ship this exact bug.</p>
+
+        <p><strong>What went wrong, item three.</strong> Six weeks after launch, organic traffic to about 900 product URLs disappeared. Cause: those products had been renamed at some point in the previous four years, Magento held the rewrites, and our sitemap generated only current URLs while nothing served the old ones. Every old URL 404'd. We imported the rewrite table into the edge KV store and traffic returned over about three weeks, but we lost a quarter's worth of ranking on those pages.</p>
+
+        <p><strong>What I would do differently.</strong> Ship a route at a time behind the CDN rather than a big-bang cutover. We launched everything at once on a Tuesday in March, and when the price-batching problem showed up we had no way to isolate it. Path-prefix routing would have let us run the new category pages for 10% of traffic for a fortnight, and every problem above would have surfaced at 10% scale instead of 100%.</p>
+
+        <h2>16. If You Do Go Ahead, Sequence It Like This</h2>
+
+        <p>The order matters more than any individual choice, because the early steps are the ones that let you stop cheaply if the case turns out to be weaker than it looked.</p>
+
+        <p>Start with the API contract, not the front end. Define what the storefront needs, screen by screen, and check the commerce platform can actually serve it at the latency you need. Load-test the GraphQL endpoint with realistic queries before writing a component. On Magento in particular, a category query with aggregations across 40,000 products is a genuinely expensive query, and finding that out in month six is a bad month.</p>
+
+        <p>Then build one route end to end, in production, behind a traffic split. Not a prototype. A real route, deployed, with monitoring and a rollback, taking 5% of traffic. Everything you will learn about caching, session handling and observability, you learn here for the price of one route.</p>
+
+        <p>Then migrate content and campaign pages, because they are the lowest-risk and the ones marketing cares about. Then category and product. Then cart. Leave checkout alone until you have a conversion measurement telling you it is worth it.</p>
+
+        <p>Throughout: keep the monolith serving anything not yet migrated, route by path at the CDN, and never have a period where the old system is off and the new one is not proven. The migrations that go badly are almost always the ones with a single cutover date that somebody committed to in a steering meeting before the technical work was understood.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"Will headless improve our Core Web Vitals?"</strong> It can, and it will not do it by itself. The mechanism is caching HTML at the edge and shipping less JavaScript, and both are achievable on a monolith. If your current LCP problem is a 900KB hero image and four synchronous marketing tags, headless fixes neither. Diagnose first — the specifics are in <a href="/blog/core-web-vitals/">the Core Web Vitals piece</a> — and rebuild only if the diagnosis says the platform's rendering is the actual constraint.</p>
+
+        <p><strong>"How long does a migration really take?"</strong> For a mid-market catalogue with one integration and no checkout rebuild, seven to nine months from kickoff to full traffic, of which about a third is content, redirects, and SEO parity work that nobody puts in the estimate. If someone quotes you four months, ask what they are excluding.</p>
+
+        <p><strong>"Can we keep our apps?"</strong> The ones that are purely backend, yes. The ones that inject front-end UI, no — you rebuild them or lose them. Make the list before you commit. On the last audit I did, the list had nineteen apps on it, of which eleven had a front-end component and four of those were load-bearing for revenue.</p>
+
+        <p><strong>"Should we use a composable suite or a single platform's headless mode?"</strong> Single platform first, almost always. Shopify's Storefront API or Magento's GraphQL gives you one vendor, one support contract, and one data model. Assembling six best-of-breed services gives you six contracts and an integration burden that lands entirely on your team. Go composable when a specific component is genuinely inadequate, one component at a time.</p>
+
+        <p><strong>"What about a mobile app — does that force headless?"</strong> Not necessarily. Every major platform exposes an API adequate for an app without you rebuilding the web storefront. The multi-consumer argument justifies an API-first backend; it does not on its own justify replacing your web rendering layer.</p>
+
+        <p><strong>"Our agency says everyone is going headless."</strong> The public case studies are drawn from a population where large brands with large teams and genuine multi-channel requirements went headless successfully. The failures do not publish. I know of three seven-figure headless projects that were quietly reverted to a monolithic theme within two years, and none of them will ever appear in a conference talk.</p>
+
+        <p><strong>"What is the minimum team to run one?"</strong> Two front-end engineers who between them understand the framework's rendering modes, the CDN configuration, and the API contract, plus whoever maintains the commerce backend. One engineer is a single point of failure and, more practically, one engineer cannot be on holiday.</p>
+
+        <h2>18. What I'd Do First</h2>
+
+        <p>If somebody put this decision in front of me tomorrow, in this order:</p>
+
+        <p>Measure the current site honestly. Field data from CrUX, not a lab score. Segment by template — homepage, category, product, cart. You need to know whether the problem is the platform's rendering or the 340KB of marketing tags somebody added in 2022.</p>
+
+        <p>Spend two weeks fixing the monolith. Defer third-party scripts, size images correctly, remove dead JavaScript, verify full-page caching is actually caching. Re-measure. If you have arrived where you wanted to be, stop, and spend the £200,000 on something that grows revenue.</p>
+
+        <p>Write down the second consumer. Name it, name who owns it, name when it ships. If you cannot, the strongest argument for decoupling does not apply to you, and you should be looking at the middle path instead.</p>
+
+        <p>Cost the team, not the build. Two engineers indefinitely, plus hosting, plus the services you will add. If that number does not survive a conversation with whoever owns the budget, the project will be delivered and then slowly stop being maintained, which is the worst of both outcomes.</p>
+
+        <p>Inventory the apps. Every front-end-injecting app, what it does, what it earns. Decide for each one: rebuild, replace, or lose. The total is usually two to four months of work that nobody has budgeted.</p>
+
+        <p>Then, if it still holds up, build one route in production behind a traffic split and see what it teaches you before committing to the rest.</p>
+
+        <p>The retailer from the opening reverted to a Hyvä theme eighteen months after their headless launch. It cost them another £45,000 and their category pages are now faster than either previous version. Nobody wrote a case study about it. The engineering lesson is not that headless is wrong — for the distributor in the worked example it was clearly right and is still running well. The lesson is that this is a decision with a real bill attached, and the bill is mostly people, and it should be made by counting rather than by knowing what serious brands do.</p>
+
+        <div class="blog-suggested-reads">
+  <h3>Suggested &amp; Related Reading</h3>
   <p>Explore related engineering guides from Kenneth D'Silva:</p>
   <ul>
     <li>
-      <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce: The Architectural & Business Guide</a></strong>
+      <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce: The Architectural &amp; Business Guide</a></strong>
       <p>Crawler architecture, semantic HTML, and advanced Next.js ISR rendering patterns.</p>
     </li>
     <li>
@@ -508,7 +737,6 @@ server {
     </li>
   </ul>
 </div>
-
       </article>
     </section>
   </main>
@@ -542,6 +770,6 @@ server {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

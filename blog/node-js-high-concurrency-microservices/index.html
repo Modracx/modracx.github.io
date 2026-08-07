@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Building High-Concurrency Node.js Microservices | MODRACX</title>
-  <meta name="description" content="Technical engineering guide on constructing high-throughput Node.js microservices using Fastify, Redis cluster caching, and non-blocking event loops." />
+  <meta name="description" content="Event loop lag, load shedding, worker threads, connection pooling and graceful shutdown — building Node.js services that survive 400 requests a second instead of collapsing." />
   <meta property="og:title" content="Building High-Concurrency Node.js Microservices | MODRACX" />
   <meta property="og:description" content="Technical engineering guide on high-concurrency Node.js microservices by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Building High-Concurrency Node.js Microservices</h1>
-        <p class="lede">Replacing legacy Express servers with Fastify reduces JSON serialization overhead, enabling Node.js microservices to process over 30,000 requests per second.</p>
+        <p class="lede">A pricing service went from a 45ms p99 to 14 seconds in four minutes. Everyone in the room blamed Node being single-threaded. It was one rounding function that took 1.8 milliseconds.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,23 +205,705 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Fastify Server Implementation Code</h2>
+        <h2>1. The Service That Fell Over At 400 Requests A Second</h2>
 
-        <pre><code class="language-javascript">// Fastify High-Performance Microservice Setup
-const fastify = require('fastify')({ logger: false });
+        <p>A pricing service. Node 18, Express, sitting between a Magento storefront and a rules engine, returning customer-specific prices for a B2B distributor with about 40,000 trade accounts. It had run happily for two years at maybe 60 requests a second.</p>
 
-fastify.get('/api/products/:id', async (request, reply) => {
-  const { id } = request.params;
-  return { id, sku: `SKU-${id}`, status: 'in_stock' };
+        <p>They ran a promotion in February 2024 that put a "your price" badge on every product tile of every category page. Traffic to the pricing service went from 60 to roughly 400 requests a second. It did not gracefully degrade. It went from a p99 of 45 milliseconds to a p99 of 14 seconds in under four minutes, and then the health check started timing out and Kubernetes began killing pods, which pushed the surviving pods harder, which killed those too.</p>
+
+        <p>The instinct in the room was that Node was the problem — single-threaded, not built for this, we should have used Go. That was wrong, and it's wrong often enough that it's worth taking apart.</p>
+
+        <p>Node handled the concurrency fine. What killed it was a synchronous decimal-rounding routine in the discount calculation that took about 1.8 milliseconds per call, called eleven times per request. Twenty milliseconds of pure CPU per request, on one thread. At 400 requests a second that's eight seconds of CPU work arriving every second on a runtime that has one second of CPU per second to give it.</p>
+
+        <p>That's not a concurrency limit. That's arithmetic. And it's the shape of nearly every Node performance incident I've been called into: the event loop is not slow, something is sitting on it.</p>
+
+        <p>This article is about building services that don't do that — and about what to reach for when you have, because the fixes are more specific than "use Fastify".</p>
+
+        <h2>2. What Concurrency Means In A Single-Threaded Runtime</h2>
+
+        <p>Node runs your JavaScript on one thread. It handles thousands of simultaneous connections. Both of those are true and the apparent contradiction is where most of the confusion lives.</p>
+
+        <p>The resolution is that almost nothing a typical service does is CPU work. A request comes in, you query Postgres, you call another service, you read from Redis, you serialise a response. Every one of those is I/O — the CPU is idle while it happens, waiting for a network card or a disk.</p>
+
+        <p>Node's model is to make that waiting explicit and cheap. Rather than a thread per connection sitting blocked, you get one thread running a loop that says: is anything ready? Run its callback. Anything else ready? Run that. libuv underneath handles the actual waiting using the operating system's event notification — epoll on Linux, kqueue on BSD — and a thread pool for the operations that have no async syscall, principally file system work and some crypto.</p>
+
+        <p>So a Node process can genuinely hold ten thousand open connections with a few hundred megabytes of memory, where a thread-per-connection model would need ten thousand stacks. That's the win, and it's a real one.</p>
+
+        <p>The cost is that your JavaScript has exclusive use of the thread while it runs. Not preemptible. A function that takes 200 milliseconds means every other request in flight waits 200 milliseconds, and there is no scheduler that will interrupt it. Node's concurrency is cooperative, and a function that doesn't yield doesn't cooperate.</p>
+
+        <p>Which gives you the single rule that matters: keep synchronous work short. Everything else in this article is a technique for obeying that rule or for detecting where you've broken it.</p>
+
+        <p>It helps to have a sense of what "short" costs in practice. These are order-of-magnitude figures from a 2 vCPU container, and the point is not the precise numbers but the four orders of magnitude between the top row and the bottom.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Operation</th><th>Typical cost</th><th>Blocks the loop?</th><th>Requests lost at 400 rps</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Redis GET over local network</td><td>0.3ms</td><td>No — I/O</td><td>None</td></tr>
+            <tr><td>Indexed Postgres query</td><td>1-3ms</td><td>No — I/O</td><td>None</td></tr>
+            <tr><td>JSON.stringify, 500-item array</td><td>1.5ms</td><td>Yes</td><td>~60% of a second's budget</td></tr>
+            <tr><td>bcrypt hash, cost 12</td><td>250ms</td><td>Yes, unless async variant</td><td>Everything</td></tr>
+            <tr><td>Sharp image resize, 2000px</td><td>90ms</td><td>Partly — native, off-thread</td><td>Depends on pool</td></tr>
+            <tr><td>readFileSync of a 2MB config</td><td>8ms</td><td>Yes</td><td>Fine at boot, fatal per request</td></tr>
+          </tbody>
+        </table>
+
+        <p>The bcrypt row is the one worth internalising. A synchronous 250ms hash on a login endpoint means your service can authenticate four users a second, total, regardless of how many cores or pods you have, because they all queue behind one thread. Use the async form and it moves to libuv's thread pool — which defaults to four threads, so you get four concurrent hashes and then a queue again. Raise <code>UV_THREADPOOL_SIZE</code> if that's your workload, and know that you have.</p>
+
+        <h2>3. Event Loop Anatomy</h2>
+
+        <p>You don't need to know the phases to write a service. You need to know them to debug one, because the ordering surprises are all explained by them.</p>
+
+        <p>Each iteration of the loop passes through phases in a fixed order. <strong>Timers</strong> runs callbacks scheduled by <code>setTimeout</code> and <code>setInterval</code> whose threshold has elapsed. <strong>Pending callbacks</strong> handles some deferred system operations, mostly TCP errors. <strong>Poll</strong> is where most of the time goes — it retrieves new I/O events and runs their callbacks, and will block here waiting for I/O if there's nothing else to do. <strong>Check</strong> runs <code>setImmediate</code> callbacks. <strong>Close callbacks</strong> handles socket close events.</p>
+
+        <p>Between every phase, and between individual callbacks, Node drains two microtask queues: <code>process.nextTick</code> first, then promise continuations. This is the part with practical consequences.</p>
+
+        <pre><code class="language-javascript">// Microtask starvation: a recursive nextTick never lets the loop advance.
+// This process will burn 100% CPU and serve zero requests.
+function starve() {
+  process.nextTick(starve);
+}
+
+// setImmediate yields to the poll phase, so I/O gets a turn.
+// This one processes work AND serves requests.
+function polite() {
+  setImmediate(polite);
+}</code></pre>
+
+        <p>The practical version of this bug is rarely so obvious. It's a promise chain over a large array where each iteration resolves synchronously, so the microtask queue never empties and the poll phase never runs. Symptom: the service stops accepting connections but the CPU is pegged and nothing looks wrong in the code.</p>
+
+        <pre><code class="language-javascript">// Looks async. Isn't. If getPrice() hits an in-memory cache and
+// resolves immediately, the loop never reaches the poll phase.
+async function priceAll(skus) {
+  const out = [];
+  for (const sku of skus) out.push(await getPrice(sku));  // 20k iterations
+  return out;
+}
+
+// Yield to I/O every N items. Costs a fraction of a millisecond,
+// keeps the service responsive while the batch runs.
+async function priceAllYielding(skus, chunk = 100) {
+  const out = [];
+  for (let i = 0; i &lt; skus.length; i++) {
+    out.push(await getPrice(skus[i]));
+    if (i % chunk === 0) await new Promise(setImmediate);
+  }
+  return out;
+}</code></pre>
+
+        <h2>4. Measuring Event Loop Lag Properly</h2>
+
+        <p>Event loop delay is the most important number in a Node service and most teams either don't measure it or measure it badly.</p>
+
+        <p>The naive approach — <code>setTimeout</code> for 100ms, measure how late it fires — gives you a single sample and a lot of noise. Node has had a proper histogram since 12.0, and it's built on high-resolution timers rather than on the timer phase you're trying to measure.</p>
+
+        <pre><code class="language-javascript">import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
+
+// resolution is the sampling interval in ms; 20 is a reasonable default.
+const h = monitorEventLoopDelay({ resolution: 20 });
+h.enable();
+
+setInterval(() =&gt; {
+  // Nanoseconds. Divide for milliseconds.
+  metrics.gauge('eventloop.lag.p50', h.percentile(50) / 1e6);
+  metrics.gauge('eventloop.lag.p99', h.percentile(99) / 1e6);
+  metrics.gauge('eventloop.lag.max', h.max / 1e6);
+  h.reset();   // report deltas, not lifetime aggregates
+
+  // Utilisation: fraction of time the loop was busy rather than idle.
+  // Above ~0.85 sustained and you have no headroom left.
+  const { utilization } = performance.eventLoopUtilization();
+  metrics.gauge('eventloop.utilization', utilization);
+}, 10_000).unref();</code></pre>
+
+        <p>Two numbers, two different questions. Lag tells you how long a callback would wait to run — it's the latency your requests are suffering. Utilisation tells you how much capacity is left. A service can have low lag and 0.9 utilisation, which means it's fine right now and has nothing in reserve.</p>
+
+        <p>My thresholds, which are opinions rather than laws: p99 lag under 20ms is healthy. 20 to 100ms means something is doing chunky synchronous work and you should find it. Over 100ms and users are noticing. Utilisation above 0.85 sustained is a scaling event waiting to happen, and I'd alert on it before I'd alert on lag, because it's the leading indicator.</p>
+
+        <p>On the pricing service, event loop lag at p99 was 3.2 seconds during the incident and nobody had a graph of it. The first thing I did was add those eight lines, and the shape of the problem was obvious within ten minutes of traffic.</p>
+
+        <h2>5. Fastify Versus Express: Where The Difference Comes From</h2>
+
+        <p>Fastify is faster than Express. The margin in Fastify's own benchmarks is large — roughly two to three times the requests per second on a trivial JSON endpoint. Those benchmarks measure a route that does nothing, which is not your service, and the honest translation to a real workload is much smaller. On a service that spends 12ms in Postgres per request, swapping frameworks moves your p50 by maybe half a millisecond.</p>
+
+        <p>That said, the reasons Fastify is faster are worth understanding because two of them are things you can benefit from without switching.</p>
+
+        <p><strong>Radix tree routing.</strong> Express matches routes by iterating an array of layers and running a regular expression per layer. With 200 routes, a request to the last one runs 200 regex matches. Fastify compiles routes into a prefix tree and matches in time proportional to URL length, not route count. This matters at scale and is invisible on a five-route benchmark app.</p>
+
+        <p><strong>Schema-compiled serialisation.</strong> The big one, covered properly below.</p>
+
+        <p><strong>A lighter middleware model.</strong> Express middleware is a linked list of functions, each wrapping the next, and every request builds that chain. Fastify's hooks are precompiled per route. Less allocation, less indirection, less garbage.</p>
+
+        <pre><code class="language-javascript">import Fastify from 'fastify';
+
+const app = Fastify({
+  logger: { level: 'info' },
+  // Reject bodies before parsing them. Cheap defence, and it stops
+  // a large-payload attack from becoming a GC problem.
+  bodyLimit: 1_048_576,
+  // Trust the proxy's X-Forwarded-For only if you actually have one.
+  trustProxy: true
 });
 
-fastify.listen({ port: 3000, host: '0.0.0.0' });</code></pre>
+app.get('/price/:sku', {
+  schema: {
+    params: {
+      type: 'object',
+      required: ['sku'],
+      properties: { sku: { type: 'string', pattern: '^[A-Z0-9-]{3,32}$' } }
+    },
+    response: {
+      // This is where the speed comes from: a compiled serialiser.
+      200: {
+        type: 'object',
+        properties: {
+          sku:      { type: 'string' },
+          price:    { type: 'number' },
+          currency: { type: 'string' },
+          tier:     { type: 'string' }
+        }
+      }
+    }
+  }
+}, async (req) =&gt; priceFor(req.params.sku, req.user.accountId));</code></pre>
 
-        <hr />
+        <p>Would I migrate an existing Express service to Fastify purely for speed? No. The migration is not free, the middleware ecosystem differs, and the gain on an I/O-bound service is small. Would I start a new service on Fastify? Yes, without hesitating — the schema validation alone is worth it, and it's the sort of decision that costs nothing at the start and something later.</p>
+
+        <h2>6. JSON Serialisation Is On The Hot Path</h2>
+
+        <p>This surprises people. <code>JSON.stringify</code> is implemented in C++ and it's fast. It is also, on a service returning large payloads, frequently the single largest consumer of CPU.</p>
+
+        <p>The reason is that <code>JSON.stringify</code> has to discover the shape of your object at runtime. Every property, every type check, every decision about how to escape a string — all determined per call, per object. If you already know the shape, you can compile a serialiser that just walks the known fields.</p>
+
+        <p>That's what <code>fast-json-stringify</code> does, and it's what Fastify uses when you give a route a response schema. The measured gain is roughly two to three times on typical objects, and considerably more on arrays of uniform objects — which is exactly what a product listing endpoint returns.</p>
+
+        <pre><code class="language-javascript">import build from 'fast-json-stringify';
+
+// Compile once, at module load. Never inside a handler.
+const stringifyPrices = build({
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      sku:      { type: 'string' },
+      price:    { type: 'number' },
+      wasPrice: { type: 'number' },
+      currency: { type: 'string' }
+    }
+  }
+});
+
+// A 500-item category price response: measurably cheaper than
+// JSON.stringify, and the difference compounds at 400 rps.
+function handler(req, reply) {
+  reply.header('content-type', 'application/json; charset=utf-8');
+  return stringifyPrices(rows);
+}</code></pre>
+
+        <p>There's a second, sharper benefit that nobody mentions: the schema is a whitelist. Fields not in the schema are not serialised. That means an internal cost price, a supplier id, or a customer's email that someone added to the query's select list cannot leak into an API response. I've caught two genuine data exposure bugs this way, both of them added by well-meaning changes to a shared repository function.</p>
+
+        <p>The corollary is a trap. If you add a field to your database query and forget to add it to the response schema, it silently disappears and someone spends an hour debugging a frontend that shows undefined. Worth knowing before it happens.</p>
+
+        <h2>7. The CPU-Bound Work You Have To Move</h2>
+
+        <p>Some work is genuinely CPU-bound and no amount of async will help. The list on an ecommerce service is short and predictable.</p>
+
+        <p>Image processing. PDF generation for invoices. Large CSV parsing on a product import. Cryptographic work beyond what libuv's thread pool handles. Complex pricing or tax calculation over many line items. Template rendering of big documents. Anything involving a regular expression over untrusted input, which deserves its own warning.</p>
+
+        <pre><code class="language-javascript">// Catastrophic backtracking: this regex is polynomial in input length.
+// A 40-character adversarial string can block the loop for seconds.
+const bad = /^(\w+\s?)*$/;
+
+// Bound the input, or use a linear-time matcher, or restructure.
+// Node 20+ ships RegExp.escape-adjacent tooling but not a safe matcher;
+// the practical defence is a length limit and a timeout on the caller.
+function safeMatch(input) {
+  if (input.length &gt; 256) return false;
+  return /^[\w\s]+$/.test(input);   // no nested quantifier, linear
+}</code></pre>
+
+        <p>For work that genuinely has to happen in-process, worker threads. For work that doesn't have to be synchronous with the request, a queue.</p>
+
+        <h3>Worker threads</h3>
+
+        <p><code>worker_threads</code> gives you real OS threads with their own V8 isolate and their own event loop, sharing memory only through explicitly shared buffers. They are not cheap to create — budget 20 to 40 milliseconds of startup — so you pool them rather than spawning per task.</p>
+
+        <pre><code class="language-javascript">import { Worker } from 'node:worker_threads';
+import os from 'node:os';
+
+class WorkerPool {
+  #idle = [];
+  #queue = [];
+  #all = [];
+
+  constructor(script, size = Math.max(1, os.availableParallelism() - 1)) {
+    for (let i = 0; i &lt; size; i++) {
+      const w = new Worker(script);
+      // A worker that dies takes its in-flight task with it. Replace it
+      // rather than silently shrinking the pool to zero over a week.
+      w.on('error', (err) =&gt; { this.#replace(w, script); log.error(err); });
+      this.#all.push(w);
+      this.#idle.push(w);
+    }
+  }
+
+  run(payload) {
+    return new Promise((resolve, reject) =&gt; {
+      const job = { payload, resolve, reject };
+      const w = this.#idle.pop();
+      if (w) this.#dispatch(w, job);
+      else this.#queue.push(job);     // bounded in production; see backpressure
+    });
+  }
+
+  #dispatch(w, job) {
+    const onMessage = (msg) =&gt; { cleanup(); job.resolve(msg); this.#free(w); };
+    const onError   = (err) =&gt; { cleanup(); job.reject(err); };
+    const cleanup   = () =&gt; {
+      w.off('message', onMessage); w.off('error', onError);
+    };
+    w.on('message', onMessage); w.once('error', onError);
+    w.postMessage(job.payload);
+  }
+
+  #free(w) {
+    const next = this.#queue.shift();
+    if (next) this.#dispatch(w, next); else this.#idle.push(w);
+  }
+}</code></pre>
+
+        <p>Sizing: <code>availableParallelism()</code> minus one, so the main thread keeps a core. In a container, that function respects cgroup CPU limits in recent Node versions where <code>os.cpus().length</code> historically did not — which is why services in Kubernetes used to spawn sixty-four workers on a pod limited to two cores and then wonder why everything was slow.</p>
+
+        <p>The cost of a worker is the message boundary. Data is structured-cloned across it, so passing a 40MB object costs a 40MB copy. Use <code>ArrayBuffer</code> transfer or <code>SharedArrayBuffer</code> when the payload is large; for small payloads the copy is irrelevant.</p>
+
+        <h3>Or don't do it in the request at all</h3>
+
+        <p>The better answer, most of the time. If the client doesn't need the result synchronously, put the job on a queue and return a 202 with a status URL. Invoice PDFs, export files, bulk imports, image derivatives — none of these need to happen while an HTTP connection is open, and making them asynchronous removes them from your latency budget entirely rather than making them cheaper. The patterns for doing that well are in <a href="/blog/event-driven-architecture/">the event-driven architecture piece</a>.</p>
+
+        <h2>8. Clustering, And Why It Is Not Free</h2>
+
+        <p>One Node process uses one core for JavaScript. Your pod has four. The obvious fix is to run four processes.</p>
+
+        <p><code>cluster</code> does this in-process with a primary that forks workers and distributes connections. In containers I'd usually run one process per container and let the orchestrator scale, because it makes resource accounting honest and restarts clean. On a VM with eight cores, clustering is the right call.</p>
+
+        <pre><code class="language-javascript">import cluster from 'node:cluster';
+import os from 'node:os';
+
+if (cluster.isPrimary) {
+  const n = Number(process.env.WEB_CONCURRENCY) || os.availableParallelism();
+  for (let i = 0; i &lt; n; i++) cluster.fork();
+
+  cluster.on('exit', (worker, code, signal) =&gt; {
+    // Don't respawn during shutdown, and rate-limit respawns so a
+    // crash-on-boot bug doesn't become a fork bomb.
+    if (shuttingDown) return;
+    log.warn({ pid: worker.process.pid, code, signal }, 'worker died');
+    setTimeout(() =&gt; cluster.fork(), 1000);
+  });
+} else {
+  await startServer();
+}</code></pre>
+
+        <p>What clustering costs you, and what nobody mentions until it hurts:</p>
+
+        <p><strong>Per-process memory.</strong> Each worker has its own heap. Four workers is roughly four times the baseline memory, and if you were relying on a large in-memory cache you now have four copies of it and a quarter of the hit rate.</p>
+
+        <p><strong>Nothing is shared.</strong> In-memory rate limiters, session stores, circuit breaker state, warmup caches — all per-process. A rate limit of 100 requests a minute becomes 400 across four workers. Move that state to Redis or accept the multiplication knowingly.</p>
+
+        <p><strong>Connection distribution is uneven.</strong> The default round-robin distributes connections, not work. A worker that gets a long-lived connection doing heavy requests is loaded very differently to one serving quick ones.</p>
+
+        <p><strong>Debugging is worse.</strong> Every log line needs a pid, every profile is per-worker, and reproducing a bug that only manifests on one worker is genuinely unpleasant.</p>
+
+        <h2>9. The Database Is Almost Always The Real Limit</h2>
+
+        <p>I'll say this bluntly: on maybe seventy percent of the Node services I've been asked to make faster, Node was not the constraint. Postgres was.</p>
+
+        <p>The specific failure is pool exhaustion, and it produces symptoms that look exactly like a Node problem. Requests queue. Latency climbs non-linearly. CPU is low. Event loop lag is fine. Everything looks idle and nothing is fast.</p>
+
+        <pre><code class="language-javascript">import pg from 'pg';
+
+const pool = new pg.Pool({
+  max: 20,                       // per process — multiply by pod count!
+  idleTimeoutMillis: 30_000,
+  // Fail fast rather than queueing forever. A request that waits 8s
+  // for a connection has already lost; better to shed it at 2s.
+  connectionTimeoutMillis: 2_000,
+  // Kill queries that run away rather than holding a pool slot.
+  statement_timeout: 5_000,
+  query_timeout: 5_000
+});
+
+// The four numbers that explain most "Node is slow" tickets.
+setInterval(() =&gt; {
+  metrics.gauge('pg.pool.total', pool.totalCount);
+  metrics.gauge('pg.pool.idle', pool.idleCount);
+  metrics.gauge('pg.pool.waiting', pool.waitingCount);   // the important one
+}, 5_000).unref();</code></pre>
+
+        <p><code>waitingCount</code> is the metric. If it's consistently above zero, requests are queueing for connections and your latency is pool latency, not query latency. Every dashboard for a Node service that talks to Postgres should have it.</p>
+
+        <p>The sizing arithmetic catches everyone. Postgres <code>max_connections</code> defaults to 100. Ten pods, twenty connections each, is 200 — you exhaust the server before you exhaust the pools, and the errors you get are confusing. Either size down per pod, or put PgBouncer in transaction mode in front, which lets a thousand client connections share thirty server ones. For anything past a handful of pods, PgBouncer is the answer and it takes an afternoon.</p>
+
+        <p>The other thing worth checking before any Node work: N+1 queries. A handler that fetches 50 products and then queries a price for each is 51 round trips. At 2ms each that's 102ms of a request budget, and no amount of framework tuning touches it. DataLoader-style batching, or a single query with <code>ANY($1)</code>, removes it entirely.</p>
+
+        <h2>10. Redis, And The Ways It Bites</h2>
+
+        <p>Redis is the standard second tier and it's excellent. Three specific problems worth knowing about.</p>
+
+        <p><strong>Cache stampede.</strong> A hot key expires. Four hundred concurrent requests all miss, all query the database, all write the same value back. The database, which was comfortable, is suddenly serving 400 identical expensive queries. Single-flight the recompute.</p>
+
+        <pre><code class="language-javascript">const inflight = new Map();
+
+async function cached(key, ttl, compute) {
+  const hit = await redis.get(key);
+  if (hit !== null) return JSON.parse(hit);
+
+  // Everyone who misses while a recompute is running shares its promise.
+  // One database query instead of four hundred.
+  if (inflight.has(key)) return inflight.get(key);
+
+  const p = (async () =&gt; {
+    try {
+      const value = await compute();
+      // Jitter the TTL so keys written together don't expire together.
+      const jittered = ttl + Math.floor(Math.random() * ttl * 0.2);
+      await redis.set(key, JSON.stringify(value), 'EX', jittered);
+      return value;
+    } finally {
+      inflight.delete(key);
+    }
+  })();
+
+  inflight.set(key, p);
+  return p;
+}</code></pre>
+
+        <p>The TTL jitter matters more than it looks. If you warm a cache with 10,000 keys at deploy time all with a 300-second TTL, they all expire in the same second, five minutes later, and you get a synchronised stampede on a schedule.</p>
+
+        <p><strong>Blocking commands on the shared connection.</strong> <code>KEYS</code> on a large database blocks the Redis server — not your client, the server, for every client. Use <code>SCAN</code>. Likewise a Lua script that iterates a large collection. Redis is single-threaded too, and the same rule applies.</p>
+
+        <p><strong>Treating Redis as available.</strong> It isn't always. A cache client without a timeout will hold your request open for the full TCP timeout when Redis is unreachable, converting a cache outage into a total outage. Set a short command timeout — 100 to 250ms — and treat a timeout as a miss.</p>
+
+        <h2>11. Staying Up Under Load: Shedding, Timeouts And Bulkheads</h2>
+
+        <h3>Backpressure and load shedding</h3>
+
+        <p>This is the section that would have saved the pricing service, and it's the one most teams skip.</p>
+
+        <p>Every service has a maximum sustainable throughput. Past it, you have two choices: queue the excess, or refuse it. Queueing feels kinder and is almost always wrong, because a queued request is still consuming memory, still holding a socket, and by the time you serve it the client has usually given up and retried — so you serve a response nobody reads while a duplicate request waits behind it.</p>
+
+        <p>Little's Law is the useful frame: the number of requests in the system equals arrival rate times average latency. If latency rises and arrivals don't fall, concurrency rises without bound. Memory follows. Then the OOM killer.</p>
+
+        <p>Shedding load is how you stay up. Refuse work you cannot do, quickly and cheaply, with a 503 and a <code>Retry-After</code>.</p>
+
+        <pre><code class="language-javascript">import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+const loop = monitorEventLoopDelay({ resolution: 10 });
+loop.enable();
+
+let lagMs = 0;
+setInterval(() =&gt; { lagMs = loop.mean / 1e6; loop.reset(); }, 500).unref();
+
+const LAG_LIMIT = 70;     // ms — tuned from the healthy p99, not guessed
+let inFlight = 0;
+const MAX_INFLIGHT = 250;
+
+app.addHook('onRequest', async (req, reply) =&gt; {
+  // Health checks must never be shed, or the orchestrator kills the
+  // pod exactly when it is trying to recover.
+  if (req.url === '/healthz' || req.url === '/readyz') return;
+
+  if (lagMs &gt; LAG_LIMIT || inFlight &gt;= MAX_INFLIGHT) {
+    metrics.increment('http.shed');
+    reply.header('retry-after', '2').code(503).send({ error: 'overloaded' });
+    return reply;
+  }
+  inFlight++;
+});
+
+app.addHook('onResponse', async () =&gt; { inFlight--; });</code></pre>
+
+        <p>Excluding the health check endpoint is the detail that turns this from a good idea into a working one. During the pricing incident, the health check was being served by the same overloaded loop, so it timed out, so Kubernetes killed the pod, so the remaining pods got more traffic. Shedding without protecting the health check makes the death spiral faster, not slower.</p>
+
+        <p>The counterintuitive bit: a service that sheds 30% of requests at 200ms is more useful than one that serves 100% of them at 14 seconds. The clients that get a 503 can retry against a healthy pod. The clients waiting 14 seconds have already timed out and are retrying anyway, having consumed your capacity for nothing.</p>
+
+        <h3>Timeouts, circuit breakers and bulkheads</h3>
+
+        <p>Every outbound call needs a timeout. Not a generous one — a budget-derived one. If your service promises a p99 of 300ms, a downstream call cannot have a 5-second timeout, because by second five your caller has gone.</p>
+
+        <pre><code class="language-javascript">// AbortSignal.timeout is the clean way since Node 17.3.
+// Compose it with the incoming request's signal so a client
+// disconnect cancels the downstream work too.
+async function fetchTax(orderId, upstreamSignal) {
+  const signal = AbortSignal.any([
+    upstreamSignal,
+    AbortSignal.timeout(250)
+  ]);
+  const res = await fetch(`${TAX_URL}/quote/${orderId}`, { signal });
+  if (!res.ok) throw new Error(`tax ${res.status}`);
+  return res.json();
+}</code></pre>
+
+        <p>Use undici's <code>Agent</code> rather than the default global dispatcher for anything high-volume — it lets you set connection limits, pipelining and per-origin pools, and it is what <code>fetch</code> is built on anyway.</p>
+
+        <p>A circuit breaker stops you hammering a service that's already down. Three states: closed and passing through, open and failing fast, half-open and testing with a single probe. The value isn't protecting yourself so much as protecting the downstream — a failing service that receives its full traffic plus retries cannot recover.</p>
+
+        <p>Bulkheads are the third piece and the least used. Partition your concurrency so one slow dependency cannot consume all of it. If the recommendation service can take at most 20 of your 250 in-flight slots, a recommendation outage degrades recommendations and nothing else. Without that, one slow dependency saturates the whole service and everything fails together.</p>
+
+        <h2>12. Memory, Heap Limits, And GC Pauses</h2>
+
+        <p>Two memory problems: leaks, which are slow, and heap limits, which are sudden.</p>
+
+        <p>The sudden one first, because it's the one that catches containerised deployments. Node's default old-space size is derived from the host's physical memory. In a container with a 512MB limit, Node may still decide it can use considerably more than that, allocate accordingly, and get OOM-killed by the kernel with no JavaScript error, no stack trace, and an exit code of 137.</p>
+
+        <pre><code class="language-bash"># Set the heap explicitly, at roughly 75% of the container limit.
+# The rest is V8 metadata, buffers, native modules and the stack.
+node --max-old-space-size=384 server.js
+
+# Or via env, which survives entrypoint scripts better
+NODE_OPTIONS="--max-old-space-size=384"
+
+# Exit code 137 = 128 + 9 = SIGKILL. Almost always the OOM killer.
+kubectl get pod api-7f9 -o jsonpath='{.status.containerStatuses[0].lastState}'</code></pre>
+
+        <p>For leaks, the reliable method is heap snapshots taken minutes apart under load, compared by retained size. Node can write one on demand.</p>
+
+        <pre><code class="language-javascript">import v8 from 'node:v8';
+import { writeHeapSnapshot } from 'node:v8';
+
+// Guard this behind auth. A heap snapshot contains everything
+// in memory, including tokens and customer data.
+app.post('/admin/heapsnapshot', { preHandler: requireOps }, async () =&gt; {
+  const file = writeHeapSnapshot();   // blocks the loop; do it off-peak
+  return { file };
+});
+
+// Cheaper continuous signal: heap used vs heap limit.
+setInterval(() =&gt; {
+  const s = v8.getHeapStatistics();
+  metrics.gauge('heap.used', s.used_heap_size);
+  metrics.gauge('heap.limit', s.heap_size_limit);
+  metrics.gauge('heap.pct', s.used_heap_size / s.heap_size_limit);
+}, 15_000).unref();</code></pre>
+
+        <p>The leaks I actually find, in rough order of frequency: an unbounded <code>Map</code> used as a cache with no eviction; event listeners added per request to a long-lived emitter and never removed; closures capturing a large request object retained by a timer; and a logger buffering to an array when its transport is slow.</p>
+
+        <p>On garbage collection: V8's generational collector handles short-lived objects cheaply in scavenges of a few milliseconds. Major collections are the expensive ones and they scale with live heap size. A service holding a 1.5GB cache in-process will pause for tens of milliseconds during a major GC, and those pauses land in your p99 as unexplained spikes. Big in-memory caches are frequently a false economy — moving them to Redis costs a network hop of half a millisecond and removes them from the GC's working set entirely.</p>
+
+        <h2>13. Streams, And Where They Earn Their Complexity</h2>
+
+        <p>Streams are how Node handles data larger than memory, and they're the difference between an export endpoint that works at 50,000 rows and one that kills the pod.</p>
+
+        <p>The buffered version reads everything into an array, serialises it, and sends it. Peak memory is the whole result set, times roughly three once you account for the row objects, the JSON string, and the copy in the socket buffer.</p>
+
+        <pre><code class="language-javascript">import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
+import QueryStream from 'pg-query-stream';
+
+// Constant memory regardless of result size, and the client starts
+// receiving rows immediately rather than after the last one.
+app.get('/export/orders.csv', async (req, reply) =&gt; {
+  const client = await pool.connect();
+  const query = new QueryStream(
+    'SELECT id, placed_at, total FROM orders WHERE placed_at &gt; $1',
+    [req.query.since],
+    { batchSize: 500 }
+  );
+
+  reply.header('content-type', 'text/csv');
+  reply.header('content-disposition', 'attachment; filename=orders.csv');
+
+  const toCsv = new Transform({
+    objectMode: true,
+    transform(row, _enc, cb) {
+      cb(null, `${row.id},${row.placed_at.toISOString()},${row.total}\n`);
+    }
+  });
+
+  try {
+    // pipeline() propagates errors and destroys the whole chain on
+    // failure. Manual .pipe() leaks sockets when something throws.
+    await pipeline(client.query(query), toCsv, reply.raw);
+  } finally {
+    client.release();
+  }
+});</code></pre>
+
+        <p>Two things that go wrong. Always use <code>pipeline</code> rather than chained <code>.pipe()</code> calls — manual piping does not propagate errors or clean up, and a client that disconnects mid-export leaves a database cursor open and a connection held. And release the pool client in a <code>finally</code>, because a streaming query holds its connection for the entire response duration, which on a large export is minutes.</p>
+
+        <p>The backpressure is handled for you by the stream machinery: if the client's connection is slow, the writable side signals it, the transform pauses, and the database cursor stops fetching. That's the whole point, and it's why a streaming export over a 3G connection uses the same memory as one over gigabit.</p>
+
+        <h2>14. Observability: What To Instrument</h2>
+
+        <p>Metrics first, because they're cheap and they answer "is it happening". Traces second, because they answer "where". Logs last, because at 400 requests a second logs are a firehose that costs more than it returns.</p>
+
+        <p>The Node-specific metrics that matter, beyond the usual request rate and latency: event loop lag percentiles, event loop utilisation, heap used as a fraction of limit, active handles and requests, database pool waiting count, and — if you cluster — all of the above per worker.</p>
+
+        <pre><code class="language-javascript">import { AsyncLocalStorage } from 'node:async_hooks';
+
+// Request context without threading an argument through every function.
+// The overhead is small in modern Node; it was not always.
+const als = new AsyncLocalStorage();
+
+app.addHook('onRequest', (req, reply, done) =&gt; {
+  als.run({
+    requestId: req.headers['x-request-id'] ?? crypto.randomUUID(),
+    accountId: req.headers['x-account-id'],
+    start: process.hrtime.bigint()
+  }, done);
+});
+
+// Any log anywhere in the call stack gets the context automatically.
+export function log(level, msg, extra) {
+  const ctx = als.getStore() ?? {};
+  logger[level]({ ...ctx, ...extra }, msg);
+}</code></pre>
+
+        <p>For CPU profiling in production, <code>--cpu-prof</code> writes a V8 CPU profile on exit, and the inspector protocol lets you start and stop one on demand. A 30-second profile taken while the service is struggling will point at the offending function in about a minute of reading the flame graph. That's how the pricing service's rounding function was found — not by reading code, which several people had done, but by looking at where the samples landed.</p>
+
+        <h2>15. Benchmarking Without Fooling Yourself</h2>
+
+        <p>Most Node benchmarks are worthless and it's worth knowing why before you run one.</p>
+
+        <p>They measure a route that returns a constant, from a load generator on the same machine, over localhost, with no database, no TLS, and no cold start. Every one of those removes a cost that dominates in production.</p>
+
+        <p>What I'd actually do: <code>autocannon</code> against a staging environment with production-shaped data, run for at least sixty seconds with a warmup, from a machine that isn't the one under test, at a fixed request rate rather than as fast as possible.</p>
+
+        <pre><code class="language-bash"># Closed-loop: 100 connections, as fast as they can go. Tells you
+# maximum throughput, and produces coordinated omission in the latency.
+npx autocannon -c 100 -d 60 -w 5 https://staging.api.example.com/price/ABC-1
+
+# Open-loop: fixed 400 requests/sec regardless of how slow it gets.
+# This is the one that reproduces a production incident.
+npx autocannon -c 200 -d 120 -R 400 https://staging.api.example.com/price/ABC-1
+
+# Realistic mix, from a file of recorded request bodies
+npx autocannon -c 50 -d 60 -m POST -i ./fixtures/quote.json \
+  -H 'content-type=application/json' https://staging.api.example.com/quote</code></pre>
+
+        <p>The <code>-R</code> flag matters more than anything else here. A closed-loop test where each connection waits for a response before sending the next cannot reproduce an overload, because as the service slows the offered load slows with it. Real traffic doesn't do that. Real traffic keeps arriving. Fixed-rate testing is how you find the cliff, and the cliff is what you actually want to know about.</p>
+
+        <p>Report percentiles, never means. A mean of 40ms with a p99 of 3 seconds is a service where one request in a hundred is unusable, and the mean hides it completely.</p>
+
+        <h2>16. Deployment: Graceful Shutdown And Readiness</h2>
+
+        <p>A high-concurrency service that drops requests on every deploy has a self-inflicted error rate. The fix is twenty lines and it's skipped constantly.</p>
+
+        <pre><code class="language-javascript">let shuttingDown = false;
+
+// Readiness flips first. The load balancer stops sending new work
+// while the process is still perfectly capable of finishing old work.
+app.get('/readyz', async (req, reply) =&gt; {
+  if (shuttingDown) return reply.code(503).send({ status: 'draining' });
+  return { status: 'ok' };
+});
+
+// Liveness must NOT depend on dependencies. A Postgres blip should
+// not cause Kubernetes to restart every pod simultaneously.
+app.get('/healthz', async () =&gt; ({ status: 'ok' }));
+
+process.on('SIGTERM', async () =&gt; {
+  shuttingDown = true;
+
+  // Give the load balancer time to notice readiness changed. This
+  // sleep is the single most important line here — without it you
+  // close the listener while traffic is still being routed to you.
+  await new Promise(r =&gt; setTimeout(r, 5_000));
+
+  const forced = setTimeout(() =&gt; {
+    log.error('forced exit after grace period');
+    process.exit(1);
+  }, 25_000);
+  forced.unref();
+
+  await app.close();        // stops accepting, drains in-flight
+  await pool.end();
+  await redis.quit();
+  clearTimeout(forced);
+  process.exit(0);
+});</code></pre>
+
+        <p>The five-second sleep before closing is the part everyone omits and it is the part that fixes the errors. Kubernetes sends SIGTERM and removes the pod from endpoints at roughly the same time, and endpoint propagation to every kube-proxy takes a second or two. Close immediately and you refuse requests that were routed to you a moment ago. Set <code>terminationGracePeriodSeconds</code> comfortably above your total drain budget or the kernel will SIGKILL you mid-drain.</p>
+
+        <p>Separating liveness from readiness matters as much. A liveness probe that checks the database means a thirty-second database blip restarts every pod in the cluster at once, which turns a recoverable incident into an outage. Liveness answers "is this process wedged". Nothing else.</p>
+
+        <h2>17. A Worked Example</h2>
+
+        <p>Back to the pricing service. Node 18, Express, four pods at 2 vCPU and 1GB, Postgres behind it, a Redis cache with a 60-second TTL.</p>
+
+        <p><strong>Before.</strong> 400 rps offered. p50 380ms, p99 14 seconds. Event loop lag p99 3.2 seconds. CPU pegged at 100% on one core per pod. Error rate 22%, most of it health-check-induced pod restarts.</p>
+
+        <p><strong>Finding it.</strong> Fifteen minutes: add the event loop histogram, take a 30-second CPU profile with <code>--cpu-prof</code>, open the flame graph. Sixty-one percent of samples were in a decimal rounding helper that had been written to avoid floating point errors on money and did so by converting to string, manipulating characters, and parsing back. 1.8ms per call, eleven calls per request.</p>
+
+        <p><strong>Fix one, half a day.</strong> Replaced it with integer minor-unit arithmetic — prices held as pence, rounded with <code>Math.round</code>, converted at the boundary. 1.8ms became about 0.004ms. p99 fell from 14 seconds to 610ms. That single change did roughly ninety percent of the work, and it was not an architectural change or a framework change; it was one badly-written function.</p>
+
+        <p><strong>Fix two, one day.</strong> Response schemas and <code>fast-json-stringify</code> for the category endpoint, which returned arrays of up to 500 price objects. p99 to 420ms.</p>
+
+        <p><strong>Fix three, one day.</strong> Load shedding on event loop lag with the health check excluded, plus liveness and readiness separated. The error rate under overload went from 22% to 4%, and crucially the 4% were fast 503s that the storefront could handle by hiding the price badge rather than blocking the page.</p>
+
+        <p><strong>Fix four, two days.</strong> PgBouncer in transaction mode, pool size per pod down from 20 to 8. Pool waiting count went to zero and stayed there. p99 to 340ms.</p>
+
+        <p><strong>After.</strong> 400 rps sustained at p50 22ms, p99 340ms. The same four pods. They had been about to provision twelve.</p>
+
+        <p><strong>What I got wrong.</strong> I spent the first afternoon on connection pooling because the symptoms — everything slow, CPU apparently fine in the dashboard — matched pool exhaustion, and I've seen that ten times more often than I've seen a hot loop. The CPU graph in their dashboard was averaged across cores, so one core at 100% out of two showed as 50% and looked unremarkable. I should have profiled first and theorised second. Profiling takes fifteen minutes; my theory cost four hours. That's the lesson I'd actually want someone to take from this, more than anything about Fastify.</p>
+
+        <h2>18. What Goes Wrong</h2>
+
+        <p><strong>Synchronous work on the request path.</strong> The whole article. <code>readFileSync</code>, <code>crypto.pbkdf2Sync</code>, large <code>JSON.parse</code>, a regex with nested quantifiers on user input.</p>
+
+        <p><strong>No event loop lag metric.</strong> You cannot diagnose what you don't measure, and this is eight lines of code.</p>
+
+        <p><strong>Unbounded concurrency to a downstream.</strong> A <code>Promise.all</code> over 5,000 items opens 5,000 connections and takes down whatever's on the other end. Use a concurrency-limited map.</p>
+
+        <p><strong>Missing timeouts.</strong> Any call without one will eventually hang, and hung requests accumulate until memory runs out.</p>
+
+        <p><strong>Health checks that share the overloaded path or depend on the database.</strong> Turns degradation into a restart loop.</p>
+
+        <p><strong>No graceful shutdown.</strong> A visible error rate spike on every single deploy, which teams normalise and stop seeing.</p>
+
+        <p><strong>Default heap size in a container.</strong> Exit code 137 with no explanation.</p>
+
+        <p><strong>Benchmarking closed-loop only.</strong> You never find the cliff until production finds it for you.</p>
+
+        <p><strong>Blaming the runtime.</strong> Node is not slow at I/O. Something in your code is holding the thread, and it takes one profile to find out what.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"Should we rewrite in Go?"</strong> Almost never for this reason. Go gives you real parallelism and lower memory per connection, which matters if you're genuinely CPU-bound across the board. Most services aren't — they're I/O-bound with one or two hot functions, and fixing those functions is days of work against months for a rewrite. Rewrite for a different reason if you have one, but "Node is single-threaded" is not a diagnosis.</p>
+
+        <p><strong>"How many requests per second can one Node process handle?"</strong> Meaningless without the workload. A route returning a constant: tens of thousands. A route doing one indexed Postgres query: two to five thousand. A route doing five downstream calls and some real computation: a few hundred. Measure yours; the published numbers describe an endpoint you don't have.</p>
+
+        <p><strong>"Cluster or more pods?"</strong> More pods in Kubernetes, cluster on a VM. Pods give you clean resource accounting, independent failure and rolling restarts. Clustering gives you better core utilisation on a machine you've already paid for.</p>
+
+        <p><strong>"Is Fastify worth migrating to?"</strong> Not for raw speed on an I/O-bound service. Possibly for the schema-based validation and serialisation, which are genuinely better. If you're starting fresh, yes.</p>
+
+        <p><strong>"Do worker threads help with I/O?"</strong> No. I/O is already off the main thread. Workers help exclusively with CPU-bound JavaScript, and adding them to an I/O-bound service adds message-passing overhead for no gain.</p>
+
+        <p><strong>"What Node version should we be on?"</strong> The current Active LTS. The performance work between major versions is real — V8 upgrades, a faster HTTP parser, undici improvements — and it's free. Staying two majors behind costs you measurable throughput for no benefit.</p>
+
+        <p><strong>"How do I stop this happening again?"</strong> An event loop lag alert, a CPU profile in CI on a representative load test, and a load test at your projected peak rather than your current one. The pricing service failed because nobody had asked what happens at 400 rps until it was 400 rps.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>On a Node service that's struggling and you don't yet know why, in this order.</p>
+
+        <p>Add the event loop delay histogram and eventLoopUtilization. Eight lines, five minutes, and it splits the problem in half immediately: high lag means CPU on the loop, low lag with high latency means you're waiting on something downstream.</p>
+
+        <p>Then take a CPU profile under real load. Thirty seconds with <code>--cpu-prof</code>, or via the inspector if you can't restart. Read the flame graph before forming a theory. I have been wrong about the cause more often than I've been right, and the profile has never been wrong.</p>
+
+        <p>Then check the database pool's waiting count. If it's above zero, that's your latency and nothing in the application layer will fix it.</p>
+
+        <p>Then add timeouts to every outbound call, derived from your own latency budget. This is defensive rather than corrective, but it converts a class of total failures into partial ones.</p>
+
+        <p>Then add load shedding on event loop lag, with health checks exempt. This is what stops a bad afternoon becoming an outage.</p>
+
+        <p>Then fix graceful shutdown, because it's twenty lines and it removes a recurring error spike that everyone has stopped noticing.</p>
+
+        <p>Only after all of that would I look at frameworks, clustering, or architecture. Those are real levers and they're second-order ones. The first-order question is always which function is holding the thread, and the honest answer is that you cannot guess it — several competent people had read the pricing code and none of them had spotted a rounding helper, because it looked like the least interesting function in the repository. The profiler doesn't have opinions about which code looks interesting, which is exactly why it beats reading.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -227,12 +911,11 @@ fastify.listen({ port: 3000, host: '0.0.0.0' });</code></pre>
               <p>Preventing N+1 database queries with DataLoader.</p>
             </li>
             <li>
-              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability & Cost Optimization</a></strong>
+              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
               <p>AWS Lambda function scaling.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -266,6 +949,6 @@ fastify.listen({ port: 3000, host: '0.0.0.0' });</code></pre>
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

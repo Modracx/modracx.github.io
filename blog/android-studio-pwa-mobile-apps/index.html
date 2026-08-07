@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Packaging PWAs as Native Android Apps with TWA | MODRACX</title>
-  <meta name="description" content="Technical guide on publishing Progressive Web Apps (PWAs) to the Google Play Store using Android Studio, Bubblewrap CLI, and Trusted Web Activities (TWA)." />
+  <meta name="description" content="How to package an existing PWA as a Trusted Web Activity for Google Play: Bubblewrap, Digital Asset Links, the Play signing fingerprint, and review rejections." />
   <meta property="og:title" content="Packaging PWAs as Native Android Apps with TWA | MODRACX" />
   <meta property="og:description" content="Technical guide on publishing PWAs to Google Play Store by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Packaging PWAs as Native Android Apps with TWA</h1>
-        <p class="lede">Trusted Web Activities (TWA) allow e-commerce progressive web apps to be published directly to Google Play Store without writing custom Java/Kotlin wrappers.</p>
+        <p class="lede">A Play rejection email at 06:12 on a Tuesday, and a URL bar that appeared over 11% of production installs. Both were packaging problems, not web ones.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 30 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,23 +205,563 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Assetlinks.json Digital Asset Links JSON Code</h2>
+        <p>The email arrived at 06:12 on a Tuesday and it was four sentences long. "Your app does not meet our Minimum Functionality policy requirements. Apps that provide the same experience as a mobile website without additional features are not permitted." Below that, a link to a policy page and a note that we had seven days to appeal. The client — a brewing supplies retailer in Leeds doing around £4.1m a year online — had already told their mailing list the app was launching that Friday.</p>
+
+        <p>That rejection was my fault, not Google's. I had packaged a perfectly good progressive web app into a Trusted Web Activity, uploaded the bundle, and assumed the review was a formality because the site itself was excellent. It wasn't a formality. And two weeks later, after we got in, a different problem showed up in production: a thin grey bar across the top of the app on about one device in nine, showing the URL. Customers screenshotted it and asked whether the app was fake.</p>
+
+        <p>Both of those failures are packaging problems, not web problems. The PWA was fine. Everything that broke lived in the gap between a working web app and a shippable Android artefact, and that gap is what this article is about. If you need the web side — the manifest, the caching strategy, why any of this is worth doing for a storefront — I've written that elsewhere and won't repeat it here. Assume you already have a PWA that <a href="/blog/pwa-for-ecommerce/">works as an installable storefront</a> and that its <a href="/blog/service-workers-offline-caching/">service worker caching is deliberate rather than accidental</a>. What follows is everything between that and a listing on Google Play that stays up.</p>
+
+        <h2>1. What a TWA Actually Is</h2>
+
+        <p>A Trusted Web Activity is a Chrome Custom Tab running in fullscreen, with the toolbar hidden, inside an Android activity you own. That's the whole trick. There is no embedded browser engine in your APK. There is no <code>WebView</code>. When a user opens your app, Android launches an activity from your package, that activity binds to the Chrome process already installed on the device, and Chrome renders your site with the address bar suppressed.</p>
+
+        <p>The distinction between this and a WebView decides almost everything else in this article, so it's worth being precise about what differs.</p>
+
+        <p>A WebView is a rendering surface embedded in your process. It has its own cookie jar, its own storage, its own cache, and — critically — its own version, which on older devices can lag Chrome by a long way. Anything a user did on your website in Chrome is invisible to your WebView. They log in twice. Their cart is empty. Their saved cards, held by the browser's autofill, are gone. Third-party payment SDKs that check for a real browser environment sometimes refuse to run.</p>
+
+        <p>A TWA shares Chrome's storage partition. Same cookies, same <code>localStorage</code>, same IndexedDB, same service worker registrations, same push subscriptions. A customer who was signed in on your site in Chrome opens the app and is already signed in. The service worker they registered while browsing is the one serving the app. Push subscriptions created in the browser fire in the app. From the platform's point of view, the app <em>is</em> the website, running in a chrome-less window.</p>
+
+        <p>That sharing is why Google demands proof you own the site. If any app could open any origin fullscreen with no URL bar, phishing would be trivial. The proof mechanism is Digital Asset Links, and getting it wrong is the single most common way a TWA fails in production.</p>
+
+        <p>The other consequence of "it's just Chrome" is that your app inherits Chrome's performance characteristics exactly. No packaging step makes a slow site fast. If your <a href="/blog/core-web-vitals/">Core Web Vitals are poor on mobile</a>, they will be identically poor in the app, minus perhaps 200–300ms of connection setup you save by having Chrome warm. I have watched a client convince themselves that "going native" would fix a 4.8 second LCP. It fixed nothing. We fixed the LCP and then packaged it.</p>
+
+        <table class="data-table">
+          <tr><th>Concern</th><th>TWA</th><th>WebView wrapper</th><th>Native</th></tr>
+          <tr><td>Rendering engine</td><td>Installed Chrome, always current</td><td>Android System WebView, often stale</td><td>N/A</td></tr>
+          <tr><td>Session sharing with browser</td><td>Yes, same partition</td><td>No, isolated</td><td>No</td></tr>
+          <tr><td>Play policy risk</td><td>Moderate, minimum-functionality</td><td>High, frequently rejected</td><td>Low</td></tr>
+          <tr><td>Ongoing engineering cost</td><td>A few days a year</td><td>Continuous</td><td>Continuous, two platforms</td></tr>
+          <tr><td>Access to device APIs</td><td>What the web platform exposes</td><td>Bridgeable, awkwardly</td><td>Everything</td></tr>
+          <tr><td>Time to first release</td><td>1–3 weeks</td><td>2–4 weeks</td><td>3–9 months</td></tr>
+        </table>
+
+        <h2>2. When I Would Not Build One</h2>
+
+        <p>Let me deal with this before the tooling, because half the projects that reach me shouldn't proceed.</p>
+
+        <p>If your Android share of mobile traffic is under about 30%, the maths rarely works. A UK fashion retailer I looked at last year had 71% of mobile sessions on iOS. Building an Android-only app for the remaining slice, then explaining to their board why iPhone users couldn't have it, was a worse outcome than doing nothing. There is no TWA equivalent on iOS and there isn't going to be one.</p>
+
+        <p>If you have nothing to say to customers, skip it. The single durable reason to be on a home screen with a Play listing is push notification permission, granted by people who chose to install you. Back-in-stock, price-drop, order-shipped. If your marketing team has no appetite to run that, you have built an icon that duplicates a bookmark.</p>
+
+        <p>If your site is slow, fix the site. A TWA is a distribution change, not a performance one.</p>
+
+        <p>If nobody will own the annual maintenance, don't start. Google raises the required <code>targetSdk</code> every year with a hard deadline, and an app that misses it stops being discoverable to new users. That's a recurring half-day of work that must belong to someone by name.</p>
+
+        <p>What's left after those filters is a real category: retailers with strong repeat purchase, a decent Android base, a functioning notification programme, and a site that already performs. For them the return is genuinely good, because you get an app for roughly the price of a fortnight rather than a quarter.</p>
+
+        <h2>3. What Your PWA Needs Before You Package Anything</h2>
+
+        <p>Bubblewrap reads your web app manifest and generates an Android project from it. Rubbish in, rubbish out — and several of the failures only surface after you've uploaded a bundle, which wastes days. Get the manifest right first.</p>
+
+        <pre><code class="language-json">{
+  "name": "Aldergate Living",
+  "short_name": "Aldergate",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1d2b26",
+  "background_color": "#f7f4ee",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512",
+      "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/mono-512.png", "sizes": "512x512",
+      "type": "image/png", "purpose": "monochrome" }
+  ],
+  "shortcuts": [
+    { "name": "Track an order", "url": "/account/orders",
+      "icons": [{ "src": "/icons/orders-96.png", "sizes": "96x96" }] },
+    { "name": "Basket", "url": "/cart",
+      "icons": [{ "src": "/icons/cart-96.png", "sizes": "96x96" }] }
+  ]
+}</code></pre>
+
+        <p>Four things in there matter more than they look.</p>
+
+        <p>The <code>maskable</code> icon is not optional in practice. Without one, Bubblewrap takes your square 512 and Android crops it to whatever mask the launcher uses — a circle on Pixel, a squircle on Samsung — and your logo loses its edges. Design the maskable variant with the artwork inside the central 66% and flat colour to the bleed. I've had two clients ship a launcher icon with the top of the letterform sliced off because nobody checked on a Samsung.</p>
+
+        <p>The <code>monochrome</code> icon becomes your notification icon in the status bar. Skip it and Android renders a grey square. It must be a solid silhouette on transparency; anything with internal detail turns to mush at 24dp.</p>
+
+        <p><code>start_url</code> with a tracking parameter is how you separate app traffic from web traffic in analytics later, and you will want that number. Keep it a query parameter rather than a distinct path so it stays inside <code>scope</code> and doesn't fragment your canonical URLs — the SEO side of that is covered in the <a href="/blog/pwa-seo-performance/">PWA and search performance piece</a>, and the short version is: don't invent app-only URLs.</p>
+
+        <p><code>scope</code> defines what stays inside the app. Anything outside it opens in a Custom Tab with a visible URL bar, which is correct behaviour — you don't want your payment provider's hosted page pretending to be your app — but catches people out when their help centre lives on a subdomain.</p>
+
+        <p>Beyond the manifest: serve everything over HTTPS with a valid certificate chain, have a service worker with a <code>fetch</code> handler registered at a scope covering <code>start_url</code>, and make sure the site doesn't rely on <code>window.opener</code> tricks or popups that Chrome blocks in this context.</p>
+
+        <h2>4. Bubblewrap, PWABuilder, or Doing It by Hand</h2>
+
+        <p>Three routes exist and I use two of them.</p>
+
+        <p><strong>Bubblewrap CLI</strong> is Google's own tool and what I reach for by default. It's a Node package that generates a Gradle project, downloads a JDK and the Android SDK command-line tools into <code>~/.bubblewrap</code>, and gives you <code>init</code>, <code>build</code>, <code>update</code>, <code>validate</code> and <code>fingerprint</code> subcommands. Everything it produces is a normal Android project you can open in Android Studio when you need to. Its config lives in a <code>twa-manifest.json</code> you commit, which means your app definition is in version control and reviewable, which the alternatives don't give you.</p>
+
+        <p><strong>PWABuilder</strong> is a web UI: paste a URL, get a zip. It's genuinely good for a proof of concept and I've used it to show a client a working APK inside an hour of a kickoff call. What it isn't good for is the second release. There's no committed config, no reproducible build, and when you need something the UI doesn't expose you're editing generated Gradle files with no upgrade path. Use it to win the argument, then rebuild with Bubblewrap.</p>
+
+        <p><strong>Hand-rolling in Android Studio</strong> means adding <code>androidx.browser</code> yourself and subclassing <code>LauncherActivity</code>. It is not hard — the minimum is about thirty lines — and you need it as soon as you want something structural that Bubblewrap doesn't template. In-app review prompts, a native onboarding screen before the web content, custom logic around notification delegation, an Android widget. My rule: start with Bubblewrap, and if the generated project needs meaningful hand edits, stop treating it as generated and adopt it as a real Android project from that point on. What you must not do is keep running <code>bubblewrap update</code> over a project you've hand-modified, because it will overwrite your changes and you'll rediscover this during a release.</p>
+
+        <pre><code class="language-bash"># Bubblewrap needs Node 18+ and will fetch its own JDK 17 and Android SDK.
+npx @bubblewrap/cli init --manifest https://aldergateliving.co.uk/manifest.webmanifest
+
+# Answer the prompts, then:
+cd aldergate
+npx @bubblewrap/cli build
+
+# Outputs app-release-bundle.aab (for Play) and app-release-signed.apk
+# (for sideloading onto a test device). Both are produced every build.
+npx @bubblewrap/cli validate --url https://aldergateliving.co.uk/</code></pre>
+
+        <h2>5. What Bubblewrap Asks, and the Answers That Matter</h2>
+
+        <p><code>init</code> runs an interview. Most answers come straight from your manifest and you press enter. Four deserve thought.</p>
+
+        <p><strong>Application ID.</strong> This is the Android package name and it is permanent. Once a version is live on Play under <code>uk.co.aldergateliving.shop</code>, that is the app forever; changing it means a new listing with zero installs and zero reviews. Reverse-DNS of a domain you control. Do not use <code>com.example</code>, do not append <code>.twa</code> or <code>.v2</code>, and do not let the default derived from the hostname stand if the hostname might change.</p>
+
+        <p><strong>Signing key.</strong> Bubblewrap offers to create a keystore. Say yes, then treat the resulting <code>android.keystore</code> and its two passwords as production credentials — in your secret manager, not the repo, with the passphrases recorded somewhere a second person can reach them. This is your <em>upload</em> key. Lose it and you're into a Play support process to reset it, which is survivable but tedious. In 2021 a client lost theirs when a contractor's laptop was wiped, and the recovery took eleven days.</p>
+
+        <p><strong>Notifications.</strong> Answering yes adds the notification delegation service and, on Android 13 and above, the <code>POST_NOTIFICATIONS</code> permission. Say yes even if you're not shipping push in v1, because adding it later is a full release cycle and the permission costs nothing until you request it.</p>
+
+        <p><strong>Fallback behaviour.</strong> The choice is Custom Tabs or WebView, for devices where no TWA-capable browser is present. Pick Custom Tabs. More on why below.</p>
+
+        <p>The interview writes <code>twa-manifest.json</code>, and after the first run I edit that file directly and re-run <code>build</code> rather than re-running <code>init</code>.</p>
+
+        <pre><code class="language-json">{
+  "packageId": "uk.co.aldergateliving.shop",
+  "host": "aldergateliving.co.uk",
+  "name": "Aldergate Living",
+  "launcherName": "Aldergate",
+  "display": "standalone",
+  "themeColor": "#1d2b26",
+  "themeColorDark": "#0d1512",
+  "navigationColor": "#1d2b26",
+  "navigationColorDark": "#0d1512",
+  "backgroundColor": "#f7f4ee",
+  "startUrl": "/?source=pwa",
+  "appVersionName": "1.4.0",
+  "appVersionCode": 11,
+  "shortcuts": [],
+  "signingKey": { "path": "./android.keystore", "alias": "android" },
+  "enableNotifications": true,
+  "fallbackType": "customtabs",
+  "splashScreenFadeOutDuration": 300,
+  "orientation": "portrait",
+  "minSdkVersion": 23,
+  "features": {}
+}</code></pre>
+
+        <p><code>bubblewrap update</code> regenerates the Android project from that JSON and, importantly, pulls in a newer version of the underlying TWA support library when one exists. Run it before every release even if nothing in your config changed, because that's how you pick up fixes to the launcher itself.</p>
+
+        <h2>6. Digital Asset Links, and the Fingerprint Nearly Everyone Gets Wrong</h2>
+
+        <p>This is the section to read twice.</p>
+
+        <p>For Chrome to hide the URL bar, two assertions must agree. Your app declares which origin it wants to own, and that origin declares which app may own it. Both must be true, checked at runtime, on the device, on first launch.</p>
+
+        <p>The app side Bubblewrap handles: it writes an <code>asset_statements</code> string resource and references it from the manifest.</p>
+
+        <pre><code class="language-xml">&lt;!-- app/src/main/res/values/strings.xml (generated) --&gt;
+&lt;string name="assetStatements"&gt;
+  [{
+    \"relation\": [\"delegate_permission/common.handle_all_urls\"],
+    \"target\": {
+      \"namespace\": \"web\",
+      \"site\": \"https://aldergateliving.co.uk\"
+    }
+  }]
+&lt;/string&gt;
+
+&lt;!-- app/src/main/AndroidManifest.xml --&gt;
+&lt;application ...&gt;
+  &lt;meta-data
+      android:name="asset_statements"
+      android:resource="@string/assetStatements" /&gt;
+&lt;/application&gt;</code></pre>
+
+        <p>The web side is a file you serve at <code>https://yourdomain/.well-known/assetlinks.json</code>, with content type <code>application/json</code>, over HTTPS, at the exact apex or subdomain in your <code>start_url</code>, with no redirect.</p>
 
         <pre><code class="language-json">[{
   "relation": ["delegate_permission/common.handle_all_urls"],
   "target": {
     "namespace": "android_app",
-    "package_name": "com.modracx.store",
-    "sha256_cert_fingerprints":
-    ["14:6D:E9:7C:15:D0:6A:BD:E8:4A:48:9A:80:FF:C0:DC:7A:D3:4A:8D:15:F3:1D:93:FD:CD:AA:DC:FF:28:C2:59"]
+    "package_name": "uk.co.aldergateliving.shop",
+    "sha256_cert_fingerprints": [
+      "14:6D:E9:7C:15:D0:6A:BD:E8:4A:48:9A:80:FF:C0:DC:7A:D3:4A:8D:15:F3:1D:93:FD:CD:AA:DC:FF:28:C2:59",
+      "8B:22:04:1E:C7:9F:3A:57:D1:60:0C:A2:19:44:88:EF:03:5D:6B:71:AE:C9:12:34:56:78:9A:BC:DE:F0:12:34"
+    ]
   }
 }]</code></pre>
 
-        <hr />
+        <p>Now the part that costs people a week. Bubblewrap will happily print the SHA-256 fingerprint of the keystore it just made for you, and if you paste that into <code>assetlinks.json</code> and test a locally built APK, verification passes and everything looks correct. Then you upload the bundle to Play, install from the Play Store, and the URL bar appears.</p>
+
+        <p>Play App Signing strips your signature and re-signs the artefact with a key Google holds. Your keystore is only the <em>upload</em> key — it proves to Google that the bundle came from you. The certificate that actually ships on the user's device is Google's app signing certificate, and that is the fingerprint Chrome checks. It is a completely different value from the one Bubblewrap printed.</p>
+
+        <p>You find it in Play Console under Release, Setup, App integrity, App signing key certificate — the SHA-256 field. Publish both fingerprints in the array, as above: the Play signing one so Play-installed builds verify, and your upload key one so locally built debug APKs verify too. There's no downside to listing both, and it saves you from a test build that behaves differently from production.</p>
+
+        <pre><code class="language-bash"># Local upload-key fingerprint (what Bubblewrap knows about)
+keytool -list -v -keystore ./android.keystore -alias android \
+  | grep -A1 "SHA256:"
+
+# Add a fingerprint to twa-manifest.json and regenerate the asset statements
+npx @bubblewrap/cli fingerprint add \
+  8B:22:04:1E:C7:9F:3A:57:D1:60:0C:A2:19:44:88:EF:03:5D:6B:71:AE:C9:12:34:56:78:9A:BC:DE:F0:12:34
+npx @bubblewrap/cli fingerprint generateAssetLinks --output ./public/.well-known/assetlinks.json</code></pre>
+
+        <p>Verify from outside your own head, using Google's own checker rather than eyeballing the file:</p>
+
+        <pre><code class="language-bash">curl -sS "https://digitalassetlinks.googleapis.com/v1/statements:list\
+?source.web.site=https://aldergateliving.co.uk\
+&amp;relation=delegate_permission/common.handle_all_urls" | python3 -m json.tool
+
+# A healthy response lists your package and fingerprint under "statements"
+# and — this is the bit people skip — has an empty "debugString" of errors.</code></pre>
+
+        <h2>7. When Verification Fails: Reading the URL Bar</h2>
+
+        <p>The symptom is unambiguous. Instead of your app filling the screen, a slim toolbar sits above it with the domain and a padlock. That's a Custom Tab that failed to become trusted, falling back to its normal chrome. The app still works. It just looks like a browser, and customers notice.</p>
+
+        <p>Chrome caches the verification result. Once a launch fails, reinstalling the app is often the only way to get a fresh check on that device, which makes debugging feel non-deterministic if you don't know it. Clearing Chrome's storage works too, on a test device.</p>
+
+        <p>The causes, roughly in the order I hit them:</p>
+
+        <p><strong>Wrong fingerprint.</strong> The Play signing key case above. Nine times out of ten.</p>
+
+        <p><strong>Host mismatch.</strong> Your asset links live on <code>www.aldergateliving.co.uk</code> but the app's declared site is the apex, or vice versa. These are different origins to the verifier. Serve the file on both and declare whichever your <code>start_url</code> actually resolves to after redirects.</p>
+
+        <p><strong>The file isn't reachable as JSON.</strong> A CDN serving it as <code>text/plain</code>, a WAF challenging the request because it has no browser headers, a 301 from HTTP to HTTPS that the fetcher won't follow, a framework router returning your 404 page with a 200 status. Test with a plain <code>curl</code> and no headers, not from a browser where you're logged in.</p>
+
+        <p><strong>Package name mismatch.</strong> Usually a typo, occasionally because someone changed the application ID between the file being written and the build going out.</p>
+
+        <pre><code class="language-bash"># The check that finds most of it, from a machine that is not yours
+curl -sSI https://aldergateliving.co.uk/.well-known/assetlinks.json
+# HTTP/2 200
+# content-type: application/json   <-- not text/plain, not text/html
+
+# And on a connected device, watch the verification happen live
+adb logcat -s TWA_Verification:* CustomTabsConnection:* chromium:*</code></pre>
+
+        <p>One more, which took me most of a Friday: an app in a closed test track had been installed on my device from an earlier build, and Android kept the old package's verification state. Uninstalling with <code>adb uninstall uk.co.aldergateliving.shop</code> before each test cycle removed a whole class of ghost failures.</p>
+
+        <h2>8. Splash Screens, Icons, Orientation and Theming</h2>
+
+        <p>Bubblewrap builds a splash screen from <code>backgroundColor</code> and your 512px icon, shows it while Chrome warms up, and cross-fades over <code>splashScreenFadeOutDuration</code> milliseconds. On a mid-range Android phone with a cold Chrome process, that gap is real — 700ms to 1.2 seconds. Getting the splash to match the first paint of your site is the difference between "instant" and "loading".</p>
+
+        <p>Match <code>background_color</code> in the web manifest to the page background of your <code>start_url</code>, not to your brand colour. If your homepage is off-white and your splash is dark green, users see a flash of green, then white, then content. Two colour changes in under a second reads as jank even when nobody can articulate why.</p>
+
+        <p>Android 12 changed splash screens system-wide, and this catches every TWA built before it. From API 31 the OS draws its own splash — your launcher icon on a solid background — and if your app also draws one, you get two in a row. The fix is to let the system own it: set the theme correctly and reduce the Bubblewrap fade so the transition is one motion. Modern Bubblewrap handles this, but a project generated in 2021 and merely rebuilt since will still show the double splash.</p>
+
+        <pre><code class="language-xml">&lt;!-- app/src/main/res/values-v31/styles.xml --&gt;
+&lt;resources&gt;
+  &lt;style name="Theme.LauncherActivity"
+         parent="Theme.SplashScreen"&gt;
+    &lt;item name="windowSplashScreenBackground"&gt;@color/backgroundColor&lt;/item&gt;
+    &lt;item name="windowSplashScreenAnimatedIcon"&gt;@drawable/ic_splash&lt;/item&gt;
+    &lt;!-- Keep this short. The system splash is already ~500ms of budget. --&gt;
+    &lt;item name="windowSplashScreenAnimationDuration"&gt;200&lt;/item&gt;
+    &lt;item name="postSplashScreenTheme"&gt;@style/Theme.LauncherActivityBase&lt;/item&gt;
+  &lt;/style&gt;
+&lt;/resources&gt;</code></pre>
+
+        <p>Status bar and navigation bar colours come from <code>themeColor</code> and <code>navigationColor</code> in <code>twa-manifest.json</code>, with dark variants that apply when the device is in dark mode. Set all four. Leaving the navigation bar at its default gives you a black strip under a light app, which looks like a bug on a gesture-navigation device where that strip is only a few pixels tall.</p>
+
+        <p>Orientation: lock to portrait unless you have genuinely designed landscape layouts. Storefronts almost never have. An unlocked orientation means a customer who rotates mid-checkout gets a reflow, and on some payment iframes a reflow means a re-render of a form they had half filled.</p>
+
+        <p><code>display</code> deserves a moment. <code>standalone</code> keeps the system status bar visible with your theme colour behind it. <code>fullscreen</code> hides it, which is right for a game and wrong for a shop — people want to see the time and their battery while they browse. There's also an immersive mode you can set at the activity level, and I have never wanted it on a retail app.</p>
+
+        <h2>9. Offline Behaviour and the Fallback Page</h2>
+
+        <p>Open a TWA with the phone in aeroplane mode and, by default, the user sees Chrome's offline error page. The dinosaur. In an app that has no URL bar and your icon on the home screen. It is jarring, it looks broken, and Play reviewers have rejected apps for it under the quality guidelines.</p>
+
+        <p>The fix is entirely on the web side: a service worker that catches failed navigations and serves a cached shell. Any decent caching setup already does this, but a lot of production service workers only cache assets and let navigations fall through.</p>
+
+        <pre><code class="language-javascript">const OFFLINE_URL = '/offline/';
+const SHELL = 'shell-v9';
+
+self.addEventListener('install', (event) =&gt; {
+  event.waitUntil(
+    caches.open(SHELL).then((c) =&gt; c.addAll([OFFLINE_URL, '/css/app.css', '/icons/mono-512.png']))
+  );
+});
+
+self.addEventListener('fetch', (event) =&gt; {
+  if (event.request.mode !== 'navigate') return;
+
+  event.respondWith((async () =&gt; {
+    try {
+      // Navigation preload matters here: without it the SW boot cost
+      // is added to every cold navigation, ~80-150ms on mid-range hardware.
+      const preloaded = await event.preloadResponse;
+      if (preloaded) return preloaded;
+      return await fetch(event.request);
+    } catch (err) {
+      const cache = await caches.open(SHELL);
+      return (await cache.match(OFFLINE_URL)) || Response.error();
+    }
+  })());
+});</code></pre>
+
+        <p>Design the offline page as part of the app, not as an error. On the homeware project it shows the brand mark, a line of copy, a retry button, and — the part that earned its keep — links to the last four products the customer viewed, read from IndexedDB. A retry button alone is a dead end. Giving someone something to look at while the train is in a tunnel is the difference between them waiting and them closing the app.</p>
+
+        <p>Test it properly: install the release build on a device, turn on aeroplane mode, force-stop the app, then reopen it. Cold start offline is a different code path from going offline while the app is running, and it's the one that fails.</p>
+
+        <h2>10. androidx.browser, and Devices Without Chrome</h2>
+
+        <p>The library doing the actual work is <code>androidx.browser</code>. Bubblewrap pins a version for you and I pin it explicitly on top, because a floating version is how a build that worked in March fails in June.</p>
+
+        <pre><code class="language-gradle">dependencies {
+    // Pin exactly. TWA behaviour — splash handling, display modes,
+    // notification delegation — changes between minor versions.
+    implementation 'androidx.browser:browser:1.8.0'
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}
+
+android {
+    compileSdk 36
+    defaultConfig {
+        applicationId "uk.co.aldergateliving.shop"
+        minSdk 23          // Android 6.0; below this TWA support is unreliable
+        targetSdk 36       // Play requirement from 31 Aug 2026
+        versionCode 11
+        versionName "1.4.0"
+    }
+}</code></pre>
+
+        <p>Not every device has Chrome. Huawei devices sold after the 2019 US restrictions ship without Google services at all. Some carrier ROMs in India and Brazil ship a different default browser. A minority of users have disabled Chrome in favour of Firefox or Samsung Internet.</p>
+
+        <p>Samsung Internet supports TWA and is genuinely common — on Samsung hardware it is often the default and it works fine. Firefox does not support TWA. On a device where no capable provider exists, your app falls back to whatever <code>fallbackType</code> says.</p>
+
+        <p>Choose <code>customtabs</code>. It opens the site in a Custom Tab with a visible toolbar: the app looks slightly less native but behaves correctly, shares session state with the system browser, and stays current. The <code>webview</code> fallback gives you a fullscreen-looking app backed by the Android System WebView, with a separate cookie jar — so the user is logged out, their basket is empty, and any payment SDK that sniffs for a real browser may refuse. I have seen a WebView fallback take a checkout from working to silently failing for about 3% of users, and because it was 3%, it went unnoticed for six weeks.</p>
+
+        <p>You can detect the situation from the web side and adjust — hiding an "install our app" banner inside the app, for instance — by checking the referrer Android sets.</p>
+
+        <pre><code class="language-javascript">// Runs on your site. Distinguishes TWA launch from a browser visit.
+const isTwa = document.referrer.startsWith('android-app://');
+const params = new URLSearchParams(location.search);
+const launchedFromApp = isTwa || params.get('source') === 'pwa';
+
+if (launchedFromApp) {
+  document.documentElement.dataset.surface = 'app';
+  // Suppress install prompts, adjust safe-area padding, tag analytics.
+  window.dataLayer?.push({ event: 'app_session', surface: 'twa' });
+}</code></pre>
+
+        <h2>11. Payments, Play Billing, and Where the Policy Line Actually Sits</h2>
+
+        <p>This question causes more panic than any other and the panic is usually misplaced.</p>
+
+        <p>Google's payments policy requires Play Billing for <em>digital</em> goods and services consumed within the app: in-app currency, subscriptions to digital content, unlocking features, digital media. Physical goods and services delivered in the real world are explicitly outside it. A brewing supplies retailer, a grocer, a clothing brand, a company selling event tickets or hotel nights — none of them need Play Billing, and none of them owe Google 15 or 30 percent. Your existing checkout, your existing PSP, your existing Google Pay or Apple Pay buttons, all fine.</p>
+
+        <p>I have twice been told by an agency that Play would take a cut of a client's physical-product revenue. It's wrong, and it kills projects that should proceed. Read the policy yourself rather than taking anyone's summary, including mine.</p>
+
+        <p>Where it genuinely bites: a subscription box is a grey area worth a support ticket in advance if the subscription includes digital content. A brand selling both a physical product and a digital course from one storefront needs the digital half to route through Play Billing, or to be genuinely unavailable in the app. And a loyalty programme where customers buy points with real money starts to look like in-app currency very quickly.</p>
+
+        <p>The rules around this have been moving — antitrust litigation in the US and regulation in the EU have forced Google to permit alternative billing and external purchase links in ways that weren't allowed a few years ago. If you sell digital goods, check the current position rather than trusting a blog post, this one included.</p>
+
+        <p>For physical goods, the practical work is making sure Web Payments works properly inside the TWA. It does, because it's Chrome. Google Pay via the Payment Request API surfaces the same sheet as in the browser. One thing to check: any redirect-based 3-D Secure flow that leaves your origin will open in a Custom Tab with a URL bar, since it's outside <code>scope</code>. That's correct and desirable — the customer should see the bank's domain — but tell your support team before launch so they don't log it as a bug.</p>
+
+        <h2>12. Push Notifications Through the Web Push Path</h2>
+
+        <p>The reason to build the app, in most cases. Web push on Android has worked in Chrome for years, and inside a TWA it works through a delegation mechanism: Chrome hands the notification to your app so it appears under your app's name and icon, with your app's notification channel settings, and taps route back into the app.</p>
+
+        <p>Bubblewrap wires this when you answer yes to notifications. What it produces:</p>
+
+        <pre><code class="language-xml">&lt;!-- AndroidManifest.xml --&gt;
+&lt;uses-permission android:name="android.permission.POST_NOTIFICATIONS" /&gt;
+
+&lt;service
+    android:name="com.google.androidbrowserhelper.trusted.DelegationService"
+    android:exported="true"&gt;
+  &lt;intent-filter&gt;
+    &lt;action android:name="android.support.customtabs.trusted.TRUSTED_WEB_ACTIVITY_SERVICE" /&gt;
+  &lt;/intent-filter&gt;
+  &lt;meta-data
+      android:name="android.support.customtabs.trusted.SMALL_ICON"
+      android:resource="@drawable/ic_notification" /&gt;
+&lt;/service&gt;</code></pre>
+
+        <p>Three things to get right on the web side.</p>
+
+        <p>Ask for permission at a moment that means something. Not on load. A "notify me when this is back" button on an out-of-stock product, or a checkbox on the order confirmation offering delivery updates. On the homeware project, prompting on first app launch got 34% acceptance; moving it to the back-in-stock control took it to 71% on a smaller but far better-qualified audience. You get one shot per user — a denial is close to permanent, and on Android 13 and later a denied <code>POST_NOTIFICATIONS</code> permission is a system-level block you cannot prompt around.</p>
+
+        <p>Request the OS permission before the web permission. On Android 13+, if your app hasn't been granted <code>POST_NOTIFICATIONS</code>, the web-level subscription can succeed while nothing is ever displayed. Silent failure, no error, and you find out when your first campaign gets zero opens.</p>
+
+        <p>Handle the notification click properly in your service worker, and include a deep link so the tap lands on the product, not the homepage.</p>
+
+        <pre><code class="language-javascript">self.addEventListener('notificationclick', (event) =&gt; {
+  event.notification.close();
+  const target = event.notification.data?.url || '/';
+
+  event.waitUntil((async () =&gt; {
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clients) {
+      // Reuse the existing app window rather than stacking a second one.
+      if (new URL(client.url).origin === self.location.origin) {
+        await client.navigate(target);
+        return client.focus();
+      }
+    }
+    return self.clients.openWindow(target);
+  })());
+});</code></pre>
+
+        <h2>13. Deep Links and Intent Filters</h2>
+
+        <p>Without deep links your app is an island. Someone taps your link in an email on an Android phone and lands in Chrome, on the website, logged in as a different session, while your app sits on their home screen unused. Fixing that is a manifest change plus the same asset links file you already published.</p>
+
+        <pre><code class="language-xml">&lt;activity android:name="LauncherActivity" android:exported="true"&gt;
+  &lt;intent-filter android:autoVerify="true"&gt;
+    &lt;action android:name="android.intent.action.VIEW" /&gt;
+    &lt;category android:name="android.intent.category.DEFAULT" /&gt;
+    &lt;category android:name="android.intent.category.BROWSABLE" /&gt;
+    &lt;data android:scheme="https"
+          android:host="aldergateliving.co.uk" /&gt;
+    &lt;data android:scheme="https"
+          android:host="www.aldergateliving.co.uk" /&gt;
+  &lt;/intent-filter&gt;
+&lt;/activity&gt;</code></pre>
+
+        <p><code>autoVerify="true"</code> makes Android check your <code>assetlinks.json</code> at install time. If it verifies, links open your app with no chooser dialogue. If it doesn't, Android silently opens the browser instead and gives no user-visible clue — the same file, doing double duty, failing quietly in a second way.</p>
+
+        <pre><code class="language-bash"># Did App Links verification actually pass on this device?
+adb shell pm get-app-links uk.co.aldergateliving.shop
+
+# Simulate an inbound link without needing an email
+adb shell am start -a android.intent.action.VIEW \
+  -d "https://aldergateliving.co.uk/products/marlow-oak-sideboard" \
+  uk.co.aldergateliving.shop</code></pre>
+
+        <p>Decide deliberately which paths should <em>not</em> open in the app. On the homeware build we excluded <code>/blog/</code> and the help centre — long-form content people often want to share, where an app takeover mid-read is unwelcome — by keeping them outside the manifest <code>scope</code>. Excluding them from the intent filter entirely requires a slightly more careful set of <code>data</code> elements with path prefixes, and it's worth the effort if you have a content site attached to a shop.</p>
+
+        <h2>14. targetSdk, App Bundles and Play's Annual Deadline</h2>
+
+        <p>Play stopped accepting APKs for new apps in August 2021. You upload an Android App Bundle (<code>.aab</code>), Google generates per-device APKs from it, and Play App Signing is mandatory as part of that. Bubblewrap produces the bundle for you, so this is mostly a thing to know rather than a thing to do — except that it's the mechanism behind the fingerprint problem earlier.</p>
+
+        <p>The recurring cost is the API level requirement. Every year, roughly on 31 August, Google raises the minimum <code>targetSdk</code> for new apps and for updates to existing ones. As of this month that means targeting API 36 — Android 16 — and an app still on 35 can't ship an update after the deadline. Older apps that stop meeting the requirement also become invisible to users on newer Android versions in the Play Store, which is a slow, silent decline in installs rather than a visible failure.</p>
+
+        <p>For a TWA the annual bump is usually trivial: run <code>bubblewrap update</code>, bump <code>targetSdk</code>, rebuild, test on a device, release. Half a day. The reason it becomes a crisis is that nobody owns it, the person who built the app has moved on, the keystore password is in a Slack DM from two years ago, and the deadline is discovered in September.</p>
+
+        <p>Put it in a calendar. Every June, one ticket: rebuild the app for the new API level. Attach the runbook to it.</p>
+
+        <table class="data-table">
+          <tr><th>Deadline</th><th>Required targetSdk</th><th>Android version</th><th>What breaks if missed</th></tr>
+          <tr><td>31 Aug 2023</td><td>33</td><td>13</td><td>No new updates accepted</td></tr>
+          <tr><td>31 Aug 2024</td><td>34</td><td>14</td><td>Hidden from newer devices in Play</td></tr>
+          <tr><td>31 Aug 2025</td><td>35</td><td>15</td><td>Hidden from newer devices in Play</td></tr>
+          <tr><td>31 Aug 2026</td><td>36</td><td>16</td><td>Updates blocked; visibility falls</td></tr>
+        </table>
+
+        <h2>15. Getting Through Review, and Release Mechanics</h2>
+
+        <p>Back to that rejection email. The Minimum Functionality policy exists because Play was flooded with apps that were a website in a frame and nothing else. A TWA is, structurally, exactly that — so you have to demonstrate the difference.</p>
+
+        <p>What got us in on the second attempt: push notifications actually wired and working, an offline experience that isn't an error page, home-screen shortcuts for order tracking and basket, app-specific content on the store listing explaining what the app does that the site doesn't, and a short screen recording attached to the appeal showing all of it. The appeal took four days.</p>
+
+        <p>What I'd have done differently: submitted to a closed test track first and let it sit for a week before promoting to production. Test-track review is less strict, but it surfaces most policy problems without burning a production rejection, and a rejection on your record makes subsequent reviews slower. We went straight to production because of the launch date, which is precisely the wrong reason.</p>
+
+        <p>The other reliable rejection causes:</p>
+
+        <p><strong>Privacy policy.</strong> Must be a live URL, reachable without login, on your own domain, and must actually describe the app's data handling — not a generic website policy. Reviewers check that it loads.</p>
+
+        <p><strong>Data safety form.</strong> This is the one people fill in carelessly. You declare every category of data collected, whether it's shared with third parties, whether it's encrypted in transit, whether users can request deletion. Your TWA collects whatever your website collects, which — with analytics, an ads pixel, a chat widget and a session recorder — is usually more than the person filling the form realises. A mismatch between the declaration and observed behaviour gets the app pulled, and Google does test this. Sit down with your tag manager container open when you fill it in.</p>
+
+        <p><strong>Account deletion.</strong> If the app supports account creation, you must offer in-app deletion and a web URL for deletion requests. Retailers routinely have neither.</p>
+
+        <p>On release mechanics: <code>versionCode</code> is an integer that must strictly increase and is invisible to users; <code>versionName</code> is the string they see. Never reuse a version code, including for a build you uploaded and abandoned. Play tracks are internal testing (available in minutes, up to 100 testers), closed, open, and production, and you can promote a build between them without rebuilding. Staged rollout on production — start at 10%, watch crash-free rate and your own conversion numbers for 48 hours, then go to 100% — costs nothing and has saved me twice.</p>
+
+        <h2>16. A Worked Example: Nine Weeks in Leeds</h2>
+
+        <p>Aldergate Living, homeware, roughly £4.1m online, 63% of sessions on mobile, and of those 58% Android — unusual, and largely why the project made sense. Existing PWA, built two years earlier, decent Lighthouse scores, LCP 2.1s on 4G.</p>
+
+        <p><strong>Week 1.</strong> Manifest audit. Found no maskable icon, no monochrome icon, <code>display: "minimal-ui"</code> rather than <code>standalone</code>, and a <code>scope</code> of <code>/shop/</code> that excluded the homepage. Two days of work, all of it on the web side, none of it Android.</p>
+
+        <p><strong>Week 2.</strong> Bubblewrap init, first build, sideloaded APK verified against the upload key fingerprint. Looked perfect. This is where I created the problem.</p>
+
+        <p><strong>Week 3.</strong> Uploaded to production, rejected for Minimum Functionality within 31 hours. Told the client. Not a good call to make on a Thursday afternoon.</p>
+
+        <p><strong>Weeks 4–5.</strong> Built the things that made it an app rather than a wrapper: notification permission flow tied to back-in-stock, the offline page with recently-viewed products, shortcuts, deep links. Appealed with a screen recording. Approved on day 4 of the appeal.</p>
+
+        <p><strong>Week 6.</strong> Launched. Within 48 hours, support tickets: the URL bar. Not on every device — on 11% of installs by our count. I spent most of a day convinced it was a CDN caching issue with <code>assetlinks.json</code> before working out that the file listed only the upload key fingerprint and that the 11% were simply the users whose install had actually completed verification against the Play signing certificate. Everyone else was seeing a stale cached pass from the sideloaded build. Adding Google's fingerprint and shipping 1.0.1 fixed it in about ninety minutes of actual work, after six hours of looking in the wrong place.</p>
+
+        <p><strong>Weeks 7–9.</strong> Notifications programme. First back-in-stock campaign went to 1,840 subscribers, 61% delivered-and-opened within six hours, 4.2% converted. That single send did £6,300.</p>
+
+        <p><strong>Six-month numbers.</strong> 14,200 installs, of which 9,100 still had the app installed at the six-month mark. App sessions converted at 4.9% against 2.6% for mobile web — which looks spectacular until you accept that people who install your app were already your best customers, and most of that gap is selection, not causation. The number I actually trust is the incremental revenue from push, about £51,000 over six months, against a build cost of roughly £14,000 and about £2,500 a year of maintenance.</p>
+
+        <p><strong>What went wrong beyond the fingerprint.</strong> We locked orientation to portrait after launch, not before, and for three weeks a tablet user rotating the device during checkout lost their card form. Eleven abandoned orders we can identify. And I underestimated the support load: the first month generated 40-odd tickets about things that were correct behaviour, mostly the Custom Tab appearing during 3-D Secure. A single paragraph in the support team's runbook, written before launch, would have absorbed all of it.</p>
+
+        <h2>17. Measuring Whether It Was Worth Shipping</h2>
+
+        <p>The vanity metric is installs. It tells you almost nothing, because installs are driven by whatever banner you put on the site, and a banner that pesters people gets installs from users who uninstall within a week.</p>
+
+        <p>Four numbers I actually track.</p>
+
+        <p><strong>Retained installs at 30 and 90 days.</strong> Play Console gives you this. Below about 50% at 90 days, the app is not earning its place on the home screen and the problem is that it offers nothing the site doesn't.</p>
+
+        <p><strong>Revenue per retained install per month.</strong> Blunt, but comparable against the maintenance cost. If it's under a pound and you have four thousand retained installs, you're making four thousand a month against a couple of thousand a year of upkeep, and the decision is easy.</p>
+
+        <p><strong>Incremental push revenue.</strong> The honest version requires a holdout: exclude 10% of subscribers from each campaign and compare. Almost nobody does this and almost everyone therefore overstates the app's contribution, because a proportion of push-attributed orders would have happened anyway. On Aldergate the holdout suggested about 30% of push-attributed revenue was not incremental. Still a good number. Not the number in the deck.</p>
+
+        <p><strong>Cannibalisation of mobile web.</strong> If app sessions rise and mobile web sessions fall by the same amount with flat total revenue, you have moved traffic between surfaces and gained nothing but a maintenance liability.</p>
+
+        <pre><code class="language-javascript">// Tag the surface on every pageview so the split is queryable later.
+// Do this on day one; retrofitting it costs you the comparison period.
+const surface = document.referrer.startsWith('android-app://')
+  ? 'twa'
+  : (window.matchMedia('(display-mode: standalone)').matches ? 'pwa' : 'web');
+
+gtag('set', 'user_properties', { launch_surface: surface });
+gtag('event', 'page_view', { launch_surface: surface });</code></pre>
+
+        <h2>18. iOS, and Why There Is No Equivalent</h2>
+
+        <p>There is no TWA on iOS and there is unlikely to be one. Apple's App Store Review Guidelines have long treated apps that are primarily a repackaged website as ineligible, and until recently every browser on iOS was required to use WebKit, so the entire mechanism a TWA depends on — a browser process you delegate to, sharing its storage — doesn't exist in the same form.</p>
+
+        <p>Regulation in the EU has begun to loosen the browser engine rules, but nothing has appeared that behaves like a TWA, and I would not plan around it.</p>
+
+        <p>Practically, what you have on iOS is Add to Home Screen. It works: the manifest is honoured, the icon appears, the app opens without Safari chrome, and web push has been supported since iOS 16.4 for home-screen web apps specifically. What you don't get is App Store presence, and the install flow is a share-sheet gesture most people have never performed. Conversion on an "Add to Home Screen" prompt runs at a fraction of a Play install.</p>
+
+        <p>So plan for asymmetry. Android gets an app; iOS gets a well-executed installable web app and a prompt that explains the gesture. Do not build a WebView wrapper for iOS to achieve parity — it will be rejected, and if it isn't, it'll be worse than the web app it replaced. If iOS parity is a hard requirement, you're looking at a genuine native or React Native build, which is a different budget and a different article.</p>
+
+        <h2>19. Questions I Get Asked</h2>
+
+        <p><strong>"Will the app update when we deploy the website?"</strong> Yes, immediately, because the content is your website. The only things that require a Play release are the shell: icons, splash, permissions, manifest-derived settings, targetSdk. In practice you'll ship two or three Play releases a year and deploy the site daily.</p>
+
+        <p><strong>"Can we put it on the Amazon Appstore or the Galaxy Store too?"</strong> Amazon devices have no Chrome, so a TWA falls back and the experience is poor — I'd not bother. Galaxy Store is more viable since Samsung Internet supports TWA, but you'll need a separate signing arrangement and the fingerprint in <code>assetlinks.json</code> must cover that store's signing key as well. Worth it only if Samsung devices are a large, identifiable share of your base.</p>
+
+        <p><strong>"Our app shows a white flash before content."</strong> Usually the splash background not matching the page background, or a render-blocking font. Sometimes it's the service worker booting on a cold start without navigation preload enabled. Check the splash colour first because it's a two-minute fix.</p>
+
+        <p><strong>"Does a Play listing help our SEO?"</strong> Not directly. Play listings can rank in Google for branded queries, which is mild brand real estate, and app engagement has no established effect on web rankings. If someone is selling you a TWA as an SEO play, they're selling you something else.</p>
+
+        <p><strong>"Can we show different content in the app?"</strong> You can — detect the launch surface and branch. Be careful. App-exclusive pricing is a support problem and, if you're not careful about how it's implemented, a structured-data problem. App-exclusive early access to a sale is fine and works well.</p>
+
+        <p><strong>"How big is the download?"</strong> Around 1.5MB to 3MB, because there's no browser engine in it. Users notice this favourably; it's one of the few genuine advantages to mention on the listing.</p>
+
+        <p><strong>"We changed domain. What now?"</strong> Publish <code>assetlinks.json</code> on the new domain with the same fingerprints, update <code>host</code> in <code>twa-manifest.json</code>, rebuild and release, and keep the old domain's file and its redirects live for at least a year. Users who never update the app keep working through the redirect; users who do update go direct.</p>
+
+        <p><strong>"Do we need Android Studio at all?"</strong> Not for a standard build — Bubblewrap does everything from the command line. You'll want it installed for the emulator, for reading a crash trace, and for the day you need to hand-edit the project. I'd install it and expect to open it about twice a year.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>In this order, on a new project.</p>
+
+        <p>First, decide whether to build it at all, using the traffic split and the notification programme as the test. Half a day with the analytics, and a conversation with whoever owns CRM about whether they'll actually send campaigns. If the answer there is vague, stop.</p>
+
+        <p>Second, audit and fix the web app manifest — maskable icon, monochrome icon, <code>display: standalone</code>, a <code>scope</code> that covers everything you want inside the app, matched background colour. This is a web task, it's cheap, and every downstream problem gets smaller.</p>
+
+        <p>Third, make the offline path good. Cached shell, branded fallback page, recently-viewed products, and cold-start-offline tested on a real device. Do this before you touch Bubblewrap, because it's both a review requirement and the thing customers notice.</p>
+
+        <p>Fourth, register the package name and get the app into Play Console as a draft with a closed test track before you have anything to upload. Creating the listing surfaces the data safety form and the privacy policy requirement early, when there's time to deal with them.</p>
+
+        <p>Fifth, run <code>bubblewrap init</code>, store the keystore in your secret manager the same hour it's created, and commit <code>twa-manifest.json</code>.</p>
+
+        <p>Sixth — and this is the step I'd skip past everything else if you only remember one thing — upload a build to internal testing, install it <em>from Play</em> on a real device, and check for the URL bar. Get Google's app signing certificate fingerprint from Play Console, put it in <code>assetlinks.json</code> alongside your upload key fingerprint, and verify with the Digital Asset Links API rather than by eye.</p>
+
+        <p>Seventh, build the app-only capabilities before you submit for production review: notification flow, shortcuts, deep links. Record a 45-second video of them working and keep it, because you'll need it if you're rejected.</p>
+
+        <p>Eighth, release at 10% staged rollout and watch crash-free sessions and conversion for two days.</p>
+
+        <p>Ninth, write the runbook — keystore location, fingerprint values, the targetSdk bump procedure, who owns it — and put a ticket in next June's sprint. The app will outlive whoever built it, and the difference between a maintained TWA and an abandoned one is entirely whether that document exists.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -227,12 +769,11 @@
               <p>Web App Manifest and Service Worker caching.</p>
             </li>
             <li>
-              <strong><a href="/blog/pwa-seo-performance/">Progressive Web Apps (PWAs) & SEO Performance</a></strong>
+              <strong><a href="/blog/pwa-seo-performance/">Progressive Web Apps (PWAs) &amp; SEO Performance</a></strong>
               <p>Offline service worker caching strategy.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -266,6 +807,6 @@
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

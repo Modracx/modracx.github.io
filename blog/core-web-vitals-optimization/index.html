@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Monitoring & Optimizing Core Web Vitals for E-commerce | MODRACX</title>
-  <meta name="description" content="A step-by-step engineering guide to measuring, analyzing, and improving Core Web Vitals (LCP, INP, CLS) on Magento 2 and Shopify Plus storefronts." />
+  <meta name="description" content="Measuring and defending Core Web Vitals: CrUX field data versus lab, the 75th-percentile trap, first-party RUM collection, Lighthouse budgets in CI and release-over-release regression detection." />
   <meta property="og:title" content="Monitoring & Optimizing Core Web Vitals for E-commerce | MODRACX" />
   <meta property="og:description" content="A step-by-step engineering guide to improving Core Web Vitals by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -169,17 +171,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Monitoring & Optimizing Core Web Vitals for E-commerce</h1>
-        <p class="lede">Field metrics (CrUX data) dictate real-world Google search rankings. Learn how to diagnose and remediate LCP, INP, and CLS performance bottlenecks across mobile and desktop environments.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Monitoring &amp; Optimizing Core Web Vitals for E-commerce</h1>
+        <p class="lede">A retailer sent me two screenshots: Lighthouse 96, and Search Console saying 68% of mobile URLs failing. Both were correct. Here is how to collect numbers that can actually tell you which one to believe.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -204,266 +206,623 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        <h2>Real-User Monitoring (RUM) Implementation</h2>
-        <p>Core Web Vitals have cemented their position as non-negotiable performance heuristics in modern e-commerce engineering. Engineers optimizing digital storefronts on platforms like Magento 2 and Shopify Plus face a relentless uphill battle against bloated third-party scripts, aggressive tracking pixels, and complex frontend hydration cycles. These environments routinely tax device processing power, dragging down metrics like Interaction to Next Paint (INP) and Largest Contentful Paint (LCP) in real-world scenarios. Relying strictly on synthetic monitoring, such as Lighthouse runs on a high-speed fiber connection, paints an incomplete picture.</p>
-        <p>The Chrome User Experience Report (CrUX) aggregates field data across millions of Android and desktop Chrome sessions, establishing the baseline Google uses for its search ranking algorithms. Any discrepancy between your synthetic pipelines and field data reveals a blind spot in performance observability. This necessitates a robust Real-User Monitoring (RUM) architecture capable of ingesting high-granularity telemetry directly from client browsers. By capturing Web Vitals at the edge, engineering teams can correlate performance regressions with specific code deployments, geographic regions, or device classes.</p>
-        <p>LCP, or Largest Contentful Paint, represents the time it takes for the main hero element to fully render on the screen. In e-commerce, this is typically a high-resolution product image, an interactive promotional carousel, or a critical call-to-action button. Optimizing LCP requires a multifaceted approach: mitigating server response times (Time to First Byte or TTFB), eliminating render-blocking CSS and JavaScript, and ensuring the LCP resource is prioritized by the browser. Techniques such as preloading critical imagery, utilizing modern image formats like AVIF or WebP, and implementing aggressive edge caching via Content Delivery Networks (CDNs) are foundational.</p>
-        <p>However, achieving a sub-2.5 second LCP consistently across mobile networks demands deeper architectural shifts. Server-Side Rendering (SSR) or Static Site Generation (SSG) patterns inherently deliver pre-computed markup, accelerating the critical rendering path. Conversely, Single Page Applications (SPAs) relying heavily on Client-Side Rendering (CSR) often struggle with LCP, as the browser must download, parse, and execute substantial JavaScript bundles before rendering meaningful content.</p>
-        <p>INP, Interaction to Next Paint, measures the latency between a user's input—a tap, click, or keypress—and the subsequent visual update. Unlike First Input Delay (FID), which only captures the initial processing delay, INP accounts for the entire interaction lifecycle, making it a far more rigorous metric. High INP scores typically stem from long-running JavaScript tasks occupying the main thread, delaying event callbacks and rendering operations. To optimize INP, developers must aggressively break up long tasks using techniques like requestAnimationFrame, setTimeout, or the newer scheduler.postTask API. Furthermore, offloading heavy computational work to Web Workers prevents main thread congestion, ensuring immediate responsiveness to user inputs.</p>
-        <p>Cumulative Layout Shift (CLS) quantifies visual instability, measuring the cumulative score of unexpected layout shifts during the page lifecycle. In the context of e-commerce, this often manifests as intrusive promotional banners pushing content down just as a user attempts to tap an 'Add to Cart' button, leading to frustrating misclicks. Preventing CLS requires strict adherence to explicit sizing for all media elements, including images, iframes, and advertising containers. Pre-allocating space for dynamically loaded content via CSS aspect-ratio properties or skeleton screens ensures the document structure remains rigid during asynchronous data fetching.</p>
-        <p>Let us examine the practical implementation of a Real-User Monitoring ingestion pipeline. The web-vitals JavaScript library provides standardized APIs for capturing these metrics directly within the client session. This data must then be transmitted to a backend ingestion endpoint for aggregation and analysis. To prevent analytical payloads from impacting the user experience, utilizing the navigator.sendBeacon API ensures asynchronous transmission without blocking the main thread or delaying page unloads. The following implementation demonstrates a production-grade RUM client script capable of capturing LCP, INP, and CLS, attaching essential session metadata, and transmitting it to a custom ingestion service.</p>
+        <h2>1. The Report That Said 96 And The Report That Said Failing</h2>
 
-        <pre><code class="language-javascript">// Web Vitals Real-User Monitoring (RUM) Client Snippet
-import { onLCP, onINP, onCLS, onFCP, onTTFB } from 'web-vitals';
+        <p>A model railway retailer sent me two screenshots in the same email. The first was a PageSpeed Insights run on their product template: performance 96, LCP 1.2s, all green. The second was Search Console: 68% of mobile URLs failing Core Web Vitals, LCP flagged as the culprit. Same site, same week, same URL pattern.</p>
 
-const ANALYTICS_ENDPOINT = 'https://api.modracx.com/v1/rum-ingest';
+        <p>Their developer's position was that Google's field data was wrong. It was not wrong. It was measuring something completely different, and the gap between the two numbers was the most useful piece of information they had — they just did not know how to read it.</p>
 
-function generateSessionId() {
-  return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
-}
+        <p>The 96 came from a Lighthouse run on a Google datacentre machine with a simulated 4x CPU throttle, a cold cache, no consent banner, no logged-in session, no extensions, and no human being interacting with the page. The failing field number came from real Chrome users on real devices: a long tail of Android handsets on rural 4G, a consent banner that injected 300KB of tag manager after acceptance, and — the actual culprit — a personalisation script that only ran for returning visitors with a session cookie, which is a state Lighthouse never enters.</p>
 
-const sessionContext = {
-  sessionId: generateSessionId(),
-  url: window.location.href,
-  userAgent: navigator.userAgent,
-  connectionEffectiveType: navigator.connection ? navigator.connection.effectiveType : 'unknown',
-  deviceMemory: navigator.deviceMemory || 'unknown'
-};
+        <p>Once we could see the split by device class and by returning-visitor status, the problem took an afternoon. Finding it took three weeks, because for three weeks everybody was looking at a number that could not possibly have shown it to them.</p>
 
-function sendToAnalytics(metric) {
-  const payload = JSON.stringify({
-    ...sessionContext,
-    metricName: metric.name,
-    value: Math.round(metric.value),
-    id: metric.id,
-    rating: metric.rating, // 'good', 'needs-improvement', 'poor'
-    navigationType: metric.navigationType
-  });
+        <p>This article is about that: knowing what your numbers actually mean, collecting numbers that can tell you something, and then wiring the whole thing into CI so a regression cannot ship quietly. It is the companion to the <a href="/blog/core-web-vitals/">hands-on remediation guide</a>, which covers what to change once you know what is broken. This one is about knowing.</p>
 
-  // Prefer sendBeacon for non-blocking transmission
-  if (navigator.sendBeacon) {
-    navigator.sendBeacon(ANALYTICS_ENDPOINT, payload);
-  } else {
-    // Fallback to fetch with keepalive
-    fetch(ANALYTICS_ENDPOINT, {
-      body: payload,
-      method: 'POST',
-      keepalive: true,
-      headers: { 'Content-Type': 'application/json' }
-    }).catch(console.error);
-  }
-}
+        <h2>2. Field And Lab Are Not Two Views Of The Same Thing</h2>
 
-// Initialize performance observers
-onLCP(sendToAnalytics);
-onINP(sendToAnalytics);
-onCLS(sendToAnalytics);
-onFCP(sendToAnalytics);
-onTTFB(sendToAnalytics);
-</code></pre>
+        <p>The single most common mistake in performance work is treating a lab score as an estimate of field performance. It is not an estimate. It is a different measurement with a different purpose, and expecting them to agree is like expecting a wind tunnel to predict your fuel bill.</p>
 
-        <h2>Scalable Telemetry Ingestion</h2>
-        <p>Once the RUM payload reaches the ingestion endpoint, a scalable backend architecture is required to process and store this high-volume telemetry. A typical stack might involve an API Gateway routing requests to a serverless function (e.g., AWS Lambda, Google Cloud Functions), which validates the payload and pushes it onto an event stream (e.g., Apache Kafka, Amazon Kinesis). From there, stream processors can aggregate metrics in real-time, feeding dashboards built on platforms like Grafana or Kibana. Long-term storage in a data warehouse (e.g., Snowflake, Google BigQuery) enables complex historical analysis and cohort tracking.</p>
-        <p>The following Python snippet illustrates a rudimentary ingestion endpoint using FastAPI, validating the payload with Pydantic, and asynchronously writing the record to a logging service. In a production environment, this would interface directly with a robust event streaming platform.</p>
+        <p><strong>Lab data</strong> is a controlled, repeatable simulation. One device profile, one network profile, one cold-cache navigation, no user. Its value is that it is reproducible, which makes it the only thing you can meaningfully assert on in CI. Its limitation is that it describes exactly one hypothetical visitor who does not exist.</p>
 
-        <pre><code class="language-python"># FastAPI RUM Ingestion Endpoint
-from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-import json
-import logging
+        <p><strong>Field data</strong> is what actually happened to real people. Every device, every network, every cache state, every consent choice, every A/B variant. Its value is that it is true. Its limitation is that it is noisy, lagging, and aggregated in ways that hide the specific.</p>
 
-app = FastAPI(title="MODRACX RUM Ingest")
-logger = logging.getLogger("rum_ingest")
+        <p>Three structural differences produce almost all of the divergence you will see.</p>
 
-class WebVitalsPayload(BaseModel):
-    sessionId: str
-    url: str
-    userAgent: str
-    connectionEffectiveType: str
-    deviceMemory: str
-    metricName: str
-    value: int
-    id: str
-    rating: str
-    navigationType: str
+        <p><strong>INP cannot be measured in a lab at all.</strong> Lighthouse does not interact with your page, so it reports Total Blocking Time as a proxy. TBT is the sum of main-thread blocking during load; INP is the worst interaction latency across a whole session, most of which happens long after load. They correlate loosely. I have seen a site with TBT of 40ms and an INP of 480ms, because the expensive interaction was a facet filter that runs on a warm page. If you are optimising INP against TBT you are optimising a proxy for a proxy.</p>
 
-def process_rum_data(data: WebVitalsPayload):
-    # Simulated processing: Write to Kafka/Kinesis or Data Warehouse
-    record = data.model_dump_json()
-    logger.info(f"Ingested Vitals: {record}")
-    # Implementation for event streaming publisher goes here
+        <p><strong>CLS accumulates across the session.</strong> Lighthouse measures a page that loads and then sits still. Real users scroll, which triggers lazy-loaded content, which shifts. A footer newsletter widget with no reserved height is invisible in every lab tool and shows up clearly in the field.</p>
 
-@app.post("/v1/rum-ingest")
-async def ingest_vitals(request: Request, background_tasks: BackgroundTasks):
-    try:
-        raw_data = await request.json()
-        payload = WebVitalsPayload(**raw_data)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Invalid payload")
-    
-    # Offload processing to background task to maintain high throughput
-    background_tasks.add_task(process_rum_data, payload)
-    
-    return {"status": "accepted"}
-</code></pre>
+        <p><strong>Cache state and session state differ.</strong> Lab is always a cold cache and always anonymous. Real traffic is a mixture, and on ecommerce the returning-visitor path frequently loads more code, not less — personalisation, saved carts, recently viewed, loyalty status.</p>
 
-        <h2>CrUX API Integration for Field Data</h2>
-        <p>While RUM provides indispensable first-party data, integrating with the Chrome User Experience Report (CrUX) API is essential for benchmarking against industry standards and monitoring how Google perceives your storefront. The CrUX API offers historical and current field data aggregated from real Chrome users. By systematically querying this API, engineering teams can track their 75th percentile metrics over time, proactively identifying regressions before they impact search rankings.</p>
-        <p>The following Node.js script demonstrates how to authenticate with the CrUX API and retrieve metrics for a specific origin, formatting the output for CI/CD reporting.</p>
+        <p>What this means practically: use lab data to detect change, use field data to decide what to work on. A Lighthouse run that drops from 88 to 74 between two commits is a real signal about a real regression, even though neither number describes a real user. A CrUX number that says your product pages are at 3.9s is the reason to open the file at all.</p>
 
-        <pre><code class="language-javascript">// Node.js CrUX API Integration
-const fetch = require('node-fetch');
+        <h2>3. What CrUX Actually Is, Precisely</h2>
 
-const CRUX_API_KEY = process.env.CRUX_API_KEY;
-const TARGET_ORIGIN = 'https://modracx.com';
+        <p>CrUX — the Chrome User Experience Report — is the dataset Google uses for the page experience signal, and it is worth understanding its mechanics because nearly every "why hasn't it moved" question has an answer in them.</p>
 
-async function fetchCrUXData() {
-  const url = `https://chromeuxreport.googleapis.com/v1/records:queryRecord?key=${CRUX_API_KEY}`;
-  const requestBody = {
-    origin: TARGET_ORIGIN,
-    formFactor: 'PHONE' // DESKTOP, TABLET, or PHONE
-  };
+        <p>It aggregates from Chrome users who have opted into usage statistics reporting, are signed in, and have sync enabled. That is a subset of Chrome, and Chrome is a subset of browsers — no Safari, no Firefox. On a storefront with heavy iOS traffic, CrUX may represent well under half your visitors. This is not a reason to ignore it, since it is what Google uses, but it is a reason not to treat it as a census.</p>
 
-  try {
-    const response = await fetch(url, {
+        <p>The reported value is a <strong>28-day rolling aggregation</strong>, updated daily, of the <strong>75th percentile</strong> of each metric. Both of those numbers matter enormously and I will come back to the percentile.</p>
+
+        <p>The 28-day window is why fixes appear not to work. Ship a change on day one and the next day's report still contains 27 days of the old experience. You will see roughly a quarter of the movement by day seven, half by day fourteen, and the true number at day twenty-eight. Teams routinely conclude a fix failed at day three and revert it. Do not do that — watch your own RUM, which reflects the change immediately.</p>
+
+        <p>CrUX publishes at two granularities. <strong>Origin-level</strong> data covers every page on the host, aggregated. <strong>URL-level</strong> data covers a specific URL, and only exists if that URL has enough traffic to meet the privacy threshold. Most individual product pages on most storefronts never qualify. That is the single biggest practical limitation and it drives a lot of what follows.</p>
+
+        <h3>Pulling it yourself</h3>
+
+        <p>Search Console groups URLs and is fine for a monthly glance. For anything systematic, use the API. You need a Google Cloud API key with the Chrome UX Report API enabled.</p>
+
+        <pre><code class="language-bash"># Origin-level, mobile, current 28-day window
+curl -s "https://chromeuxreport.googleapis.com/v1/records:queryRecord?key=$CRUX_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "origin": "https://shop.example.com",
+        "formFactor": "PHONE"
+      }' | jq '.record.metrics | to_entries[] |
+              {metric: .key, p75: .value.percentiles.p75}'</code></pre>
+
+        <p>The <code>queryHistoryRecord</code> endpoint is the more useful one, because it returns 25 weekly data points rather than a single value. A trend line tells you whether you are drifting; a single number tells you almost nothing.</p>
+
+        <pre><code class="language-javascript">// 25 weeks of history for one origin, printed as a trend you can eyeball.
+const KEY = process.env.CRUX_KEY;
+
+async function history(origin, formFactor = 'PHONE') {
+  const res = await fetch(
+    `https://chromeuxreport.googleapis.com/v1/records:queryHistoryRecord?key=${KEY}`,
+    {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      body: JSON.stringify({ origin, formFactor })
     }
+  );
+  if (!res.ok) throw new Error(`CrUX ${res.status}: ${await res.text()}`);
+  const { record } = await res.json();
 
-    const data = await response.json();
-    const metrics = data.record.metrics;
-
-    console.log(`--- CrUX Field Data for ${TARGET_ORIGIN} (PHONE) ---`);
-    console.log(`LCP (75th p): ${metrics.largest_contentful_paint.percentiles.p75}ms`);
-    console.log(`INP (75th p): ${metrics.interaction_to_next_paint.percentiles.p75}ms`);
-    console.log(`CLS (75th p): ${metrics.cumulative_layout_shift.percentiles.p75}`);
-    
-  } catch (error) {
-    console.error('Error fetching CrUX data:', error);
+  // Each metric carries a parallel array of weekly p75 values, oldest first.
+  for (const [name, data] of Object.entries(record.metrics)) {
+    const series = data.percentilesTimeseries?.p75s;
+    if (!series) continue;
+    console.log(name.padEnd(28), series.slice(-8).join('  '));
   }
 }
 
-fetchCrUXData();
-</code></pre>
+history('https://shop.example.com').catch(e =&gt; { console.error(e); process.exit(1); });</code></pre>
 
-        <h2>Automating Performance Regression Testing</h2>
-        <p>Automating performance testing within the Continuous Integration / Continuous Deployment (CI/CD) pipeline is the most effective strategy for preventing regressions from reaching production. Integrating Lighthouse CLI into GitHub Actions allows teams to establish performance budgets and fail builds that exceed acceptable thresholds. This proactive approach ensures that new features or third-party integrations do not compromise the user experience.</p>
-        <p>The following GitHub Actions workflow demonstrates a typical Lighthouse CI setup, generating artifacts and failing the pipeline if performance scores dip below specified targets.</p>
+        <p>Two gotchas. The history series contains <code>null</code> entries for weeks where the origin fell below the traffic threshold — do not blindly average them. And <code>formFactor</code> matters more than you expect: an origin can be comfortably green on desktop and failing on phone, and the aggregate that Search Console shows you is not the one that gets you flagged.</p>
 
-        <pre><code class="language-yaml"># .github/workflows/lighthouse-ci.yml
-name: Lighthouse CI Performance Audit
+        <h2>4. The 75th Percentile Trap</h2>
 
+        <p>Here is the trap, and it catches good engineers.</p>
+
+        <p>Your CrUX LCP is 2.4 seconds. Green. You move on. But 2.4s at the 75th percentile means one visitor in four had a worse experience than that, and CrUX does not tell you how much worse. The 90th percentile could be 3.1s or it could be 9.4s, and those are extremely different businesses.</p>
+
+        <p>CrUX does give you the histogram — the proportion of experiences in the good, needs-improvement and poor buckets — and that is the number I actually look at. A site at 2.4s p75 with 8% of experiences in the poor bucket is fine. A site at 2.4s p75 with 19% poor has a serious tail problem affecting roughly one in five customers, and those customers are disproportionately on the cheap Android handsets that also happen to be a growing share of ecommerce traffic.</p>
+
+        <pre><code class="language-javascript">// The distribution, which is more informative than the p75 alone.
+const m = record.metrics.largest_contentful_paint;
+const [good, needs, poor] = m.histogram.map(b =&gt; b.density);
+console.log(`good ${(good*100).toFixed(1)}%  ni ${(needs*100).toFixed(1)}%  poor ${(poor*100).toFixed(1)}%`);
+console.log('p75', m.percentiles.p75);
+// A rising "poor" density with a static p75 is a tail regression the p75 hides.</code></pre>
+
+        <p>The second half of the trap is that the 75th percentile moves in ways that have nothing to do with your code. Run a Black Friday campaign that brings in a new audience on older devices and your p75 gets worse without a single line changing. Launch in a market with slower networks and the same. I have twice been called in to investigate a "regression" that was a marketing success.</p>
+
+        <p>Which is why the only defensible way to read field data is segmented. Device class, connection type, country, page template, and — on ecommerce specifically — logged-in versus anonymous. CrUX gives you form factor and connection type and nothing else. For the rest you need your own collection, which is the next problem.</p>
+
+        <h2>5. Collecting Your Own Field Data</h2>
+
+        <p>You need first-party RUM for three reasons CrUX cannot cover: it includes Safari and Firefox, it updates immediately rather than over 28 days, and it can carry any dimension you care to attach.</p>
+
+        <p>The collection side is genuinely simple, and I would resist any vendor who tells you otherwise. Google's <code>web-vitals</code> library does the hard part. Use the attribution build — it is a few kilobytes larger and it is the entire difference between a number and an actionable finding.</p>
+
+        <pre><code class="language-javascript">import { onLCP, onINP, onCLS, onTTFB, onFCP } from 'web-vitals/attribution';
+
+const ENDPOINT = '/_rum/v1';
+const queue = [];
+
+// Dimensions that make a metric actionable. Keep this list short and stable.
+function context() {
+  const nav = performance.getEntriesByType('navigation')[0];
+  const conn = navigator.connection || {};
+  return {
+    // Template, not URL: /product/oak-table and /product/pine-desk are one bucket.
+    template: document.body.dataset.pageTemplate || 'unknown',
+    // Set at build time so a regression can be pinned to a deploy.
+    release: window.__RELEASE__ || 'dev',
+    // Anonymous vs logged-in changes which scripts run. Critical on ecommerce.
+    session: document.body.dataset.customerState || 'guest',
+    deviceMemory: navigator.deviceMemory || null,
+    cores: navigator.hardwareConcurrency || null,
+    effectiveType: conn.effectiveType || null,
+    saveData: conn.saveData || false,
+    navType: nav ? nav.type : null,          // navigate | reload | back_forward
+    viewport: innerWidth &lt; 768 ? 'mobile' : innerWidth &lt; 1200 ? 'tablet' : 'desktop'
+  };
+}
+
+function record(metric) {
+  queue.push({
+    name: metric.name,
+    value: Math.round(metric.value * 1000) / 1000,
+    rating: metric.rating,                    // good | needs-improvement | poor
+    id: metric.id,                            // dedupe key for this page view
+    // The attribution object is the part that turns a number into a bug report.
+    target: metric.attribution?.element
+         || metric.attribution?.largestShiftTarget
+         || metric.attribution?.interactionTarget
+         || null,
+    url: metric.attribution?.url || null,
+    // LCP sub-phases, INP sub-phases — whichever the metric provides.
+    detail: subPhases(metric)
+  });
+}
+
+function subPhases(metric) {
+  const a = metric.attribution || {};
+  if (metric.name === 'LCP') {
+    return {
+      ttfb: Math.round(a.timeToFirstByte || 0),
+      loadDelay: Math.round(a.resourceLoadDelay || 0),
+      loadTime: Math.round(a.resourceLoadDuration || 0),
+      renderDelay: Math.round(a.elementRenderDelay || 0)
+    };
+  }
+  if (metric.name === 'INP') {
+    return {
+      inputDelay: Math.round(a.inputDelay || 0),
+      processing: Math.round(a.processingDuration || 0),
+      presentation: Math.round(a.presentationDelay || 0),
+      type: a.interactionType || null
+    };
+  }
+  return null;
+}
+
+[onLCP, onINP, onCLS, onTTFB, onFCP].forEach(fn =&gt; fn(record));
+
+// Flush when the page is backgrounded — the only reliably-fired lifecycle event.
+function flush() {
+  if (!queue.length) return;
+  const payload = JSON.stringify({ ctx: context(), metrics: queue.splice(0) });
+  // sendBeacon survives page unload; fetch with keepalive is the fallback.
+  if (!navigator.sendBeacon(ENDPOINT, new Blob([payload], { type: 'application/json' }))) {
+    fetch(ENDPOINT, { method: 'POST', body: payload, keepalive: true }).catch(() =&gt; {});
+  }
+}
+
+addEventListener('visibilitychange', () =&gt; { if (document.visibilityState === 'hidden') flush(); });
+addEventListener('pagehide', flush);</code></pre>
+
+        <p>Three details in there are worth defending because I have seen each one omitted and each omission cost someone a week.</p>
+
+        <p><strong>Flush on <code>visibilitychange</code>, not <code>unload</code>.</strong> The <code>unload</code> event does not fire reliably on mobile Safari, and it disables the back/forward cache in Chrome, which means using it actively makes your site slower. <code>visibilitychange</code> to hidden plus <code>pagehide</code> is the correct pair.</p>
+
+        <p><strong>Bucket by template, not by URL.</strong> If you store the raw URL, every product page is its own cohort with two data points and you can never compute a meaningful percentile. Tag the template server-side — <code>pdp</code>, <code>plp</code>, <code>cart</code>, <code>checkout</code>, <code>home</code>, <code>search</code>, <code>cms</code> — and aggregate on that. Keep the raw URL as a secondary field for drill-down, not as the grouping key.</p>
+
+        <p><strong>Stamp the release.</strong> Without a build identifier on every beacon you cannot answer "did the Tuesday deploy do this", which is the question you will be asked. Inject it at build time.</p>
+
+        <h3>The endpoint should be boring</h3>
+
+        <p>Whatever you do here, do not make the collector clever. It should accept the payload, validate roughly, and write it somewhere durable. All the interesting work happens later, in queries.</p>
+
+        <pre><code class="language-python">from fastapi import FastAPI, Request, Response
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
+import json, time
+
+app = FastAPI()
+
+class Metric(BaseModel):
+    name: str
+    value: float
+    rating: str
+    id: str
+    target: Optional[str] = None
+    url: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
+
+class Beacon(BaseModel):
+    ctx: Dict[str, Any] = Field(default_factory=dict)
+    metrics: List[Metric]
+
+@app.post("/_rum/v1", status_code=204)
+async def ingest(beacon: Beacon, request: Request):
+    now = int(time.time() * 1000)
+    # Country from the CDN header, not from a geo-IP lookup on the hot path.
+    country = request.headers.get("cf-ipcountry", "??")
+    for m in beacon.metrics:
+        row = {
+            "ts": now,
+            "country": country,
+            **{k: beacon.ctx.get(k) for k in
+               ("template", "release", "session", "effectiveType",
+                "viewport", "deviceMemory", "navType")},
+            "metric": m.name,
+            "value": m.value,
+            "rating": m.rating,
+            "target": (m.target or "")[:512],   # selectors can be enormous
+            "detail": m.detail,
+        }
+        # Append-only. Batch to your warehouse from the log, not from here.
+        print(json.dumps(row), flush=True)
+    return Response(status_code=204)</code></pre>
+
+        <p>Write append-only lines and let a downstream job batch them into whatever you query. Resist the urge to aggregate at ingest. The first six questions you will want to ask are not the ones you thought of when you designed the schema, and pre-aggregated data cannot answer new questions.</p>
+
+        <h2>6. Querying It Without Lying To Yourself</h2>
+
+        <p>Two rules, and violating either produces a dashboard that is confidently wrong.</p>
+
+        <p><strong>Never average a web vital.</strong> Averages of a long-tailed distribution are meaningless and always flattering. A dataset where 95 sessions are at 1.5s and 5 are at 20s has a mean of 2.4s, which is green, and a p75 of 1.5s, which is greener, and a genuine disaster for 5% of your customers. Report p75 to match CrUX, p95 to see the tail, and the good/needs-improvement/poor split to see the shape.</p>
+
+        <p><strong>Segment before you conclude.</strong> An aggregate p75 is a weighted blend of your templates, and it moves when the traffic mix moves. Here is the query shape I start from on every engagement:</p>
+
+        <pre><code class="language-sql">-- p75 and tail by template and device class, last 7 days.
+SELECT
+  template,
+  viewport,
+  COUNT(*)                                              AS samples,
+  APPROX_QUANTILES(value, 100)[OFFSET(75)]              AS p75,
+  APPROX_QUANTILES(value, 100)[OFFSET(95)]              AS p95,
+  ROUND(100 * COUNTIF(rating = 'poor')  / COUNT(*), 1)  AS pct_poor,
+  ROUND(100 * COUNTIF(rating = 'good')  / COUNT(*), 1)  AS pct_good
+FROM rum.events
+WHERE metric = 'LCP'
+  AND ts &gt; TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+GROUP BY template, viewport
+HAVING samples &gt; 200          -- below this the percentile is noise
+ORDER BY pct_poor DESC;</code></pre>
+
+        <p>The <code>HAVING</code> clause is not decoration. A p75 over 40 samples has an enormous confidence interval and people will still make decisions on it. I have watched a team spend a fortnight optimising a template that turned out to have a p75 computed from 31 page views.</p>
+
+        <p>For INP, the equivalent query should group by <code>target</code>, and it is normally the most immediately useful thing in the whole system:</p>
+
+        <pre><code class="language-sql">-- Which interaction is actually costing you INP?
+SELECT
+  template,
+  target,
+  COUNT(*) AS n,
+  APPROX_QUANTILES(value, 100)[OFFSET(75)] AS p75_inp,
+  ROUND(AVG(CAST(JSON_VALUE(detail, '$.inputDelay')    AS INT64))) AS avg_input_delay,
+  ROUND(AVG(CAST(JSON_VALUE(detail, '$.processing')    AS INT64))) AS avg_processing,
+  ROUND(AVG(CAST(JSON_VALUE(detail, '$.presentation')  AS INT64))) AS avg_presentation
+FROM rum.events
+WHERE metric = 'INP' AND value &gt; 200
+  AND ts &gt; TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+GROUP BY template, target
+ORDER BY n DESC
+LIMIT 25;</code></pre>
+
+        <p>The sub-phase averages tell you the fix without further investigation. Input delay dominating means something else was occupying the main thread — usually third-party. Processing dominating means your handler is doing too much. Presentation dominating means the resulting render was expensive. Those are three unrelated pieces of work, described in detail in the <a href="/blog/core-web-vitals/">remediation guide</a>, and the query tells you which one you are in.</p>
+
+        <h2>7. Sampling, And The Way It Quietly Lies</h2>
+
+        <p>At any real traffic volume you will sample. The naive implementation is one line and it is subtly broken:</p>
+
+        <pre><code class="language-javascript">// Wrong: samples page views, but a session that generates 12 page views
+// gets 12 chances to be included, so heavy users are over-represented.
+if (Math.random() &gt; 0.1) return;</code></pre>
+
+        <p>Sample by session, not by page view, or your data over-weights engaged users — who are disproportionately on good devices and fast connections, because those are the people who did not bounce. That bias runs in exactly the direction that makes your numbers look better than reality.</p>
+
+        <pre><code class="language-javascript">// Decide once per session and persist the decision.
+function sampled(rate) {
+  let flag = sessionStorage.getItem('rum_sampled');
+  if (flag === null) {
+    flag = Math.random() &lt; rate ? '1' : '0';
+    try { sessionStorage.setItem('rum_sampled', flag); } catch (e) { /* private mode */ }
+  }
+  return flag === '1';
+}
+
+// 10% of sessions, but always collect from slow sessions so the tail survives.
+const ALWAYS = navigator.connection?.effectiveType === '2g'
+            || navigator.connection?.effectiveType === 'slow-2g'
+            || (navigator.deviceMemory || 8) &lt;= 2;
+
+if (!sampled(0.10) &amp;&amp; !ALWAYS) { /* skip instrumentation */ }</code></pre>
+
+        <p>That last clause is a judgement call and I will defend it: over-sampling slow devices deliberately biases the raw data, and it is worth it, because the tail is the part you cannot otherwise see and the part that costs you money. Just record the sampling decision alongside the beacon so you can reweight when you need an unbiased population estimate. Do not do this and then also report the aggregate p75 as if it were unbiased — I made that mistake once and reported a number 400ms worse than reality to a client who had done nothing wrong.</p>
+
+        <h2>8. Making Lab Runs Repeatable Enough To Assert On</h2>
+
+        <p>Before you gate a deploy on Lighthouse you have to accept that a single Lighthouse run is noisy. Run the same URL five times on the same commit on the same machine and the performance score will vary by five to ten points routinely. The variance comes from CPU contention, network jitter, and — mostly — from third-party scripts behaving differently run to run.</p>
+
+        <p>Which means a naive CI gate on a single run will fail builds at random, developers will learn to re-run it until it passes, and within a month the gate is decorative. I have seen this happen at three separate companies.</p>
+
+        <p>The fixes are unglamorous. Run each URL at least three times and assert on the median. Run on a dedicated runner rather than a shared one, or accept much wider thresholds. Where possible, block third parties during the CI run so you are measuring your code and not a vendor's bad afternoon. And gate on the metrics that are stable — LCP, CLS, total byte weight — rather than on the composite score, which compounds the variance of everything inside it.</p>
+
+        <pre><code class="language-json">{
+  "ci": {
+    "collect": {
+      "url": [
+        "http://localhost:8080/",
+        "http://localhost:8080/collections/dining-tables",
+        "http://localhost:8080/products/solid-oak-dining-table",
+        "http://localhost:8080/cart"
+      ],
+      "numberOfRuns": 3,
+      "settings": {
+        "preset": "desktop",
+        "throttlingMethod": "simulate",
+        "skipAudits": ["uses-http2", "canonical"],
+        "blockedUrlPatterns": [
+          "*googletagmanager.com*",
+          "*connect.facebook.net*",
+          "*widget.reviews.example*"
+        ]
+      }
+    },
+    "assert": {
+      "assertions": {
+        "largest-contentful-paint":  ["error", { "maxNumericValue": 2500, "aggregationMethod": "median" }],
+        "cumulative-layout-shift":   ["error", { "maxNumericValue": 0.10, "aggregationMethod": "median" }],
+        "total-blocking-time":       ["warn",  { "maxNumericValue": 300,  "aggregationMethod": "median" }],
+        "resource-summary:script:size":     ["error", { "maxNumericValue": 320000 }],
+        "resource-summary:image:size":      ["error", { "maxNumericValue": 900000 }],
+        "resource-summary:third-party:count": ["warn", { "maxNumericValue": 12 }],
+        "unsized-images":            ["error", { "minScore": 1 }],
+        "uses-responsive-images":    "off",
+        "categories:performance":    "off"
+      }
+    },
+    "upload": { "target": "temporary-public-storage" }
+  }
+}</code></pre>
+
+        <p>Note what is turned off. <code>categories:performance</code> is off because the composite score is the noisiest thing available and failing a build on it teaches people to ignore the gate. <code>uses-responsive-images</code> is off because it produces false positives on any art-directed image. And <code>unsized-images</code> is set to error at full score, because it is deterministic, it is cheap to satisfy, and an unsized image is a CLS bug waiting to happen.</p>
+
+        <h3>Byte budgets are the underrated half</h3>
+
+        <p>Metric assertions catch regressions after they have become slow. Byte budgets catch them at the moment the bundle grows, which is earlier and much easier to attribute. A 40KB increase in JavaScript will not fail an LCP assertion on a fast CI runner; it will absolutely be felt on a mid-range Android.</p>
+
+        <p>I set the script budget about 15% above current and ratchet it down as the number improves. That means the budget always bites on the next regression rather than on historical debt, which is what makes people accept it. A budget set to an aspirational number that the codebase currently fails is a budget that gets disabled in week two.</p>
+
+        <h2>9. Wiring It Into The Pipeline</h2>
+
+        <pre><code class="language-yaml">name: performance
 on:
   pull_request:
-    branches: [ main, develop ]
+    paths: ['theme/**', 'app/design/**', 'package-lock.json']
 
 jobs:
   lighthouse:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+      - run: npm ci
+      - run: npm run build
 
-      - name: Install Dependencies
-        run: npm ci
+      # Serve the built artefact locally. Auditing a shared staging box means
+      # you are measuring whoever else is hitting it at the same moment.
+      - run: npx http-server ./dist -p 8080 --silent &amp;
+      - run: npx wait-on http://localhost:8080 --timeout 60000
 
-      - name: Build Production Assets
-        run: npm run build
-
-      - name: Run Lighthouse CI
-        uses: treosh/lighthouse-ci-action@v11
-        with:
-          urls: |
-            http://localhost:3000/
-            http://localhost:3000/products/sample-product
-          configPath: './lighthouserc.json'
-          uploadArtifacts: true
-          temporaryPublicStorage: true
+      - name: Lighthouse CI
+        run: |
+          npm install -g @lhci/cli@0.14.x
+          lhci autorun --config=.lighthouserc.json
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
-</code></pre>
 
-        <h2>Configuring Lighthouse Budgets</h2>
-        <p>To effectively configure Lighthouse CI, a `.lighthouserc.json` file is required. This configuration defines the performance budgets and assertions, ensuring that the CI pipeline enforces strict thresholds for metrics like LCP and TBT (Total Blocking Time, a synthetic proxy for INP).</p>
+      - name: Bundle size delta
+        run: node scripts/bundle-delta.mjs --base origin/${{ github.base_ref }}</code></pre>
 
-        <pre><code class="language-json">// lighthouserc.json
-{
-  "ci": {
-    "collect": {
-      "numberOfRuns": 3,
-      "startServerCommand": "npm run start",
-      "url": ["http://localhost:3000/"]
-    },
-    "assert": {
-      "assertions": {
-        "categories:performance": ["error", {"minScore": 0.90}],
-        "categories:accessibility": ["error", {"minScore": 0.95}],
-        "largest-contentful-paint": ["error", {"maxNumericValue": 2500}],
-        "total-blocking-time": ["error", {"maxNumericValue": 300}],
-        "cumulative-layout-shift": ["error", {"maxNumericValue": 0.1}]
-      }
-    },
-    "upload": {
-      "target": "temporary-public-storage"
-    }
-  }
-}
-</code></pre>
+        <p>Auditing a locally-served build rather than a shared staging environment is the detail that makes this reliable. Staging is contended, staging has different cache configuration, staging sometimes has a database restore running. If your CI numbers are noisy, this is the first thing to change.</p>
 
-        <h2>Debugging LCP and TTFB Bottlenecks</h2>
-        <p>Debugging INP and LCP regressions in a live production environment often requires a meticulous examination of server configurations and frontend architecture. Consider a scenario where an LCP regression is identified on a Magento 2 storefront. The root cause is frequently traced back to suboptimal Time to First Byte (TTFB), specifically related to Varnish cache misses or inefficient database queries rendering the initial HTML document. Optimizing Varnish configurations to maximize cache hit ratios for anonymous sessions is a critical first step.</p>
-        <p>The following Nginx configuration excerpt demonstrates the integration of FastCGI caching for environments bypassing Varnish, a common pattern for specific highly dynamic endpoints or lightweight architectures.</p>
+        <p>The bundle-delta step is worth more than the Lighthouse step, in my experience, because it produces a comment on the pull request that says "this PR adds 62KB of JavaScript" and that number is unambiguous, attributable, and impossible to argue with. Metric regressions invite debate about measurement noise. Byte counts do not.</p>
 
-        <pre><code class="language-nginx"># Nginx FastCGI Caching for TTFB Optimization
-fastcgi_cache_path /var/cache/nginx levels=1:2 keys_zone=MICROCACHE:10m max_size=1g inactive=60m use_temp_path=off;
+        <h2>10. Catching Regressions After The Deploy</h2>
 
-server {
-    listen 443 ssl http2;
-    server_name modracx.com;
+        <p>CI catches what you can reproduce. Plenty of regressions are not reproducible — a merchandiser uploads a 4MB hero image through the admin, a marketer adds a tag in GTM, a vendor pushes a new version of a script you load from their CDN. None of those touch your repository.</p>
 
-    # Skip cache for logged-in users or cart active
-    set $skip_cache 0;
-    if ($cookie_session) { set $skip_cache 1; }
-    if ($request_uri ~* "/checkout|/customer") { set $skip_cache 1; }
+        <p>This is where the release stamp on every beacon pays for itself. Compare the metric distribution for the current release against the previous one over the same wall-clock window, and you get an answer within hours rather than weeks.</p>
 
-    location ~ \.php$ {
-        include fastcgi_params;
-        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
-        
-        # FastCGI Cache Directives
-        fastcgi_cache MICROCACHE;
-        fastcgi_cache_valid 200 301 302 10m;
-        fastcgi_cache_bypass $skip_cache;
-        fastcgi_no_cache $skip_cache;
-        
-        # Add cache status header for debugging
-        add_header X-FastCGI-Cache $upstream_cache_status;
-    }
-}
-</code></pre>
+        <pre><code class="language-sql">-- Release-over-release comparison, same templates, same device class.
+WITH windowed AS (
+  SELECT release, template, viewport, metric, value
+  FROM rum.events
+  WHERE metric IN ('LCP','INP','CLS')
+    AND ts &gt; TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)
+    AND release IN (@current_release, @previous_release)
+)
+SELECT
+  template, viewport, metric,
+  COUNTIF(release = @current_release)  AS n_now,
+  COUNTIF(release = @previous_release) AS n_prev,
+  APPROX_QUANTILES(IF(release = @current_release,  value, NULL), 100)[OFFSET(75)] AS p75_now,
+  APPROX_QUANTILES(IF(release = @previous_release, value, NULL), 100)[OFFSET(75)] AS p75_prev
+FROM windowed
+GROUP BY template, viewport, metric
+HAVING n_now &gt; 300 AND n_prev &gt; 300
+ORDER BY (p75_now - p75_prev) DESC;</code></pre>
 
-        <h2>Advanced INP Optimization in Headless Frontends</h2>
-        <p>Addressing INP regressions is notoriously complex, as the metric aggregates the worst interaction latency across the entire user session. A common pitfall on Shopify Plus headless builds (e.g., Hydrogen or custom React frameworks) is excessive React re-rendering triggered by global state mutations. When a user interacts with a complex filter sidebar, modifying the global state can inadvertently force the entire product grid to re-render synchronously. This occupies the main thread, resulting in poor INP scores.</p>
-        <p>Implementing React.memo for pure components, utilizing the useMemo and useCallback hooks strategically, and isolating state updates to specific sub-trees are essential optimization techniques. Furthermore, adopting the React 18 concurrent features, specifically useTransition, allows developers to mark certain state updates as non-urgent, prioritizing immediate user feedback. For instance, when applying a search filter, the immediate visual feedback (e.g., checking a checkbox) is critical and should remain synchronous. The subsequent fetching and rendering of the filtered product grid can be wrapped in startTransition, signaling to the browser that this heavy rendering task can be interrupted to process further user inputs. This architectural approach directly targets and mitigates the primary causes of high INP in complex interactive e-commerce environments.</p>
+        <p>Two cautions on reading that. Compare like-for-like windows — a release that went out on Friday afternoon is being compared against Thursday's traffic mix, which is not the same audience. And require enough samples on both sides; the <code>HAVING</code> threshold of 300 is a floor, not a target, and for INP specifically I would want more because the distribution is uglier.</p>
 
-        <p>The nuanced differences between laboratory metrics and real-world field metrics consistently reveal architectural flaws in frontend delivery. Laboratory conditions establish a sterile environment, meticulously controlling for network latency, CPU throttling, and device capabilities. While this guarantees reproducible benchmarks essential for continuous integration, it fails to capture the chaotic reality of end-user connectivity. Users traversing fragmented mobile networks, accessing storefronts via heavily degraded 3G connections, or utilizing outdated hardware expose the fragility of JavaScript-heavy applications. This divergence underscores the necessity of continuous field telemetry. Without RUM, an engineering team operates blindly, celebrating synthetic LCP scores of 1.2 seconds while actual users experience rendering delays exceeding 5 seconds. Furthermore, integrating performance monitoring directly into the deployment lifecycle mitigates the risk of gradual degradation.</p>
+        <p>The genuinely rigorous version is to ship the change behind a flag to half your traffic and compare cohorts concurrently. That removes the time-of-day and traffic-mix confounds entirely, and it is the only way I would evaluate a change whose expected effect is under about 10%. It is also considerably more work, and for most changes the release-over-release comparison is enough.</p>
 
+        <h2>11. Synthetic Runs Against Production, On A Schedule</h2>
 
-        <hr />
+        <p>CI measures your build. RUM measures your customers. There is a gap between them, and things live in it.</p>
+
+        <p>Your CDN configuration is not in your repository. Neither is the tag manager, the image transformation service, the DNS provider, the TLS termination, or the version of the review widget that vendor decided to ship on Wednesday. A change to any of those can add a second to your product pages without a single commit, and CI will never see it.</p>
+
+        <p>The answer is a scheduled synthetic run against production — hourly or every few hours, from a couple of geographic locations, on a fixed device profile. The absolute numbers do not matter much because they are synthetic. What matters is that the profile is identical run to run, so a step change means something real changed.</p>
+
+        <pre><code class="language-yaml">name: production-synthetic
+on:
+  schedule:
+    - cron: '17 */3 * * *'      # off the hour: shared runners are busiest on it
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        url:
+          - https://shop.example.com/
+          - https://shop.example.com/collections/dining-tables
+          - https://shop.example.com/products/solid-oak-dining-table
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g lighthouse@12
+
+      # Emulate a real mid-range phone, not the desktop default.
+      - name: Audit
+        run: |
+          lighthouse "${{ matrix.url }}" \
+            --preset=perf \
+            --form-factor=mobile \
+            --screenEmulation.mobile \
+            --throttling.cpuSlowdownMultiplier=4 \
+            --output=json --output-path=./result.json \
+            --chrome-flags="--headless=new --no-sandbox"
+
+      # Push the three numbers into whatever you already query. Compare to the
+      # trailing 24h median; a 20% jump is a real change, not run-to-run noise.
+      - run: node scripts/push-synthetic.mjs ./result.json "${{ matrix.url }}"</code></pre>
+
+        <p>Run it off the hour. Shared CI runners are contended on the hour because that is when everyone's cron fires, and that contention shows up as CPU throttling noise in your results.</p>
+
+        <p>The signal to act on is a step change against the trailing median, not an absolute threshold. I have caught three genuinely useful things this way: a CDN provider silently disabling Brotli for a customer tier, an image service failing over to origin and serving unoptimised JPEGs for eleven hours, and a merchandiser uploading a 6MB PNG as a homepage hero at 4pm on a Friday. None of those were visible in CI, and all three would have taken a week to surface in field data.</p>
+
+        <h2>12. The Templates Nobody Measures</h2>
+
+        <p>Everybody measures the homepage and a product page. Both are easy, both are what the stakeholder asks about, and neither is where the money is lost.</p>
+
+        <p>The templates I insist on instrumenting, roughly in order of how often they turn out to be the worst thing on the site:</p>
+
+        <p><strong>Search results.</strong> Frequently the slowest template on the site and almost never audited. It runs a query against a third-party search service, renders a variable-length grid, and often re-renders on every keystroke in the refinement box. Customers who use site search convert at two to three times the rate of those who do not, which makes this the most expensive place to be slow.</p>
+
+        <p><strong>Filtered category pages.</strong> The unfiltered category page is fast because it is cached. The moment a customer applies two facets, they are on a URL nobody has ever requested, the full-page cache misses entirely, and TTFB goes from 60ms to 1.9s. Your RUM will show this as a bimodal distribution on the <code>plp</code> template, which is why the p75 is more useful than the median here.</p>
+
+        <p><strong>Cart and checkout.</strong> Often excluded from monitoring because they are behind a session, which is precisely backwards — this is the part of the funnel where latency converts directly into abandoned revenue. Instrument them and segment them separately; the metrics will look different from the rest of the site and they should.</p>
+
+        <p><strong>Account pages.</strong> Nobody optimises these and they are usually terrible. Low traffic, so they barely move the aggregate, but a customer trying to track an order on a slow page is a customer about to open a support ticket.</p>
+
+        <p>Adding a <code>template</code> dimension costs nothing and turns your dashboard from a single blended number into a ranked list of things to fix. If you do only one thing from this article, do that.</p>
+
+        <h2>13. Consent, Blockers, And The Beacons You Never Receive</h2>
+
+        <p>An honest limitation, because it affects every RUM implementation and I rarely see it discussed.</p>
+
+        <p>If your beacon endpoint is on a third-party domain, ad blockers will drop a meaningful share of it — commonly 15–30% in European markets, considerably higher in some segments. If your instrumentation only loads after consent, you lose everyone who declines or ignores the banner. And in both cases the loss is not random: privacy-conscious users skew toward particular devices, browsers and regions.</p>
+
+        <p>Two mitigations. Serve the collector from your own origin under an innocuous first-party path, which sidesteps most blocklists because there is nothing third-party to match on. And treat Web Vitals collection as legitimate-interest technical telemetry with no identifiers rather than as analytics — no cookies, no user ID, no cross-session linking, a random per-page-view identifier used only for deduplication. That is a defensible position under GDPR and it is one I would run past your own counsel rather than take from a blog post, but the technical design is what makes the legal argument possible in the first place.</p>
+
+        <p>What you must not do is quietly assume you have full coverage. Record the sampling rate on the beacon, compare your total beacon count against your server-side page view count, and know your collection ratio. If you are receiving beacons from 62% of sessions, say so on the dashboard.</p>
+
+        <h2>14. Connecting It To Money</h2>
+
+        <p>Every performance programme I have seen die, died because nobody could justify the next quarter of work. The defence against that is joining your RUM data to your commerce data, and it is easier than it sounds.</p>
+
+        <p>You do not need per-user tracking. Bucket sessions by the LCP they experienced and compare conversion rates across buckets:</p>
+
+        <pre><code class="language-sql">-- Conversion rate by experienced LCP bucket. Session-level join, no user IDs.
+SELECT
+  CASE
+    WHEN lcp &lt; 1500 THEN 'a: under 1.5s'
+    WHEN lcp &lt; 2500 THEN 'b: 1.5-2.5s'
+    WHEN lcp &lt; 4000 THEN 'c: 2.5-4s'
+    ELSE                   'd: over 4s'
+  END AS bucket,
+  COUNT(*) AS sessions,
+  ROUND(100 * COUNTIF(converted) / COUNT(*), 2) AS cvr,
+  ROUND(AVG(IF(converted, order_value, NULL)), 2) AS aov
+FROM commerce.sessions s
+JOIN (
+  SELECT session_id, MAX(value) AS lcp
+  FROM rum.events WHERE metric = 'LCP' GROUP BY session_id
+) r USING (session_id)
+WHERE s.ts &gt; TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+GROUP BY bucket ORDER BY bucket;</code></pre>
+
+        <p>Be careful how you present the result, because this is correlational and the confounds are severe. Customers with fast connections have newer devices and more disposable income. Sessions that convert involve more page views, which means more warm-cache navigations, which are faster — causation running backwards. I present this as "here is the association, it is consistent with the published experimental work, and here is what a controlled test would cost" rather than as "we will make 4% more money".</p>
+
+        <p>Even hedged, it works. A table showing 2.9% conversion under 1.5 seconds and 1.1% over four seconds gets budget approved in a way that a chart of milliseconds never does.</p>
+
+        <h2>15. Dashboards People Will Actually Look At</h2>
+
+        <p>An opinion I hold firmly after building several of these badly: a performance dashboard with more than about eight numbers on it will be ignored.</p>
+
+        <p>What I build now is one screen. Three metrics, split by template, split by mobile and desktop, showing p75 and percent-poor, with a seven-day sparkline and a marker for each release. That is it. Everything else lives in ad-hoc queries for whoever is currently investigating something.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Source</th><th>Latency</th><th>Covers</th><th>Use it for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>CrUX / Search Console</td><td>28-day window</td><td>Chrome opt-in users only</td><td>What Google sees; the official verdict</td></tr>
+            <tr><td>CrUX API history</td><td>Weekly points, 25 weeks</td><td>Same population</td><td>Long-term trend, seasonality</td></tr>
+            <tr><td>First-party RUM</td><td>Minutes</td><td>All browsers, all your dimensions</td><td>Diagnosis, regression detection, tail analysis</td></tr>
+            <tr><td>Lighthouse in CI</td><td>Per commit</td><td>One synthetic device</td><td>Blocking regressions before merge</td></tr>
+            <tr><td>Scheduled synthetic runs</td><td>Hourly</td><td>One synthetic device, production</td><td>Catching infrastructure and CDN changes</td></tr>
+            <tr><td>DevTools, manually</td><td>Immediate</td><td>Your machine</td><td>Finding the cause once you know where</td></tr>
+          </tbody>
+        </table>
+
+        <p>Each row answers a different question and none substitutes for another. The failure mode I see most is a team with only the first row and only the last, which means they know they have a problem and they can poke at it, but they cannot tell whether anything they do helps.</p>
+
+        <h2>16. A Worked Example</h2>
+
+        <p>The model railway retailer from the opening. Shopify Plus, custom theme, about 3,000 SKUs, 71% mobile traffic, roughly 900,000 sessions a month.</p>
+
+        <p><strong>Starting position.</strong> Lighthouse 96 on the product template. CrUX mobile LCP p75 3.8s with 24% of experiences in the poor bucket. INP p75 240ms. CLS 0.06 and fine. Six weeks of work had produced no field movement, and morale on the topic was poor.</p>
+
+        <p><strong>Week one: instrument.</strong> The RUM script above, sampled at 20% of sessions, with template, release, session state and effective connection type as dimensions. First useful data at day two.</p>
+
+        <p><strong>What it showed immediately.</strong> Splitting LCP by <code>session</code> gave 2.6s for guests and 5.1s for logged-in customers. That single split explained the entire gap to CrUX and nobody had thought to look, because every lab tool tests anonymously. Logged-in customers received a personalisation bundle — recently viewed, loyalty tier, saved sizes — that ran synchronously before the gallery initialised, adding roughly 1.4s of main-thread work before the LCP image was even requested.</p>
+
+        <p>Splitting by <code>effectiveType</code> gave 2.4s on 4g and 7.9s on 3g, with 3g at 9% of sessions. Those 9% were almost the entire poor bucket. Geographically they were concentrated in three rural regions, which the client's merchandising team recognised immediately as an important customer segment.</p>
+
+        <p><strong>The fixes.</strong> Moving the personalisation bundle behind <code>requestIdleCallback</code> and rendering the gallery from server-side markup regardless of session state: logged-in LCP from 5.1s to 2.8s. Deferring the reviews widget and the live chat to first interaction: another 300ms and INP p75 from 240ms to 165ms. Neither of those is a technique from this article — they are ordinary remediation, covered in the <a href="/blog/core-web-vitals/">companion piece</a>. The contribution of the measurement work was knowing where to point them.</p>
+
+        <p><strong>The defence.</strong> Lighthouse CI on four templates with a 320KB script budget, and a nightly job that pulls the CrUX history API and posts the weekly p75 into a Slack channel. Three months later the script budget caught a PR that added an 84KB date-picker library to every page for a feature that appeared only in the returns flow.</p>
+
+        <p><strong>Where it landed.</strong> CrUX mobile LCP p75 2.3s at day 34, poor bucket down from 24% to 7%. INP p75 158ms.</p>
+
+        <p><strong>What went wrong.</strong> I initially sampled at 5% and grouped by full URL. The result was thousands of cohorts of two or three page views each and percentiles that were pure noise; I spent the better part of a day convinced that the search results template had a catastrophic problem, which turned out to be four sessions from one person on a very bad connection. Regrouping by template and raising the sample rate fixed it, but I had already reported the false finding to the client, which was embarrassing and entirely avoidable. Decide your grouping key before you start collecting.</p>
+
+        <p><strong>What I would do differently.</strong> I would have added the <code>session</code> dimension from the start rather than in week two. On ecommerce, anonymous and authenticated are effectively two different applications, and any measurement that blends them will mislead you. It is the first dimension I add now, before device or country.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"Do we need first-party RUM if we have CrUX?"</strong> If your traffic is small and your site is simple, CrUX plus Search Console is genuinely enough. Above roughly 100,000 sessions a month, or on any site with logged-in state, the segmentation you get from first-party data pays for itself in the first investigation. The collection code is about a hundred lines.</p>
+
+        <p><strong>"Which RUM vendor should we buy?"</strong> If you want a dashboard tomorrow and you have budget, any of the established ones will do the job and the differences are mostly in pricing model. If you have a data warehouse already, building it is a day of work and gives you dimensions no vendor will let you add. What I would not do is buy a tool that only reports aggregates and does not give you the attribution target — a chart of your INP that cannot tell you which element caused it is a chart you will look at twice.</p>
+
+        <p><strong>"Our CI Lighthouse numbers swing wildly."</strong> Shared runner, single run, or third parties. Take the median of three runs, block third-party origins during the audit, serve the build locally, and assert on LCP, CLS and byte weight rather than the composite score. If it still swings, your build output is genuinely non-deterministic and that is worth knowing on its own.</p>
+
+        <p><strong>"How long before a fix shows up in Search Console?"</strong> Twenty-eight days for the full effect, with partial movement from about day seven. Search Console's own reporting adds a few days of lag on top. Watch your own RUM for confirmation the change worked, and treat CrUX as the record rather than the feedback loop.</p>
+
+        <p><strong>"Should we alert on Core Web Vitals?"</strong> Alert on step changes between releases, not on absolute thresholds — a threshold alert on a metric with a naturally noisy distribution will page someone at 3am because a coach party in a valley opened your homepage. Compare release cohorts, require a meaningful sample on both sides, and route it to a channel rather than a pager. The broader question of production alerting and tooling is a topic in its own right and sits outside this piece.</p>
+
+        <p><strong>"Is Total Blocking Time a reasonable stand-in for INP?"</strong> For load-time interactivity, roughly. For anything a user does after the page has settled, no. TBT cannot see your filter panel, your variant selector or your mini-cart, and those are where INP problems live on a storefront. Use TBT as a CI tripwire and INP field data as the truth.</p>
+
+        <p><strong>"We have almost no traffic — CrUX shows nothing."</strong> Then you are below the privacy threshold and no amount of waiting will help. Use lab data with an honest device profile — a real mid-range Android over a throttled connection, not desktop emulation — and first-party RUM to catch what you can. And accept that at low traffic the percentile is not a stable number; look at the distribution instead.</p>
+
+        <h2>18. What I'd Actually Do First</h2>
+
+        <p>If you inherited a storefront tomorrow with no measurement at all, this is the order.</p>
+
+        <p>Pull the CrUX history for the origin, split by phone and desktop, and look at the trend and the poor-bucket density rather than the headline p75. Twenty minutes, no code, and it tells you whether you have a problem and whether it is getting worse.</p>
+
+        <p>Then ship the RUM beacon. Template, release, session state, effective connection type, viewport class. Sample by session, not page view. Do not build a dashboard yet — just get data landing somewhere queryable, because the first week of data is worth more than the first week of visualisation.</p>
+
+        <p>Then, once you have a few days, run the segmented p75 query and find your worst template and worst segment. On every engagement I have done, that query has surfaced something nobody expected: a logged-in path, a specific country, a device class, a template everyone had forgotten existed.</p>
+
+        <p>Then hand the finding to whoever is doing the remediation, and go and build the defence. Lighthouse CI on your four most important templates, median of three runs, assert on LCP and CLS and script byte weight, budget set 15% above current. It will take a day and it will catch the regression that would otherwise have undone a quarter of work.</p>
+
+        <p>Then the release-over-release comparison, which is a single query on a schedule and is the thing that turns "the site feels slower this week" into "release 2026.04.02 added 340ms to product page LCP on mobile".</p>
+
+        <p>The overall principle, if you take one thing: measurement is not the thing you do to prove the work was worth it. It is the thing that tells you which work to do. Every engagement where I have gone in and started fixing before measuring, I have fixed the wrong thing first and found out four weeks later. The outdoor retailer had six competent weeks of engineering that moved nothing, not because the engineering was bad, but because it was aimed at a page state that a quarter of their customers never saw. One dimension in a beacon payload would have told them on day two.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -471,7 +830,7 @@ server {
               <p>Remediating INP and LCP performance bottlenecks.</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify Stores</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
               <p>Varnish caching and sub-100ms TTFB.</p>
             </li>
             <li>
@@ -480,7 +839,6 @@ server {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -514,6 +872,6 @@ server {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Implementing HTTP/2 and TLS 1.3 for Secure, Fast Ecommerce | MODRACX</title>
-  <meta name="description" content="Technical guide on enabling HTTP/2 multiplexing and TLS 1.3 0-RTT handshakes on Nginx and Apache servers for Magento 2 and Shopify Plus." />
+  <meta name="description" content="HTTP/2 multiplexing and prioritisation, the TLS 1.3 handshake, session resumption, cipher and curve ordering, OCSP stapling, and honest field measurement." />
   <meta property="og:title" content="Implementing HTTP/2 and TLS 1.3 for Secure, Fast Ecommerce | MODRACX" />
   <meta property="og:description" content="Technical guide on enabling HTTP/2 and TLS 1.3 by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -169,17 +171,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/"><- Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Implementing HTTP/2 and TLS 1.3 for Secure, Fast Ecommerce</h1>
-        <p class="lede">TLS 1.3 reduces cryptographic connection handshake times from 2-RTT to 1-RTT (or 0-RTT for returning visitors). Learn how to configure Nginx for HTTP/2 multiplexing and forward secrecy.</p>
+        <p class="lede">The same upgrade bought one client 41ms and another 610ms. What HTTP/2 multiplexing and TLS 1.3 actually change, and how to measure which case you are.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -204,214 +206,592 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Introduction to Modern Transport Layer Security</h2>
-        <p>The transition from HTTP/1.1 and legacy TLS protocols to HTTP/2 and TLS 1.3 represents the most significant evolution in transport layer security and performance for modern ecommerce architectures. When managing systems for platforms like Magento 2 or Shopify Plus, latency is directly correlated with revenue. The legacy combination of HTTP/1.1 and TLS 1.2 introduces structural bottlenecks: connection limitations, head-of-line blocking at the application layer, and cryptographic handshakes requiring multiple round trips (2-RTT). In this comprehensive guide, I will outline the precise mechanics and configuration strategies required to implement HTTP/2 and TLS 1.3 across Nginx and Apache infrastructures, optimizing both security and TTFB (Time to First Byte).</p>
-        <p>Before proceeding with these configurations, ensure that your broader server security posture aligns with industry standards. Review my <a href="/blog/secure-ecommerce-checklist/">Securing Your Ecommerce Store: Security Hardening Blueprint</a> for foundational server hardening, as transport layer encryption is only one component of a holistic security strategy. A compromised operating system will render the most advanced cryptographic protocols entirely useless. We must build upon a solid foundation.</p>
+        <h2>1. The Upgrade That Bought Us Forty Milliseconds</h2>
 
-        <h2>The Architecture of TLS 1.3</h2>
-        <p>TLS 1.3 (RFC 8446) fundamentally restructured the TLS handshake. Prior versions of TLS allowed for a vast array of cryptographic algorithms, many of which were later proven vulnerable to attacks (e.g., POODLE, BEAST). TLS 1.3 eliminates obsolete cryptographic algorithms entirely, removing support for MD5, SHA-1, RC4, DES, 3DES, AES-CBC, and RSA Key Transport. The protocol mandates Perfect Forward Secrecy (PFS) by requiring ephemeral Diffie-Hellman (DHE) or Elliptic Curve Diffie-Hellman (ECDHE) key exchanges.</p>
-        <p>Forward secrecy ensures that even if a server's private key is compromised in the future, past session traffic cannot be decrypted. The ephemeral nature of the key exchange means a unique session key is generated for every single connection. This represents a massive leap forward in securing sensitive customer data in ecommerce environments.</p>
+        <p>In 2023 I moved a Magento 2 storefront from HTTP/1.1 with TLS 1.2 to HTTP/2 with TLS 1.3. The client had been told by a consultant that this would "roughly halve page load times". I did the work in an afternoon, waited three weeks for enough field data, and pulled the numbers.</p>
 
-        <h3>The 1-RTT Handshake Mechanism</h3>
-        <p>In TLS 1.2, a complete handshake requires two complete round trips between the client and the server before encrypted application data can be transmitted. The client sends a ClientHello, the server responds with a ServerHello, Certificate, and ServerKeyExchange. The client then sends a ClientKeyExchange and ChangeCipherSpec, followed by the server's ChangeCipherSpec. TLS 1.3 compresses this process significantly.</p>
-        <p>In a TLS 1.3 handshake, the client guesses the key agreement protocol the server will use (typically X25519) and sends its key share along with the initial ClientHello. The server processes this, generates its own key share, and responds with the ServerHello, EncryptedExtensions, Certificate, and CertificateVerify messages, allowing it to begin transmitting application data immediately. This reduces the handshake overhead to 1-RTT. For high-latency mobile networks, cutting out an entire round trip of hundreds of milliseconds is transformative for frontend performance.</p>
+        <p>Median Largest Contentful Paint improved by 41 milliseconds. On a 2.9-second baseline. That is 1.4%.</p>
 
-        <h3>Zero Round-Trip Time (0-RTT) Resumption</h3>
-        <p>TLS 1.3 introduces 0-RTT for connection resumption. When a client connects to a server it has previously communicated with, it can use the pre-shared key (PSK) derived from the previous session to encrypt application data in the very first flight of messages (alongside the ClientHello). While 0-RTT significantly reduces latency for returning users, it introduces vulnerability to replay attacks. We mitigate this through careful application-level configuration, ensuring that non-idempotent requests (like POST operations containing transaction data) are not processed until the full 1-RTT handshake is validated.</p>
-        <p>Consider an attacker capturing a 0-RTT request that submits an ecommerce order. If they replay this packet, and the server blindly accepts early data for POST requests, the order could be duplicated. Modern web servers provide variables to detect if a request arrived via early data, allowing us to implement strict rejections or redirects at the proxy layer.</p>
+        <p>The client was, reasonably, unimpressed. I spent the following week working out why the result was so much smaller than every blog post had promised, and the answer turned out to be more useful than the upgrade itself: their site loaded 14 resources on the critical path, all from one origin, over a connection that was already warm because the CDN kept it alive. HTTP/1.1 with six parallel connections was handling 14 resources perfectly adequately. Multiplexing solves a queueing problem, and they did not have a queue.</p>
 
-        <h2>HTTP/2: Multiplexing and HPACK Compression</h2>
-        <p>HTTP/2 replaces the plaintext, newline-delimited protocol of HTTP/1.1 with a binary framing layer. The core performance advantage of HTTP/2 is multiplexing. Instead of opening multiple TCP connections to fetch concurrent assets, HTTP/2 utilizes a single persistent TCP connection. Within this connection, multiple independent streams carry bidirectional data. This eliminates application-layer head-of-line blocking.</p>
-        <p>Additionally, HTTP/2 introduces HPACK, a stateful header compression algorithm. In ecommerce, where large cookie payloads and authorization headers are transmitted with every request, uncompressed headers in HTTP/1.1 contribute significantly to bandwidth overhead. HPACK drastically reduces these payload sizes.</p>
-        <p>For an in-depth analysis of front-end performance tuning beyond protocol upgrades, consult my comprehensive guide on <a href="/blog/performance-optimization/">ecommerce performance optimization</a>.</p>
+        <p>Six months later I did the same upgrade for a sports nutrition retailer whose product pages pulled 94 subresources from a single origin, and median LCP fell by 610 milliseconds. Same change. Fifteen times the effect.</p>
 
-        <h2>Production Nginx Configuration Deep Dive</h2>
-        <p>To implement these protocols on Nginx, you must compile Nginx against OpenSSL 1.1.1 or higher (OpenSSL 3.0+ is recommended). Most modern Linux distributions (Ubuntu 22.04 LTS, Debian 11, RHEL 9) include a suitable version by default. Below is a complete, production-ready server block configuration designed for high-performance ecommerce deployments.</p>
+        <p>That is the honest shape of this: HTTP/2 and TLS 1.3 are unambiguously the right configuration and you should be running both, but the size of the benefit depends almost entirely on facts about your site that nobody asks about before quoting a number. This article covers what each protocol actually changes, the configuration that matters as opposed to the configuration everybody copies, and how to measure what the upgrade bought you without deceiving yourself or your client.</p>
 
-        <pre><code class="language-nginx"># Production Nginx SSL Configuration for TLS 1.3 & HTTP/2
-server {
-    # The 'http2' parameter on the listen directive enables HTTP/2
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name modracx.com www.modracx.com;
+        <p>The transport layer beyond this — QUIC, HTTP/3, connection migration, what happens when packets get lost — is a separate piece on <a href="/blog/http3-quic-implementation/">implementing HTTP/3 with QUIC</a>. I will not repeat it here. Assume TCP throughout.</p>
 
-    # Document Root and Index
-    root /var/www/modracx/html;
-    index index.html index.php;
+        <h2>2. What HTTP/2 Actually Changed</h2>
 
-    # SSL Certificate Configuration
-    # Always use fullchain.pem to include intermediate certificates.
-    ssl_certificate /etc/letsencrypt/live/modracx.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/modracx.com/privkey.pem;
-    ssl_trusted_certificate /etc/letsencrypt/live/modracx.com/chain.pem;
+        <p>HTTP/2 kept HTTP's semantics entirely. Same methods, same status codes, same headers, same everything a developer touches. What changed is the wire format underneath.</p>
 
-    # TLS Protocols
-    # Explicitly disabling TLS 1.0 and TLS 1.1. 
-    # Supporting TLS 1.2 for legacy compatibility, and enabling TLS 1.3.
-    ssl_protocols TLSv1.2 TLSv1.3;
+        <p><strong>Binary framing.</strong> HTTP/1.1 was newline-delimited text you could type into a telnet session. HTTP/2 is binary frames with a length prefix. Less human-friendly, dramatically less ambiguous, and it removes an entire class of request-smuggling attacks that come from two implementations disagreeing about where a message ends.</p>
 
-    # Cipher Suites
-    # We prioritize AEAD ciphers (GCM/CHACHA20) and Perfect Forward Secrecy.
-    # Note: TLS 1.3 cipher suites cannot be customized via ssl_ciphers in OpenSSL 1.1.1+, 
-    # but the directive configures the TLS 1.2 fallback suites.
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
-    
-    # Let the client choose from the secure list based on their hardware capabilities
-    # Modern clients often have AES-NI hardware acceleration.
-    ssl_prefer_server_ciphers off; 
+        <p><strong>One connection instead of six.</strong> Browsers opened up to six parallel TCP connections per origin under HTTP/1.1, because a connection could only carry one request at a time. HTTP/2 carries many concurrent streams over one connection. Six TCP handshakes and six TLS handshakes become one of each — and on a high-latency link that saving is larger than everything else the protocol does.</p>
 
-    # Session Management (Crucial for performance)
-    # A 50m cache can store roughly 200,000 sessions.
-    ssl_session_cache shared:SSL:50m;
-    ssl_session_timeout 1d;
-    ssl_session_tickets off;
+        <p><strong>HPACK header compression.</strong> HTTP/1.1 sent every header in full on every request. On an ecommerce site that means a 1.5KB cookie header repeated on 90 requests: about 135KB of pure duplication per page load, uncompressed, on the upstream direction where mobile bandwidth is scarcest. HPACK maintains a shared table of previously-seen headers on both ends and sends references. In practice it takes typical ecommerce header overhead down by 85–90%.</p>
 
-    # 0-RTT Support
+        <p>That last one is the most underrated. On mobile connections with asymmetric bandwidth, request headers are a real cost, and it is the part of HTTP/2 that helps every site regardless of how many resources they load.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Site shape</th><th>Realistic HTTP/2 benefit</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Few resources, one origin, warm connection</td><td>Negligible</td><td>No queue to fix</td></tr>
+            <tr><td>Many small resources, one origin</td><td>Large</td><td>Multiplexing removes the queue</td></tr>
+            <tr><td>Heavy cookies, mobile traffic</td><td>Moderate, consistent</td><td>HPACK on the upstream</td></tr>
+            <tr><td>Resources sharded across 4 subdomains</td><td>Can be negative until you unshard</td><td>Sharding defeats multiplexing</td></tr>
+            <tr><td>High-latency users, cold connections</td><td>Large</td><td>One handshake instead of six</td></tr>
+            <tr><td>Third-party-heavy checkout</td><td>Small</td><td>Third-party origins are unaffected</td></tr>
+          </tbody>
+        </table>
+
+        <h2>3. Multiplexing, And The Limit Nobody Configures</h2>
+
+        <p>Multiplexing is the headline feature: many streams interleaved over one connection, so a slow response no longer blocks the ones behind it at the HTTP layer.</p>
+
+        <p>There is a ceiling on this and almost nobody moves it. The server advertises <code>SETTINGS_MAX_CONCURRENT_STREAMS</code> during connection setup, and if the browser wants more concurrency than that, the extra requests queue — exactly the problem HTTP/2 was supposed to remove, now happening invisibly one layer down.</p>
+
+        <p>Nginx defaults to 128, which is generous. Apache's <code>H2MaxSessionStreams</code> defaults to 100. But some CDN configurations and a few older proxies advertise 32 or even 16, and if you have a product page pulling 90 subresources you will hit that instantly.</p>
+
+        <pre><code class="language-bash"># What is your server actually advertising? Ask it.
+# nghttp -v prints the SETTINGS frame the server sends on connect.
+nghttp -nv https://shop.example.com/ 2&gt;&amp;1 | grep -A6 'SETTINGS'
+
+# Expected in the output:
+#   [SETTINGS] (niv=4)
+#   [SETTINGS_MAX_CONCURRENT_STREAMS(0x03):128]
+#   [SETTINGS_INITIAL_WINDOW_SIZE(0x04):65535]
+#
+# If MAX_CONCURRENT_STREAMS is under 100, something in front of your
+# origin is capping you and no amount of front-end work will fix it.</code></pre>
+
+        <p>The second and less obvious limit is flow control. HTTP/2 has per-stream and per-connection receive windows, and the default initial window is 65,535 bytes — chosen in 2015 and comically small for a 2MB hero image on a fast connection. Until the receiver sends a WINDOW_UPDATE, the sender stops. On a high bandwidth-delay-product path — say a customer in Sydney fetching from a London origin — you can be idle waiting for window updates while the link sits empty.</p>
+
+        <pre><code class="language-nginx"># Flow control tuning. These two directives matter far more than any
+# of the cipher configuration people spend their afternoon on.
+http {
+    # Per-stream receive window. Default 65535 bytes. Raising it lets a
+    # single large response keep the pipe full on long-haul connections.
+    http2_body_preread_size 128k;
+
+    # Nginx 1.19.7+ removed several older http2_* knobs; on current
+    # versions the connection window is managed automatically, so check
+    # `nginx -V` before copying directives from a 2018 blog post.
+    http2_max_concurrent_streams 256;
+
+    # Idle timeout for the h2 connection itself. Too short and you throw
+    # away the connection reuse that is most of the benefit.
+    keepalive_timeout 75s;
+}</code></pre>
+
+        <p>I want to flag something about that snippet: nginx has changed its HTTP/2 directives more than once, deprecating <code>http2_recv_buffer_size</code> and friends and moving <code>listen 443 ssl http2</code> to a separate <code>http2 on;</code> directive in 1.25.1. Configuration copied from an article written three years ago will produce warnings at best and silently do nothing at worst. Run <code>nginx -V</code>, check your version, and read that version's docs rather than trusting me or anyone else.</p>
+
+        <h2>4. Prioritisation, Or: The Feature That Never Really Worked</h2>
+
+        <p>This is the part of HTTP/2 I find most interesting because it is a genuine, well-documented design failure and almost nobody talks about it.</p>
+
+        <p>Multiplexing means all your resources arrive at once, sharing bandwidth. That is not always what you want. You want the stylesheet blocking render to arrive before the sixth product thumbnail below the fold. HTTP/2's answer was a prioritisation scheme in RFC 7540: clients build a dependency tree of streams with weights, and the server allocates bandwidth accordingly.</p>
+
+        <p>It did not work. Browsers implemented incompatible strategies — Chrome built a mostly-linear chain, Firefox built a tree with idle grouping nodes, Safari sent everything at the same weight for years. Servers implemented the tree partially or not at all. Several CDNs ignored client priorities entirely and substituted their own heuristics, which was frequently the right call.</p>
+
+        <p>RFC 9113 formally deprecated the dependency-tree scheme in 2022. The replacement is RFC 9218 Extensible Prioritization: a simple <code>priority</code> header with an urgency value from 0 to 7 and an incremental flag. Simpler, and far more likely to be implemented consistently because there is much less to get wrong.</p>
+
+        <p>What this means practically, in 2026, is that you should not attempt to tune HTTP/2 prioritisation on your origin. What you should do instead is tell the browser what matters, using the mechanisms that actually work.</p>
+
+        <pre><code class="language-html">&lt;!-- These four lines do more for resource ordering than any amount of
+     server-side priority configuration. --&gt;
+
+&lt;!-- The LCP image: fetched at high priority by the preload scanner,
+     never lazy-loaded, and decoded synchronously so it paints together
+     with the surrounding layout. --&gt;
+&lt;img src="/media/hero-sofa-1600.avif"
+     fetchpriority="high"
+     loading="eager"
+     decoding="sync"
+     width="1600" height="900" alt="Fenwick three-seat sofa in oatmeal"&gt;
+
+&lt;!-- Below-the-fold imagery: explicitly deprioritised so it does not
+     compete with the hero for bandwidth on the same connection. --&gt;
+&lt;img src="/media/related-1.avif" fetchpriority="low" loading="lazy"
+     width="400" height="400" alt="Matching footstool"&gt;
+
+&lt;!-- Analytics: needed, not urgent. Without this it competes at default
+     priority with things the customer can see. --&gt;
+&lt;script src="/js/analytics.js" defer fetchpriority="low"&gt;&lt;/script&gt;
+
+&lt;!-- 103 Early Hints, sent by the origin before the HTML is ready, is the
+     surviving replacement for server push. Emit it as a real 103
+     response, not as a Link header on the 200. --&gt;
+&lt;!-- HTTP/1.1 103 Early Hints
+     Link: &lt;/css/critical.css&gt;; rel=preload; as=style
+     Link: &lt;/fonts/inter-var.woff2&gt;; rel=preload; as=font; crossorigin --&gt;</code></pre>
+
+        <p><code>fetchpriority</code> shipped in Chrome 101 in 2022 and is now broadly supported. It is the single highest-return line of markup on most product pages and it costs nothing.</p>
+
+        <p>On server push: it is gone. Chrome removed support in version 106, October 2022, after measuring that it was net-negative in the majority of deployments — mostly because servers pushed resources the browser already had cached, wasting bandwidth on the critical path. There is a fuller account in the piece on <a href="/blog/http2-server-push/">why HTTP/2 server push failed</a>. Early Hints does the same job without the guessing, because the browser gets to decide whether it needs the resource.</p>
+
+        <h2>5. Domain Sharding Is Now Actively Harmful</h2>
+
+        <p>Under HTTP/1.1, splitting assets across <code>static1.example.com</code> through <code>static4.example.com</code> multiplied the browser's six-connection limit. It was standard practice and it was correct at the time.</p>
+
+        <p>Under HTTP/2 it is a straightforward loss. Each shard needs its own DNS lookup, its own TCP handshake, its own TLS handshake, and gets its own independent congestion window that has to warm up from scratch. You have traded one well-conditioned connection for four cold ones and given up header compression across them.</p>
+
+        <p>I audited a Magento store in 2024 still sharding across three subdomains from a 2014 optimisation. Consolidating to a single origin improved median LCP by 280ms, which was six times what enabling HTTP/2 had achieved on the same site. The old optimisation was costing more than the new protocol was gaining.</p>
+
+        <p>There is a subtlety worth knowing: browsers will coalesce connections across hostnames if the certificate covers both names and they resolve to the same IP. So sharding with a wildcard certificate on one CDN IP may already be collapsing into a single connection, and you would never know without looking. Check before you plan a migration around it.</p>
+
+        <pre><code class="language-bash"># Are your "separate" origins actually separate connections?
+# Chrome DevTools: enable the Connection ID column in the Network panel.
+# From the command line, check whether the cert covers both names and
+# whether they resolve to the same address — the two conditions for
+# coalescing.
+for host in shop.example.com static.example.com img.example.com; do
+  ip=$(dig +short "$host" | tail -1)
+  names=$(echo | openssl s_client -connect "$host":443 -servername "$host" 2&gt;/dev/null \
+          | openssl x509 -noout -text \
+          | grep -A1 'Subject Alternative Name' | tail -1 | tr -d ' ')
+  echo "$host -&gt; $ip"
+  echo "   SAN: ${names:0:120}"
+done</code></pre>
+
+        <h2>6. The TLS 1.3 Handshake, Round Trip By Round Trip</h2>
+
+        <p>TLS 1.3 was published as RFC 8446 in August 2018, and it is a rare example of a protocol revision that made things both faster and simpler by removing options rather than adding them.</p>
+
+        <p>Under TLS 1.2, the handshake takes two round trips before any application data flows. The client says hello; the server responds with its hello, certificate and key exchange parameters; the client sends its key exchange and switches to encrypted mode; the server confirms. Two full round trips. On a 4G connection with an 80ms RTT that is 160ms of pure protocol overhead before the first byte of your HTML is requested.</p>
+
+        <p>TLS 1.3 collapses this to one. The trick is that the client guesses which key agreement group the server will pick — practically always X25519 — and sends its key share speculatively in the very first message. If the guess is right, the server can derive the shared secret immediately and send its certificate already encrypted. One round trip.</p>
+
+        <p>If the guess is wrong, the server sends a HelloRetryRequest asking for a different group and you are back to two round trips, worse off than TLS 1.2 by the cost of the wasted computation. This is rare with sensible configuration and it is a real reason not to disable X25519 in an attempt to look sophisticated.</p>
+
+        <p>The other structural change is that the cipher suite negotiation got much smaller. TLS 1.2 had hundreds of suites, many of them broken, each bundling a key exchange, a signature algorithm, a cipher and a MAC into one identifier. TLS 1.3 defines five, all AEAD, all with forward secrecy mandatory, and separates key exchange and signature negotiation into their own extensions. Removing RSA key transport, CBC modes, RC4, compression and renegotiation eliminated the underlying mechanism of BEAST, CRIME, Lucky13, POODLE, ROBOT and the rest in one revision.</p>
+
+        <p>Which leads to a configuration point that saves people a lot of wasted effort: you cannot meaningfully misconfigure TLS 1.3 cipher suites. There are three that anyone uses and all three are fine.</p>
+
+        <h2>7. Session Resumption, And What It Costs You</h2>
+
+        <p>A full handshake means an asymmetric key exchange and a signature verification — the expensive parts, in both CPU and round trips. Resumption lets a returning client skip most of it by reusing a pre-shared key derived from a previous session.</p>
+
+        <p>There are two mechanisms and the difference matters more than most configurations acknowledge.</p>
+
+        <p><strong>Session IDs</strong> — the server keeps the session state in its own cache and hands the client an identifier. State lives on the server. Works badly across a fleet unless you have a shared cache, because a client resuming against a different node finds nothing.</p>
+
+        <p><strong>Session tickets</strong> — the server encrypts the session state with a key only it knows and hands the whole thing to the client to store. Stateless, scales across a fleet trivially, and this is why almost everyone uses tickets.</p>
+
+        <p>The catch with tickets is forward secrecy. The session ticket encryption key protects the resumption secrets for every session it has encrypted. If it never rotates and is later compromised, an attacker who recorded your traffic can decrypt all of it. That is precisely the property TLS 1.3's ephemeral key exchange was designed to guarantee, undone by a configuration default.</p>
+
+        <p>Nginx rotates ticket keys automatically per worker process, but does not share them across servers, so a load-balanced fleet without an explicit key file gets no cross-node resumption at all. The fix is a shared key file rotated on a schedule.</p>
+
+        <pre><code class="language-nginx"># Session resumption across a fleet, without giving up forward secrecy.
+#
+# Generate keys with:  openssl rand 80 &gt; /etc/nginx/tickets/current.key
+# Rotate hourly: current -&gt; previous -&gt; expired, distributed to all nodes.
+# Nginx encrypts with the FIRST key and will decrypt with any listed one,
+# so a rotating window lets in-flight tickets keep working.
+
+ssl_session_tickets on;
+ssl_session_ticket_key /etc/nginx/tickets/current.key;   # encrypt with this
+ssl_session_ticket_key /etc/nginx/tickets/previous.key;  # still decryptable
+ssl_session_ticket_key /etc/nginx/tickets/expired.key;
+
+# Keep the ticket lifetime short. 24h is the common default and it is
+# too long for the forward-secrecy properties most people believe
+# they have. One hour is a reasonable compromise for ecommerce.
+ssl_session_timeout 1h;
+
+# The server-side cache still helps single-node and same-node resumption.
+# 10m of shared cache holds roughly 40,000 sessions.
+ssl_session_cache shared:TLS:20m;</code></pre>
+
+        <p>If you cannot build the key distribution, the defensible alternative is <code>ssl_session_tickets off;</code> with a shared session cache, accepting the extra full handshakes. I would rather have that than a ticket key from 2021 sitting on a server, which is a thing I have found.</p>
+
+        <h2>8. 0-RTT: Genuinely Fast, Genuinely Risky</h2>
+
+        <p>TLS 1.3 lets a resuming client send application data in its very first flight, alongside the ClientHello, before the handshake completes. Zero round trips before the request goes out. On a repeat visit over a mobile network this is worth 80–150ms.</p>
+
+        <p>The cost is that early data is replayable by design. The protocol cannot prevent it — there is no server state involved yet to detect a duplicate. An attacker who captures the encrypted early data can send it again, and the server has no way to know it is a replay. If that request was a POST that creates an order, you have a duplicate order.</p>
+
+        <p>The standard mitigation is to permit early data only for safe, idempotent requests and reject everything else with a 425 Too Early, prompting the client to retry over the completed handshake.</p>
+
+        <pre><code class="language-nginx">server {
+    listen 443 ssl;
+    http2 on;                       # nginx 1.25.1+ syntax
+
     ssl_early_data on;
 
-    # Diffie-Hellman Parameter for DHE cipher suites
-    # Generate via: openssl dhparam -out /etc/nginx/dhparam.pem 4096
-    ssl_dhparam /etc/nginx/dhparam.pem;
-
-    # OCSP Stapling
-    # Fetches the OCSP response from the CA and staples it to the certificate, 
-    # saving the client a DNS/HTTP request.
-    ssl_stapling on;
-    ssl_stapling_verify on;
-    resolver 1.1.1.1 8.8.8.8 9.9.9.9 valid=300s;
-    resolver_timeout 5s;
-
-    # Security Headers
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Frame-Options DENY always;
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
-    
-    # 0-RTT Mitigation Header
-    # Inform backend applications if the request was sent in early data so they can reject non-idempotent operations
-    proxy_set_header Early-Data $ssl_early_data;
-
-    # PHP-FPM Configuration Example (Magento/Shopify Headless)
-    location ~ \.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-        fastcgi_param HTTP_EARLY_DATA $ssl_early_data;
+    # $ssl_early_data is "1" when the request arrived as TLS early data.
+    # Anything that changes state must be refused and retried properly.
+    if ($ssl_early_data = "1") {
+        set $early $request_method;
+    }
+    if ($early ~ ^(POST|PUT|PATCH|DELETE)$) {
+        return 425;                  # Too Early — client retries after handshake
     }
 
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
+    # Pass the signal downstream so the application can make its own
+    # decisions: a GET to /cart is idempotent by verb and not by effect.
+    proxy_set_header Early-Data $ssl_early_data;
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_param HTTP_EARLY_DATA $ssl_early_data;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
     }
 }</code></pre>
 
-        <p>The `ssl_early_data on;` directive enables 0-RTT. However, we must pass the `$ssl_early_data` variable to the backend application (like Magento or a Node.js SSR proxy). The application layer must then inspect the `Early-Data` header and reject (e.g., return a 425 Too Early status code) any POST, PUT, or DELETE requests that arrive via 0-RTT to prevent replay attacks. Implementing this check at the application layer is critical for maintaining transactional integrity.</p>
+        <p>My actual position, having deployed this both ways: on a storefront I usually leave 0-RTT off. The gain is real but modest, the failure mode is duplicate orders, and the verb-based filter above is not a complete defence — a GET that increments a counter or consumes a single-use token is idempotent in HTTP's eyes and not in yours. If you turn it on, audit your GET handlers for side effects first, and be honest about whether anyone will actually do that audit. The equivalent decision under QUIC has the same shape and is discussed in the <a href="/blog/http3-quic-implementation/">HTTP/3 piece</a>.</p>
 
-        <p>For more details on deploying HSTS effectively alongside these headers, read my detailed guide on <a href="/blog/hsts-secure-seo/">HSTS deployment strategies</a> to prevent downgrade attacks.</p>
+        <h2>9. Cipher Configuration That Is Not Cargo Cult</h2>
 
-        <h2>Production Apache Configuration Deep Dive</h2>
-        <p>For systems operating on Apache, the `mod_http2` and `mod_ssl` modules must be enabled. Ensure Apache 2.4.37 or later is installed, built against OpenSSL 1.1.1+. Configuration on Apache utilizes a slightly different syntax but achieves the same rigorous security posture.</p>
+        <p>The cipher line is the part of a TLS config that gets copied most and understood least. Let me be specific about what each part does in 2026.</p>
 
-        <pre><code class="language-apache">&lt;VirtualHost *:443&gt;
-    ServerName modracx.com
-    ServerAlias www.modracx.com
+        <p>For TLS 1.3, the suites are fixed by the protocol and OpenSSL does not let you reorder them through <code>ssl_ciphers</code> — you would need <code>ssl_conf_command Ciphersuites</code>, and there is no good reason to. The defaults are AES-256-GCM, CHACHA20-POLY1305 and AES-128-GCM. All fine.</p>
 
-    DocumentRoot /var/www/modracx/html
+        <p>For TLS 1.2, which you still need for a small tail of clients, the list matters. What you want: ECDHE key exchange only, AEAD ciphers only, and both AES-GCM and ChaCha20 present so clients can pick what their hardware does well.</p>
 
-    # Enable HTTP/2
-    Protocols h2 http/1.1
+        <pre><code class="language-nginx"># TLS configuration for a 2026 storefront. Every line justified.
 
-    # SSL Configuration
-    SSLEngine on
-    SSLCertificateFile /etc/letsencrypt/live/modracx.com/fullchain.pem
-    SSLCertificateKeyFile /etc/letsencrypt/live/modracx.com/privkey.pem
+ssl_protocols TLSv1.2 TLSv1.3;
+# TLS 1.0/1.1 have been prohibited for card processing since June 2018
+# and browsers dropped them in 2020. Nothing that can buy from you needs
+# them. Turning them off costs you nothing measurable.
 
-    # TLS Protocols
-    # Disable SSLv3, TLS 1.0, TLS 1.1
-    SSLProtocol -all +TLSv1.2 +TLSv1.3
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+# ECDHE only: forward secrecy, no static RSA key transport.
+# AEAD only: no CBC, which is where the padding-oracle attacks lived.
+# AES128 listed before AES256 deliberately — 128-bit is not the weak
+# link in anything and it is measurably cheaper on constrained devices.
 
-    # Cipher Suites (Configures TLS 1.2 fallback)
-    SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384
-    
-    # Modern recommendation: let the client choose
-    SSLHonorCipherOrder off
+ssl_prefer_server_ciphers off;
+# Let the client choose. A phone without AES-NI picks ChaCha20 and runs
+# several times faster; forcing server order takes that choice away.
 
-    # Session Management
-    # Use shared memory cache for high performance
-    SSLSessionCache "shmcb:/var/run/apache2/ssl_scache(512000)"
-    SSLSessionCacheTimeout 86400
-    SSLSessionTickets off
+ssl_ecdh_curve X25519:secp384r1:prime256v1;
+# X25519 first because it is what every client speculatively guesses in
+# its TLS 1.3 ClientHello. Put anything else first and you buy yourself
+# a HelloRetryRequest and an extra round trip on every new connection.
 
-    # Diffie-Hellman Parameters
-    SSLOpenSSLConfCmd DHParameters /etc/apache2/dhparam.pem
+ssl_dhparam /etc/nginx/dhparam.pem;
+# Only used by non-EC DHE suites, which are not in the list above.
+# Harmless to leave; also harmless to delete. Do not generate a 4096-bit
+# one and believe you have achieved something.</code></pre>
 
-    # OCSP Stapling
-    SSLUseStapling On
-    SSLStaplingCache "shmcb:/var/run/apache2/ssl_stapling(32768)"
-    SSLStaplingResponderTimeout 5
-    SSLStaplingReturnResponderErrors off
+        <p>The ordering comment on X25519 is the line I would most like people to take away, because putting a NIST curve first is a common "hardening" change that makes every new connection one round trip slower, and no scanner will flag it.</p>
 
-    # Security Headers
-    Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
-    Header always set X-Frame-Options "DENY"
-    Header always set X-Content-Type-Options "nosniff"
-    Header always set X-XSS-Protection "1; mode=block"
+        <h3>ECDSA certificates, and why I dual-issue</h3>
 
-    # Directory Configuration
-    &lt;Directory /var/www/modracx/html&gt;
-        Options -Indexes +FollowSymLinks
-        AllowOverride All
-        Require all granted
-    &lt;/Directory&gt;
+        <p>An RSA-2048 certificate chain is roughly 1.5KB larger on the wire than the ECDSA equivalent, and the signature operation is around four times more expensive on the server. On a busy origin terminating its own TLS, switching to ECDSA is a genuine CPU saving — I measured about 22% lower CPU on a Magento origin doing roughly 400 handshakes a second.</p>
 
-    # Performance logging for HTTP/2
-    CustomLog /var/log/apache2/modracx_ssl_access.log "%t %h %{SSL_PROTOCOL}x %{SSL_CIPHER}x \"%r\" %b"
-&lt;/VirtualHost&gt;</code></pre>
+        <p>The compatibility tail that used to require RSA is now very small. Both nginx and Apache support serving both certificates from one server block and selecting per client, so the sensible configuration is both, which costs one extra certificate.</p>
 
-        <p>Apache's `mod_http2` is highly efficient but requires the MPM (Multi-Processing Module) Event or Worker to be active instead of Prefork. Prefork relies on a single thread per process, which contradicts the multiplexed nature of HTTP/2 and will cause severe performance degradation or failure to initialize the `h2` protocol entirely.</p>
+        <pre><code class="language-nginx"># Serve ECDSA to clients that support it, RSA to the tail. Nginx picks
+# per handshake based on the client's signature_algorithms extension.
+ssl_certificate     /etc/ssl/shop/ecdsa-fullchain.pem;
+ssl_certificate_key /etc/ssl/shop/ecdsa-privkey.pem;
+ssl_certificate     /etc/ssl/shop/rsa-fullchain.pem;
+ssl_certificate_key /etc/ssl/shop/rsa-privkey.pem;
 
-        <h2>Cipher Suite Selection and Hardware Acceleration</h2>
-        <p>The selection of cipher suites is not arbitrary. We prioritize `ECDHE` for key exchange because it is significantly faster than standard `DHE` while providing the same forward secrecy. For the symmetric encryption algorithm, `AES-GCM` is preferred due to widespread hardware acceleration. Modern Intel and AMD processors include the AES-NI instruction set, allowing the CPU to execute AES encryption and decryption operations natively in hardware.</p>
-        <p>For mobile devices that may lack hardware AES acceleration, `CHACHA20-POLY1305` is an excellent alternative. ChaCha20 is a stream cipher that can be implemented in software with extreme efficiency. By configuring our servers to support both and setting `ssl_prefer_server_ciphers off;`, we allow the client to select the optimal algorithm for its specific hardware capabilities.</p>
+# Verify which one a given client gets:
+#   openssl s_client -connect shop.example.com:443 \
+#     -sigalgs 'ECDSA+SHA256' &lt;/dev/null 2&gt;/dev/null | grep 'Peer sig'</code></pre>
 
-        <h2>Validating the Implementation with OpenSSL</h2>
-        <p>After applying configurations, validation is critical. We utilize the OpenSSL command-line utility to perform handshake simulations and verify cryptographic negotiation. Relying on browser tools alone is insufficient for backend infrastructure verification.</p>
-        
-        <h3>Testing TLS 1.3 Support</h3>
-        <p>Execute the following command to explicitly request a TLS 1.3 connection. The output should confirm the protocol and the selected cipher suite (e.g., TLS_AES_256_GCM_SHA384).</p>
-        <pre><code class="language-bash">openssl s_client -connect modracx.com:443 -tls1_3</code></pre>
-        <p>If the server is misconfigured or lacking OpenSSL 1.1.1+, the command will fail or fallback to a lower protocol version if not strictly forced. You should inspect the "New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384" line in the output.</p>
+        <p>Also check your chain length while you are in there. Every intermediate certificate is bytes on the critical path of every new connection, and I have seen chains with a redundant cross-signed root included by a copy-paste of the CA's bundle file. Sending the root is pointless — the client already has it or does not trust it — and it costs about 1KB on every handshake.</p>
 
-        <h3>Testing ALPN and HTTP/2 Negotiation</h3>
-        <p>Application-Layer Protocol Negotiation (ALPN) is a TLS extension that allows the client and server to negotiate the application protocol (HTTP/2) during the TLS handshake, eliminating the need for an additional round trip. We verify ALPN negotiation using OpenSSL:</p>
-        <pre><code class="language-bash">echo | openssl s_client -alpn h2 -connect modracx.com:443 -status</code></pre>
-        <p>Inspect the output for `ALPN protocol: h2`, confirming that HTTP/2 was successfully negotiated over the TLS connection. If it returns `http/1.1`, the server has failed to register the `h2` ALPN identifier, usually due to missing Nginx modules or incorrect Apache MPM configuration.</p>
+        <h2>10. OCSP Stapling, Which Fails Silently And Then Changed Entirely</h2>
 
-        <h3>Testing OCSP Stapling</h3>
-        <p>OCSP (Online Certificate Status Protocol) stapling allows the server to query the Certificate Authority (CA) for the revocation status of its own certificate and cache the response. This "stapled" response is then delivered to the client during the TLS handshake. Without stapling, the client browser must independently resolve the CA's infrastructure and perform an HTTP request to check revocation status, introducing a massive DNS and latency penalty before the page can even begin loading.</p>
-        <pre><code class="language-bash">echo QUIT | openssl s_client -connect modracx.com:443 -status 2&gt;/dev/null | grep -A 17 'OCSP response:'</code></pre>
-        <p>A successful configuration will output the OCSP response data, indicating a successful response status of `successful (0x0)`. If stapling is failing, ensure your server can resolve external DNS (hence the `resolver 1.1.1.1;` directive) and can make outbound HTTP requests on port 80 to the CA's OCSP responder URL embedded in your certificate.</p>
+        <p>OCSP stapling is the optimisation where your server fetches its own revocation status from the CA, caches it, and includes it in the handshake, so the client does not have to make a separate connection to the CA to check.</p>
 
-        <h3>Benchmarking Cryptographic Operations</h3>
-        <p>To understand the performance characteristics of different cryptographic algorithms on your specific hardware, utilize the OpenSSL speed module.</p>
-        <pre><code class="language-bash"># Benchmark AES-GCM algorithms
-openssl speed -evp aes-128-gcm
-openssl speed -evp aes-256-gcm
+        <p>The configuration is three lines and the interesting part is the failure mode. If your server cannot reach the OCSP responder — outbound port 80 blocked, no resolver configured, responder having a bad day — nginx does not error. It logs a warning at the level nobody reads and serves handshakes without a staple. Everything works. You believe stapling is on for months.</p>
 
-# Benchmark Elliptic Curve key exchange
-openssl speed ecdh</code></pre>
-        <p>Servers utilizing modern processors will demonstrate exceptional throughput for AES-GCM operations, making it the preferred symmetric cipher for TLS connections.</p>
+        <pre><code class="language-nginx">ssl_stapling on;
+ssl_stapling_verify on;
+ssl_trusted_certificate /etc/ssl/shop/chain.pem;   # intermediate + root
 
-        <h2>Monitoring and Troubleshooting</h2>
-        <p>Once deployed, monitor Nginx worker connections closely — HTTP/2 clients maintain persistent sockets far longer than HTTP/1.1 clients. Increase <code>worker_connections</code> in <code>nginx.conf</code> proportionally. Track SSL handshake failures in error logs: sudden spikes indicate incompatible legacy clients or OCSP resolver timeouts caused by blocked outbound port 80 egress. For next-generation transport, HTTP/3 over UDP-based QUIC eliminates TCP head-of-line blocking entirely — see my guide on <a href="/blog/http3-quic-implementation/">Implementing HTTP/3 with QUIC for Magento &amp; Shopify</a>.</p>
+# Nginx needs its own resolver to reach the responder hostname. Without
+# this line stapling silently does nothing, which is the single most
+# common misconfiguration in this whole article.
+resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
+resolver_timeout 5s;</code></pre>
+
+        <pre><code class="language-bash"># The only way to know: ask for the staple and look for it.
+echo QUIT | openssl s_client -connect shop.example.com:443 \
+  -servername shop.example.com -status 2&gt;/dev/null \
+  | grep -E 'OCSP response:|Cert Status|This Update|Next Update'
+
+# What working output looks like:
+#   OCSP response: ... Cert Status: good
+#   This Update: Aug  4 09:00:00 2026 GMT
+#   Next Update: Aug 11 09:00:00 2026 GMT
+#
+# What broken looks like:
+#   OCSP response: no response sent
+#
+# Nginx also does not staple on the FIRST request after a reload — it
+# fetches the response lazily. Query twice before concluding anything.</code></pre>
+
+        <p>Now the part that changes the calculus. Let's Encrypt announced in 2024 that it was ending OCSP support, and wound the responders down through 2025 in favour of CRLs delivered to browsers out of band. Certificates they issue no longer carry an OCSP URL at all, which means <code>ssl_stapling on</code> for a Let's Encrypt certificate is now a no-op — not broken, just nothing to staple.</p>
+
+        <p>This is not a regression. Browser-side revocation checking had been moving to pushed lists — CRLite in Firefox, CRLSets in Chrome — for years, precisely because OCSP was a privacy leak to the CA and a latency cost with an unenforceable failure mode. If you are on a commercial CA that still runs a responder, keep stapling configured. If you are on Let's Encrypt, stop worrying about it, and take the check out of your monitoring so it does not page you.</p>
+
+        <p>One thing I would not do: OCSP must-staple. It sets a flag in the certificate saying clients must reject the connection without a valid staple, which turns a silent degradation into a hard outage the moment your responder fetch fails. I have seen it cause a two-hour outage on a site that was otherwise perfectly healthy. The security benefit does not justify the availability risk for a storefront.</p>
+
+        <h2>11. The Configuration, Assembled</h2>
+
+        <p>Here is the whole thing in one place, for nginx 1.25 or later. I have annotated the lines that people usually get wrong rather than the ones that are obvious.</p>
+
+        <pre><code class="language-nginx">server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;                       # separate directive since 1.25.1
+
+    server_name shop.example.com;
+    root /var/www/shop/pub;
+
+    # --- Certificates: ECDSA preferred, RSA for the tail ---
+    ssl_certificate     /etc/ssl/shop/ecdsa-fullchain.pem;
+    ssl_certificate_key /etc/ssl/shop/ecdsa-privkey.pem;
+    ssl_certificate     /etc/ssl/shop/rsa-fullchain.pem;
+    ssl_certificate_key /etc/ssl/shop/rsa-privkey.pem;
+
+    # --- Protocol and cipher selection ---
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_ecdh_curve X25519:secp384r1:prime256v1;   # X25519 FIRST
+
+    # --- Resumption ---
+    ssl_session_cache shared:TLS:20m;
+    ssl_session_timeout 1h;
+    ssl_session_tickets on;
+    ssl_session_ticket_key /etc/nginx/tickets/current.key;
+    ssl_session_ticket_key /etc/nginx/tickets/previous.key;
+
+    # --- 0-RTT: off. See the reasoning above. ---
+    ssl_early_data off;
+
+    # --- Stapling (no-op on Let's Encrypt certs since 2025) ---
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_trusted_certificate /etc/ssl/shop/chain.pem;
+    resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
+    resolver_timeout 5s;
+
+    # --- Multiplexing limits ---
+    http2_max_concurrent_streams 256;
+    keepalive_timeout 75s;
+    keepalive_requests 10000;       # default 1000 is low for an h2 origin
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+    location / {
+        try_files $uri $uri/ /index.php$is_args$args;
+    }
+}</code></pre>
+
+        <p>The HSTS header there deserves its own thought before you deploy it, particularly the <code>preload</code> token, which is difficult to reverse. That is covered properly in the piece on <a href="/blog/hsts-secure-seo/">deploying HSTS without locking yourself out</a>.</p>
+
+        <p>Apache users: the equivalents are <code>Protocols h2 http/1.1</code>, <code>SSLProtocol -all +TLSv1.2 +TLSv1.3</code>, <code>SSLHonorCipherOrder off</code>, and <code>H2MaxSessionStreams 256</code>. One Apache-specific trap that costs people an afternoon: <code>mod_http2</code> will not serve h2 under the prefork MPM. It needs event or worker. If your <code>Protocols</code> line looks correct and clients keep negotiating http/1.1, check your MPM first — it is nearly always that.</p>
+
+        <h2>12. Verifying It Actually Works</h2>
+
+        <p>Four checks, in the order I run them.</p>
+
+        <pre><code class="language-bash"># 1. Is HTTP/2 negotiated via ALPN? If this says http/1.1, nothing else
+#    in this article is happening.
+echo | openssl s_client -alpn h2 -connect shop.example.com:443 \
+  -servername shop.example.com 2&gt;/dev/null | grep 'ALPN protocol'
+# expected: ALPN protocol: h2
+
+# 2. Is TLS 1.3 actually being used, and with which suite?
+echo | openssl s_client -tls1_3 -connect shop.example.com:443 \
+  -servername shop.example.com 2&gt;/dev/null | grep -E 'Protocol|Cipher'
+# expected: Protocol : TLSv1.3 / Cipher : TLS_AES_128_GCM_SHA256
+
+# 3. Does resumption work, and does it save a round trip? Run the full
+#    handshake, save the session, reconnect with it.
+openssl s_client -connect shop.example.com:443 -servername shop.example.com \
+  -sess_out /tmp/sess.pem &lt;/dev/null &gt;/dev/null 2&gt;&amp;1
+echo | openssl s_client -connect shop.example.com:443 \
+  -servername shop.example.com -sess_in /tmp/sess.pem 2&gt;/dev/null \
+  | grep -E 'Reused|New,'
+# expected: Reused, TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256
+
+# 4. Handshake cost, measured rather than assumed. Compare a cold
+#    connection against a reused one on the same host.
+curl -sS -o /dev/null -w 'dns=%{time_namelookup} tcp=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n' \
+  --tlsv1.3 --http2 https://shop.example.com/</code></pre>
+
+        <p>The difference between <code>time_connect</code> and <code>time_appconnect</code> in that last command is your TLS handshake cost in isolation. On a well-configured origin over a domestic connection I expect 30–60ms for a full handshake and under 20ms for a resumed one. If you see 200ms, something is wrong and it is usually either a HelloRetryRequest from a bad curve order or an oversized certificate chain.</p>
+
+        <h2>13. Measuring What The Upgrade Actually Bought</h2>
+
+        <p>This is the section I care most about, because it is where the industry is least honest.</p>
+
+        <p>Synthetic tests will overstate the benefit. WebPageTest with a cold cache, a cold connection and a throttled profile is the exact scenario where multiplexing and a shorter handshake shine, and it is not what most of your traffic looks like. Real users have warm connections, partially warm caches and a different resource mix per page type.</p>
+
+        <p>What I do instead: instrument the real thing, tag every measurement with the protocol that was actually used, and compare distributions rather than medians.</p>
+
+        <pre><code class="language-javascript">// Report the protocol alongside the metric, from the field. Without the
+// protocol tag you cannot tell an HTTP/2 session from a fallback, and
+// your "after" cohort quietly includes users who never got the upgrade.
+import { onLCP, onINP, onCLS } from 'web-vitals';
+
+function navProtocol() {
+  const nav = performance.getEntriesByType('navigation')[0];
+  return nav ? nav.nextHopProtocol : 'unknown';   // 'h2', 'http/1.1', 'h3'
+}
+
+function handshakeCost() {
+  const nav = performance.getEntriesByType('navigation')[0];
+  if (!nav || !nav.secureConnectionStart) return null;
+  // 0 means the connection was reused — a real and important category,
+  // not a missing value. Distinguish the two.
+  return nav.connectEnd - nav.secureConnectionStart;
+}
+
+function report(metric) {
+  const body = JSON.stringify({
+    name: metric.name,
+    value: Math.round(metric.value),
+    protocol: navProtocol(),
+    tls_ms: handshakeCost(),
+    reused: performance.getEntriesByType('navigation')[0]?.secureConnectionStart === 0,
+    conn: navigator.connection?.effectiveType ?? null,
+    page_type: document.body.dataset.pageType,   // pdp | plp | checkout
+  });
+  navigator.sendBeacon('/rum', body);
+}
+
+onLCP(report); onINP(report); onCLS(report);</code></pre>
+
+        <p>Then compare at the 75th and 95th percentiles, split by page type and connection class. Here is what that looked like on the homeware client I mentioned at the top, three weeks either side of the change, about 210,000 sessions per period.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Cohort</th><th>LCP p50 before / after</th><th>LCP p75</th><th>LCP p95</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Desktop, product page</td><td>1,840 / 1,720ms</td><td>2,610 / 2,290ms</td><td>4,900 / 3,980ms</td></tr>
+            <tr><td>Mobile 4G, product page</td><td>3,210 / 2,600ms</td><td>4,880 / 3,740ms</td><td>9,100 / 6,700ms</td></tr>
+            <tr><td>Mobile 4G, category page</td><td>3,700 / 2,910ms</td><td>5,400 / 4,050ms</td><td>10,200 / 7,300ms</td></tr>
+            <tr><td>Desktop, checkout</td><td>1,410 / 1,395ms</td><td>1,980 / 1,930ms</td><td>3,400 / 3,310ms</td></tr>
+          </tbody>
+        </table>
+
+        <p>The checkout row is the honest one. Checkout loaded 11 resources and had almost nothing to multiplex, so the upgrade did essentially nothing there — and checkout is the page where a performance improvement would have been worth the most money. That is not the result anybody wants and it is the result you should expect on a lean page.</p>
+
+        <p>The mobile category page row is where the value is: 1,350ms at p75 on the page type that carries the most traffic. That is a Core Web Vitals grade change, not a rounding error.</p>
+
+        <p>A caution I have been caught by: three weeks either side is a before/after comparison, not a controlled experiment. Seasonality, a CDN routing change, an image optimisation someone shipped in the same fortnight — any of these contaminate it. If the decision is expensive, split by a header at the edge and run both protocols concurrently against random cohorts. If it is not, accept a before/after and say out loud that it is one.</p>
+
+        <h2>14. The Migration That Went Sideways For Nine Days</h2>
+
+        <p>Worth telling in full, because everything about it was ordinary and it still cost the client money.</p>
+
+        <p>A B2B distributor, roughly 90,000 sessions a month, self-hosted Magento 2.4 behind a CDN with an nginx origin. The brief was to enable HTTP/2 and TLS 1.3 end to end, including the edge-to-origin leg, and to consolidate two asset subdomains into the main origin. We scheduled it as a single change on a Thursday evening because the pieces were interdependent.</p>
+
+        <p>The first three days looked good. Median LCP down 190ms, p75 down 420ms, no errors in the logs, cache hit ratio unchanged. Then their operations team reported that the order export their warehouse system polled every fifteen minutes had been failing intermittently since the change, and it had taken them nine days to associate the two events.</p>
+
+        <p>The cause: the warehouse system ran on a Windows Server 2012 R2 box with a .NET HTTP client that negotiated TLS 1.2 with a cipher list that no longer intersected ours. We had removed all the CBC suites, which was correct, and that client only offered CBC suites, which was its problem and became ours. It had been failing about 40% of the time — not always, because a retry occasionally landed on a node whose config had not reloaded yet, which is exactly the kind of partial symptom that stops anyone diagnosing it quickly.</p>
+
+        <p>The fix took ten minutes: a separate server block on a different port for machine-to-machine traffic with a wider cipher list and an IP allowlist, so the public storefront kept the strict configuration. The nine days were entirely diagnosis.</p>
+
+        <p>Two things I do differently now. Before touching cipher configuration, I pull a fortnight of handshake logs grouped by negotiated protocol, cipher and user agent, and look specifically for non-browser clients. Every merchant has some — an ERP poller, a marketplace integration, a payment provider's callback, a monitoring probe — and none of them are in anybody's compatibility matrix.</p>
+
+        <pre><code class="language-nginx"># Log what actually negotiated, before you change what is allowed.
+# Run this for two weeks and read it before touching ssl_ciphers.
+log_format tlsinfo '$remote_addr $ssl_protocol $ssl_cipher '
+                   '$ssl_session_reused "$http_user_agent" $status';
+access_log /var/log/nginx/tls.log tlsinfo;
+
+# Then:
+#   awk '{print $2, $3}' /var/log/nginx/tls.log | sort | uniq -c | sort -rn
+# Anything on TLSv1.2 with a CBC cipher is a client you are about to
+# break. Find out what it is before you find out at 3am.</code></pre>
+
+        <p>The second change: I no longer bundle a protocol change with an origin consolidation. They were shipped together because they were both "the transport project", and when something broke there were two candidate causes and no clean rollback of either in isolation. Separate deploys, a week apart, would have made the nine days into an afternoon.</p>
+
+        <h2>15. HPACK, And The Header You Send Ninety Times</h2>
+
+        <p>I said earlier that header compression is the underrated part. Some detail on why.</p>
+
+        <p>HPACK keeps a dynamic table on both ends of the connection. The first time a header field goes past, it is sent in full and both sides add it to their table. Every subsequent occurrence is an index — often a single byte. Static entries for common fields are pre-agreed and never sent at all.</p>
+
+        <p>On a typical logged-in ecommerce request the headers are dominated by cookies: a session identifier, a cart token, consent state, three analytics identifiers, an A/B assignment. I have measured 2.1KB of cookie on a single Magento request. Ninety requests per page load, and HTTP/1.1 sends all 189KB of it, upstream, where mobile bandwidth is typically a fifth of the downstream capacity.</p>
+
+        <p>HPACK takes that to roughly 2.1KB for the first request and a handful of bytes for each of the remaining eighty-nine. That is not a marginal saving; on a constrained uplink it can be the difference between requests going out promptly and requests queueing behind their own headers.</p>
+
+        <p>Two practical consequences. First, this is the one HTTP/2 benefit that applies even to sites with few resources, which is worth knowing when you are deciding whether an upgrade is worth scheduling. Second, it removes some of the urgency from cookie-size optimisation — but not all of it, because the first request on every new connection still pays full price, and because those cookies still go to every third-party origin on the page, none of which share your connection or your compression table.</p>
+
+        <p>There is one HPACK-specific hazard: the dynamic table is shared, mutable state between client and server, which means a badly behaved intermediary that rewrites headers can corrupt it. It is rare, and when it happens the symptom is a connection that dies with a COMPRESSION_ERROR and takes every in-flight request with it. If you see those in your logs, look at whatever is between the browser and the origin rather than at your own configuration.</p>
+
+        <h2>16. Where HTTP/2 Does Not Help, And Where It Hurts</h2>
+
+        <p>Being specific about this saves arguments later.</p>
+
+        <p><strong>Single large downloads.</strong> A 40MB PDF over one stream is bounded by TCP and congestion control. HTTP/2 adds framing overhead and nothing else. Marginally worse.</p>
+
+        <p><strong>Lossy networks.</strong> Concentrating all your streams onto one TCP connection means one lost packet stalls delivery for every stream, because TCP delivers bytes in order. This is transport-level head-of-line blocking, it is the thing HTTP/3 exists to fix, and on a 3% loss connection HTTP/2 can genuinely underperform HTTP/1.1's six independent connections.</p>
+
+        <p><strong>Server-side latency.</strong> If your TTFB is 900ms because Magento is regenerating a category page, none of this touches it. Protocol optimisation shaves tens of milliseconds off a number that a caching fix would take hundreds off.</p>
+
+        <p><strong>Third-party scripts.</strong> Your protocol configuration does not apply to another origin's connection. A checkout loading six third-party tags opens six more connections regardless.</p>
+
+        <p><strong>Render-blocking resources.</strong> Multiplexing gets bytes to the browser faster; it does not stop a synchronous script in the head from blocking the parser. Fixing the critical path is a different project and usually a more valuable one — there is a full treatment in the <a href="/blog/critical-css-optimization/">critical CSS piece</a>.</p>
+
+        <h2>17. Platform Notes</h2>
+
+        <h3>Magento and Adobe Commerce</h3>
+
+        <p>Self-hosted Magento almost always terminates TLS at Varnish, a load balancer or a CDN rather than at the PHP tier, which means the configuration above belongs wherever termination happens and not in the origin's nginx config. I have watched an afternoon disappear into tuning cipher suites on an origin that was only ever spoken to over plaintext HTTP from the CDN.</p>
+
+        <p>The specific thing worth checking on Magento: static asset versioning. The default deployment appends a version directory to static URLs, and if that changes on every deploy you invalidate the entire CDN cache and every returning customer gets cold connections and cold caches simultaneously. That interacts badly with everything in this article.</p>
+
+        <h3>Shopify</h3>
+
+        <p>You do not configure any of this. Shopify's edge handles HTTP/2, HTTP/3 and TLS 1.3 and does so competently. What remains yours is what you put on the page: apps that load from their own origins, each requiring its own connection, each with its own certificate chain and handshake. On a Shopify theme audit the protocol layer is a five-minute check and the third-party origin count is the real work.</p>
+
+        <h3>Behind a CDN generally</h3>
+
+        <p>Two independent connections exist: browser to edge, and edge to origin. The first is configured by your CDN and is probably already correct. The second is yours, and it is frequently HTTP/1.1 with TLS 1.2 because nobody looked. Origin fetches are less latency-sensitive than eyeball connections, but if your edge does a lot of origin pulls — low cache hit ratio, personalised pages — it is worth checking. Confirm the CDN is reusing origin connections at all, since a cold TLS handshake per origin fetch is a genuinely expensive default.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Should we skip HTTP/2 and go straight to HTTP/3?"</strong> No, and you cannot anyway. HTTP/3 is advertised over an HTTP/2 or HTTP/1.1 response via Alt-Svc, so the earlier protocol is the discovery mechanism. You need HTTP/2 working regardless.</p>
+
+        <p><strong>"Does TLS 1.3 help SEO?"</strong> Not directly. HTTPS is a ranking signal; the version is not. It helps indirectly through the latency contribution to LCP, which is small on most sites. Anyone selling you a TLS upgrade as an SEO project is stretching.</p>
+
+        <p><strong>"Can we drop TLS 1.2 entirely?"</strong> Check your logs before deciding. I ran the numbers on three storefronts recently and TLS 1.2 was 0.8%, 1.4% and 6.1% of handshakes — the last being a B2B distributor whose customers were on corporate networks with old TLS-inspecting middleboxes. That merchant could not drop it. The other two could and did.</p>
+
+        <p><strong>"Is AES-256 meaningfully safer than AES-128?"</strong> No, not against any threat model that applies to a storefront. Both are unbroken. AES-256 costs slightly more CPU and slightly more battery on phones. Offer both, let the client choose, and spend the deliberation on something that matters.</p>
+
+        <p><strong>"Our scanner gives us a B and wants us to disable things."</strong> Read the specific finding rather than chasing the grade. Scanners flag TLS 1.2 support as a deduction even where your traffic requires it, and they will not tell you that putting a NIST curve first cost you a round trip. An A+ that loses you 6% of a B2B customer base is a worse configuration.</p>
+
+        <p><strong>"How often should we rotate session ticket keys?"</strong> Hourly is a reasonable default with a three-key window so in-flight tickets stay valid. Daily is defensible. Never is not, and never is the default if you set a key file and forget it.</p>
+
+        <p><strong>"Will HTTP/2 reduce our server costs?"</strong> Modestly, yes, and by a different mechanism than most people expect: one connection instead of six means far fewer TLS handshakes, and handshakes are the expensive part. On an origin doing its own termination, moving to ECDSA on top of that is where the real CPU saving is.</p>
+
+        <h2>19. What I Would Do First</h2>
+
+        <p>Confirm HTTP/2 is actually negotiated, with the ALPN check above. I have found sites where it was configured on the origin and stripped by a proxy in between, and nobody had checked in two years.</p>
+
+        <p>Look at your <code>ssl_ecdh_curve</code> ordering. If X25519 is not first, put it first. That is one line and it removes a round trip from every new connection.</p>
+
+        <p>Count the origins your product page pulls from. If assets are sharded across subdomains you own, consolidating them will very likely beat anything else in this article.</p>
+
+        <p>Check whether OCSP stapling is doing anything, and if you are on Let's Encrypt, accept that it is not and remove it from your monitoring rather than leaving a check that fails forever.</p>
+
+        <p>Add <code>fetchpriority="high"</code> to your LCP image and <code>fetchpriority="low"</code> to below-the-fold imagery and non-urgent scripts. This is the closest thing to free performance available on a product page.</p>
+
+        <p>Then instrument the field measurement with <code>nextHopProtocol</code> tagged on every beacon, and wait three weeks before claiming anything. That last step is the one that gets skipped, and skipping it is how an industry ends up believing a protocol upgrade halves load times when on a lean checkout page it does approximately nothing at all.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/http3-quic-implementation/">Implementing HTTP/3 with QUIC for Magento & Shopify</a></strong>
+              <strong><a href="/blog/http3-quic-implementation/">Implementing HTTP/3 with QUIC for Magento &amp; Shopify</a></strong>
               <p>UDP-based transport layer performance for mobile networks.</p>
             </li>
             <li>
@@ -424,7 +804,6 @@ openssl speed ecdh</code></pre>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -458,6 +837,6 @@ openssl speed ecdh</code></pre>
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

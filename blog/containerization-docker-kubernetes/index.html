@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Containerizing Monolithic E-Commerce: Docker & Kubernetes | MODRACX</title>
-  <meta name="description" content="Technical engineering guide on containerizing Magento 2 and Node.js e-commerce monoliths using Docker multi-stage builds and Kubernetes HPA auto-scaling." />
+  <meta name="description" content="Containerising a Magento or Node commerce monolith: multi-stage Dockerfiles, persistent media, probes that do not cause outages, CPU throttling and HPA tuning." />
   <meta property="og:title" content="Containerizing Monolithic E-Commerce: Docker & Kubernetes | MODRACX" />
   <meta property="og:description" content="Technical engineering guide on containerizing e-commerce monoliths by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Containerizing Monolithic E-Commerce: Docker & Kubernetes</h1>
-        <p class="lede">Packaging Magento 2 into multi-stage Docker images deployed on Kubernetes enables precise Horizontal Pod Autoscaling (HPA) during high-traffic spikes.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Containerizing Monolithic E-Commerce: Docker &amp; Kubernetes</h1>
+        <p class="lede">Forty-minute deploys, a white screen on one server in four, and a fix that involved SSH. Containers solved it — but the first attempt made product pages four times slower.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,33 +205,661 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Kubernetes HPA Auto-Scaling Yaml Code</h2>
+        <h2>1. Forty Minutes to Deploy, and Nobody Knew Why</h2>
 
-        <pre><code class="language-yaml"># Kubernetes HorizontalPodAutoscaler Configuration
-apiVersion: autoscaling/v2
+        <p>I was brought into a Magento 2.4 build in early 2023 because their deploys had crept past forty minutes and had started failing intermittently. The failure was always the same: one of four application servers would come back with a white screen, and the fix was to SSH in and clear <code>generated/</code> by hand.</p>
+
+        <p>The cause turned out to be an rsync deploy that copied files onto live servers while PHP-FPM was serving requests from them. Most of the time the window was small enough not to matter. When a deploy landed during a traffic spike, a worker would load a class file from the old release and a generated interceptor from the new one, and the autoloader would produce something incoherent.</p>
+
+        <p>The team's answer had been a longer maintenance window. The actual answer was that four servers had drifted apart over three years — different PHP patch versions, one with an extra extension somebody installed to debug an incident in 2021, different <code>opcache</code> settings — and no deploy process can be reliable on top of that.</p>
+
+        <p>We containerised. Not because containers are fashionable, but because an immutable image is the only version of "the same code is running everywhere" that survives contact with a team of six people and three years. Deploys went to about seven minutes, and the class of failure disappeared entirely, because a container either has the right files in it or it does not start.</p>
+
+        <p>What follows is what that work actually involves for a commerce monolith, including the parts that were harder than expected and the two decisions I would make differently.</p>
+
+        <h2>2. What Containerising a Monolith Actually Means</h2>
+
+        <p>There is a persistent idea that containers are for microservices and that a monolith needs to be broken up before it can be containerised. That is backwards. A monolith is easier to containerise than a service mesh — there is one image, one deployment, one thing to reason about — and containerising it first is how you find out whether you needed microservices at all.</p>
+
+        <p>What you are actually buying is four things, and it is worth being clear which ones you want.</p>
+
+        <p><strong>Environment parity.</strong> The image that passed CI is the artefact that runs in production. Not "the same version of PHP", the same bytes. This is the one that pays for the whole exercise.</p>
+
+        <p><strong>Fast, safe rollback.</strong> Rolling back becomes changing an image tag, which takes as long as a pod restart. Compared to re-running a deploy script in reverse and hoping the database migration was reversible, that is a different category of operation.</p>
+
+        <p><strong>Horizontal scale without configuration drift.</strong> Adding a fifth instance is a number in a manifest, not an afternoon with Ansible and a checklist.</p>
+
+        <p><strong>Resource isolation.</strong> The cron container that runs the reindexer cannot starve the web containers, because it has its own limits.</p>
+
+        <p>What you are not buying: performance. A containerised Magento is not faster than the same Magento on a VM. If anything it is marginally slower, because of network overlay and, if you configure limits carelessly, CPU throttling. Anyone selling containerisation as a speed improvement is describing a side effect of finally standardising the PHP configuration.</p>
+
+        <h2>3. A Commerce Monolith Is Not a Twelve-Factor App</h2>
+
+        <p>The twelve-factor guidance assumes an application with no local state, no build step at runtime, and configuration entirely in environment variables. Magento violates all three, and so does most of WooCommerce, older Shopware, and anything built on a framework that predates 2015. Pretending otherwise produces a container that works in development and falls apart under load.</p>
+
+        <p>Four specific problems, each of which needs a decision before you write a Dockerfile.</p>
+
+        <p><strong>Generated code.</strong> Magento generates interceptor classes, proxies, and factories into <code>generated/</code>, and a dependency injection compilation step produces a large chunk of PHP. Generating this at container start is slow — minutes — and worse, means two replicas can generate slightly different output. It belongs in the image, produced at build time, and the directory should be read-only at runtime.</p>
+
+        <p><strong>Static content.</strong> Deployed CSS, JavaScript, and images per theme and locale land in <code>pub/static</code>. Same reasoning: build it into the image. On a site with four locales and two themes this step alone was eleven minutes of the original forty, and it happened on every server independently.</p>
+
+        <p><strong>User-uploaded media.</strong> <code>pub/media</code> is genuinely mutable, genuinely shared, and cannot go in the image. This is the hard one and it gets its own section below.</p>
+
+        <p><strong>Sessions and cache.</strong> File-based sessions are fine on one server and catastrophic on four. Redis, always, before you containerise anything, because it is a change you can make and verify independently.</p>
+
+        <p>The order matters. Move sessions and cache to Redis first, on your existing infrastructure, and let it run for a week. Then containerise. Doing both at once means that when checkout breaks you have two suspects.</p>
+
+        <h2>4. The Dockerfile, Written Properly</h2>
+
+        <p>Multi-stage builds are the whole game for PHP. The build stage needs Composer, Node, git, and a compiler toolchain; the runtime stage needs none of them, and shipping them is both a size problem and a security problem — a container with <code>git</code> and a package manager in it is a much more useful place for an attacker to land.</p>
+
+        <pre><code class="language-dockerfile"># syntax=docker/dockerfile:1.7
+
+# ---------- stage 1: PHP dependencies ----------
+FROM php:8.3-fpm-alpine AS vendor
+
+RUN apk add --no-cache git unzip $PHPIZE_DEPS \
+ &amp;&amp; docker-php-ext-install -j"$(nproc)" bcmath pdo_mysql soap sockets
+
+COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
+
+WORKDIR /app
+# Copy only the manifests first. This layer is cached until a dependency
+# changes, which turns a six-minute composer install into a cache hit on
+# the overwhelming majority of builds.
+COPY composer.json composer.lock auth.json ./
+
+# BuildKit cache mount: Composer's own cache survives between builds without
+# ending up in the image. Worth about four minutes on a cold dependency change.
+RUN --mount=type=cache,target=/tmp/composer-cache \
+    COMPOSER_CACHE_DIR=/tmp/composer-cache \
+    composer install \
+      --no-dev --no-scripts --no-interaction \
+      --prefer-dist --optimize-autoloader
+
+# ---------- stage 2: front-end assets ----------
+FROM node:20-alpine AS assets
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY . .
+RUN npm run build
+
+# ---------- stage 3: application build ----------
+FROM php:8.3-fpm-alpine AS build
+RUN apk add --no-cache $PHPIZE_DEPS \
+ &amp;&amp; docker-php-ext-install -j"$(nproc)" bcmath pdo_mysql soap sockets gd intl
+
+WORKDIR /app
+COPY --from=vendor /app/vendor ./vendor
+COPY . .
+COPY --from=assets /app/pub/static/frontend ./pub/static/frontend
+
+# Both of these are slow and deterministic, which makes them exactly the
+# kind of work that belongs at build time rather than at container start.
+RUN php bin/magento setup:di:compile \
+ &amp;&amp; php bin/magento setup:static-content:deploy en_GB en_US -f --jobs="$(nproc)" \
+ &amp;&amp; rm -rf var/cache/* var/page_cache/* var/view_preprocessed/*
+
+# ---------- stage 4: runtime ----------
+FROM php:8.3-fpm-alpine AS runtime
+
+RUN apk add --no-cache \
+      icu-libs libpng libjpeg-turbo libzip libxslt oniguruma \
+ &amp;&amp; addgroup -g 1000 app \
+ &amp;&amp; adduser -u 1000 -G app -s /sbin/nologin -D app
+
+COPY --from=build /usr/local/lib/php/extensions/ /usr/local/lib/php/extensions/
+COPY --from=build /usr/local/etc/php/conf.d/ /usr/local/etc/php/conf.d/
+COPY --chown=app:app --from=build /app /app
+
+COPY docker/php.ini /usr/local/etc/php/conf.d/zz-app.ini
+COPY docker/fpm-pool.conf /usr/local/etc/php-fpm.d/zz-pool.conf
+
+WORKDIR /app
+USER app
+EXPOSE 9000
+CMD ["php-fpm", "-F"]</code></pre>
+
+        <p>Three notes on that file that are worth more than the rest of it.</p>
+
+        <p>The layer ordering is deliberate. Everything that changes rarely goes at the top; the application source, which changes every commit, goes as far down as possible. Get this wrong — copy the whole source before running <code>composer install</code> — and every build reinstalls every dependency. On that Magento project the difference between good and bad layer ordering was six minutes per build, every build.</p>
+
+        <p>The runtime stage installs the shared libraries but not the build tools. <code>icu-libs</code> without <code>icu-dev</code>, <code>libpng</code> without <code>libpng-dev</code>. The compiled extension binaries are copied across from the build stage. This is fiddly and it is the difference between a 340MB image and a 1.1GB one.</p>
+
+        <p><code>USER app</code> is not optional. A container running as root is a container where a PHP file upload vulnerability becomes a root shell inside your cluster network. Kubernetes can enforce this with a security context, and should, but fixing it in the image means the container also runs as a non-root user on a developer's laptop where nobody is enforcing anything.</p>
+
+        <h3>The .dockerignore file people forget</h3>
+
+        <p>Without one, the build context includes <code>.git</code>, <code>node_modules</code>, <code>var/</code>, and any database dump somebody left in the repository root. On the project I have been describing the initial build context was 4.2GB and took ninety seconds to send to the daemon before the build started.</p>
+
+        <pre><code class="language-text">.git
+.github
+node_modules
+var/cache
+var/log
+var/session
+var/page_cache
+pub/media
+pub/static/frontend
+generated
+*.sql
+*.sql.gz
+.env
+docker-compose.override.yml</code></pre>
+
+        <p>Note <code>pub/media</code> in there. It is not just size — including it means an image that contains customer-uploaded files, which is a data-handling problem as much as a build problem.</p>
+
+        <h2>5. The Node Storefront Image, Which Is Easier</h2>
+
+        <p>If you are running a decoupled front end — a Next.js or Nuxt storefront in front of a commerce API — the containerisation story is much simpler, because the framework was designed with it in mind.</p>
+
+        <pre><code class="language-dockerfile">FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+# Anything referenced at build time must be present at build time. Next.js
+# inlines NEXT_PUBLIC_* into the bundle here, which means these are not
+# secrets and cannot be changed without a rebuild. Say so in the README.
+ARG NEXT_PUBLIC_STORE_URL
+RUN npm run build
+
+FROM node:20-alpine AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+RUN addgroup -g 1001 nodejs &amp;&amp; adduser -u 1001 -G nodejs -D nextjs
+
+# Standalone output bundles only the files actually reached by the server,
+# which on a typical storefront is a fraction of node_modules.
+COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=build --chown=nextjs:nodejs /app/public ./public
+
+USER nextjs
+EXPOSE 3000
+# Exec form, no shell. A shell as PID 1 does not forward SIGTERM, so the
+# container is killed rather than shut down gracefully.
+CMD ["node", "server.js"]</code></pre>
+
+        <p>That last comment is the one that catches people. If your <code>CMD</code> is a string rather than an array, Docker runs it under <code>/bin/sh -c</code>, the shell becomes PID 1, and it does not pass signals to the child. Kubernetes sends <code>SIGTERM</code>, nothing happens, thirty seconds pass, and the pod is killed with <code>SIGKILL</code> mid-request. Every rolling deploy drops some connections and nobody can work out why.</p>
+
+        <h2>6. Image Size, and What Actually Matters About It</h2>
+
+        <p>Image size gets more attention than it deserves, but it is not irrelevant, and the reason is not the one usually given.</p>
+
+        <p>Pull time only matters on a cold node. Once an image is in a node's local store, subsequent pods start from it instantly, and layers shared with the previous version are not re-pulled. So a 900MB image on a stable node pool is mostly a non-issue. It becomes an issue the moment you autoscale nodes, because a new node has nothing cached and every pod scheduled onto it waits for the full pull. During a traffic spike — precisely when you are adding nodes — a 900MB image can mean ninety seconds before the new capacity serves anything.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Base</th><th>Typical Magento image</th><th>Trade-off</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>php:8.3-fpm</code> (Debian)</td><td>~1.1GB</td><td>Everything works; glibc; large</td></tr>
+            <tr><td><code>php:8.3-fpm-alpine</code></td><td>~340MB</td><td>musl libc; occasional extension pain</td></tr>
+            <tr><td>Distroless / static</td><td>~180MB</td><td>No shell, so no debugging in-container</td></tr>
+          </tbody>
+        </table>
+
+        <p>I use Alpine for PHP and have had two problems with it in five years, both involving extensions with glibc assumptions, both solvable. I would not use distroless for a PHP monolith, because the day you need to get a shell into a misbehaving pod is the day you find out you cannot, and the ephemeral debug container workflow is more friction than the 160MB is worth.</p>
+
+        <p>The bigger lever is layer sharing. If your base layers are stable and only the application layer changes, a new deploy pulls a few tens of megabytes even though the image is 340MB. That happens automatically if the Dockerfile is ordered correctly and does not happen at all if it is not.</p>
+
+        <h2>7. Configuration and Secrets</h2>
+
+        <p>The rule is that one image runs in every environment, and behaviour differs only by what is injected at runtime. Any file baked into the image that names an environment is a bug, and the most common one is <code>app/etc/env.php</code> with a production database host in it, committed years ago and forgotten.</p>
+
+        <p>Magento's <code>#env()</code> syntax makes this tractable: the file lives in the image with placeholders, and real values arrive as environment variables.</p>
+
+        <pre><code class="language-php">&lt;?php
+// app/etc/env.php — committed, contains no secrets, identical in every
+// environment. Values resolve from the pod's environment at runtime.
+return [
+    'db' =&gt; ['connection' =&gt; ['default' =&gt; [
+        'host'     =&gt; '#env(DB_HOST)',
+        'dbname'   =&gt; '#env(DB_NAME)',
+        'username' =&gt; '#env(DB_USER)',
+        'password' =&gt; '#env(DB_PASSWORD)',
+    ]]],
+    'session' =&gt; [
+        'save'  =&gt; 'redis',
+        'redis' =&gt; [
+            'host'                => '#env(REDIS_SESSION_HOST)',
+            'database'            =&gt; '0',
+            'disable_locking'     =&gt; '1',
+            'max_concurrency'     =&gt; '20',
+        ],
+    ],
+    'cache' =&gt; ['frontend' =&gt; ['default' =&gt; [
+        'backend'         =&gt; 'Cm_Cache_Backend_Redis',
+        'backend_options' =&gt; [
+            'server'   =&gt; '#env(REDIS_CACHE_HOST)',
+            'database' =&gt; '1',
+        ],
+    ]]],
+    // Non-secret, environment-shaped values are fine as plain config.
+    'MAGE_MODE' =&gt; 'production',
+];</code></pre>
+
+        <p>That <code>disable_locking</code> setting is worth a sentence, because it is the single most impactful line in the file for a multi-replica deployment. Magento's Redis session handler takes a lock per session by default, and under concurrency — a customer with the site open in two tabs, or an aggressive bot — requests queue behind each other until they time out. Symptom: intermittent 30-second responses on checkout that nobody can reproduce. Turning locking off is safe for the overwhelming majority of stores and I have never regretted it.</p>
+
+        <p>Secrets go into your platform's secret store, mounted as environment variables or files, and never into a ConfigMap. A Kubernetes Secret is base64, not encryption, so enable encryption at rest on etcd or use an external secrets operator backed by your cloud provider's vault. The gap between "secrets are in a Secret object" and "secrets are protected" is wider than most teams assume.</p>
+
+        <h2>8. Persistent State, Which Is the Genuinely Hard Part</h2>
+
+        <p>Everything above is mechanical. This is the part that requires a decision, and it is the part I got wrong first time.</p>
+
+        <p>Product images, category images, and customer uploads live in <code>pub/media</code>. Every replica must see the same files, and any replica may write to them — an admin uploading a product image lands on one pod and the image must be visible from the others immediately.</p>
+
+        <p>Three options, and I would only recommend one.</p>
+
+        <p><strong>ReadWriteMany volume.</strong> An NFS or EFS-backed shared filesystem mounted into every pod. It works, and it is what I did first. It is also slow in a way that is difficult to see coming: Magento's image resizing hits the filesystem hard, and the metadata operations that are nearly free on local disk cost a network round trip on NFS. Product page rendering on the resized-image path went from 40ms to 180ms, and the checkout page — which touches nothing in media — was unaffected, which made the problem take two days to find. There is also a failure mode where an NFS mount hangs and every pod becomes unresponsive simultaneously, defeating the point of having replicas.</p>
+
+        <p><strong>Object storage as the source of truth.</strong> Adobe added a remote storage module in 2.4.2 that puts <code>pub/media</code> on S3-compatible storage. This is the answer. Media is served from the object store via CDN, pods hold no shared state, and a pod can be destroyed at any moment without consequence. Migration is a one-off sync plus a config change, and the failure modes are the ones you already understand from any object storage integration.</p>
+
+        <p><strong>Sync on start.</strong> Copy media into the pod at startup. Do not. It breaks the moment media exceeds a few hundred megabytes, and writes from one pod are invisible to the others until a restart.</p>
+
+        <p>The general principle, which applies far beyond Magento: a containerised application should be able to lose any instance at any moment without losing data. If your answer to "what happens when this pod is evicted" involves the word "hopefully", the state is in the wrong place. This is the same discipline that makes <a href="/blog/cloud-migration-guide/">a cloud migration</a> survivable, and it is worth doing before the migration rather than during it.</p>
+
+        <h2>9. Health Checks Nobody Reads Carefully</h2>
+
+        <p>Kubernetes has three probes and they do different things. Configuring them identically, which is the default behaviour of every tutorial, produces outages.</p>
+
+        <p><strong>Startup probe</strong> gates the other two. A slow-starting application — and a Magento container warming its opcache is slow-starting — needs a generous startup probe so that the liveness probe does not kill it before it is ready. Without one, you set a long liveness <code>initialDelaySeconds</code> and lose fast failure detection for the rest of the pod's life.</p>
+
+        <p><strong>Readiness probe</strong> controls whether traffic is sent. It should check dependencies: can I reach the database, is Redis responding. If the database is down, the pod should go unready and stop receiving requests.</p>
+
+        <p><strong>Liveness probe</strong> controls whether the pod is killed. It must check only whether the process itself is wedged. If your liveness probe checks the database, then a database blip restarts every pod in the cluster simultaneously, all of them reconnect at once, and you have converted a thirty-second database hiccup into a fifteen-minute outage. I have watched this happen. It is the single most common self-inflicted Kubernetes outage I encounter.</p>
+
+        <pre><code class="language-yaml">containers:
+  - name: web
+    image: registry.example.com/shop:2024.11.14-a3f91c2
+    ports:
+      - containerPort: 9000
+
+    # Gives the app up to 150s (30 x 5s) to come up, then hands over to the
+    # liveness probe. Failing this many times means the pod is restarted.
+    startupProbe:
+      httpGet: { path: /health/live, port: 8080 }
+      periodSeconds: 5
+      failureThreshold: 30
+
+    # Cheap and local. Does NOT touch the database — see above.
+    livenessProbe:
+      httpGet: { path: /health/live, port: 8080 }
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+    # Checks dependencies. Failing this removes the pod from the Service
+    # endpoints without restarting it, which is exactly what you want when
+    # a downstream is briefly unavailable.
+    readinessProbe:
+      httpGet: { path: /health/ready, port: 8080 }
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 2
+
+    lifecycle:
+      preStop:
+        # Endpoint removal propagates asynchronously. Without this pause the
+        # pod stops accepting connections while the load balancer is still
+        # sending them, and you drop requests on every deploy.
+        exec: { command: ["sh", "-c", "sleep 8"] }
+
+    # Must exceed preStop sleep plus the longest in-flight request.
+    terminationGracePeriodSeconds: 45</code></pre>
+
+        <p>The <code>preStop</code> sleep looks like a hack and is in fact the correct fix for a real race in Kubernetes' design. When a pod is terminated, two things happen concurrently: the kubelet sends <code>SIGTERM</code>, and the endpoints controller removes the pod from the Service. There is no ordering guarantee, and the second can take several seconds to reach every kube-proxy. Sleeping before shutting down gives the removal time to propagate.</p>
+
+        <p>The health endpoints themselves should be honest:</p>
+
+        <pre><code class="language-php">&lt;?php
+// /health/ready — checks the things whose absence makes this pod useless.
+$checks = [];
+try {
+    $pdo = new PDO(getenv('DB_DSN'), getenv('DB_USER'), getenv('DB_PASSWORD'), [
+        PDO::ATTR_TIMEOUT =&gt; 2,
+    ]);
+    $pdo-&gt;query('SELECT 1');
+    $checks['db'] = 'ok';
+} catch (Throwable $e) {
+    $checks['db'] = 'fail';
+}
+
+$redis = new Redis();
+$checks['redis'] = @$redis-&gt;connect(getenv('REDIS_CACHE_HOST'), 6379, 2.0)
+    ? 'ok' : 'fail';
+
+$ok = !in_array('fail', $checks, true);
+http_response_code($ok ? 200 : 503);
+header('Content-Type: application/json');
+echo json_encode(['ready' =&gt; $ok, 'checks' =&gt; $checks]);</code></pre>
+
+        <h2>10. Resources, Limits, and the Throttling Trap</h2>
+
+        <p>Requests and limits are the two numbers that determine whether your cluster is stable, and CPU limits specifically are where teams hurt themselves.</p>
+
+        <p>A CPU request is a scheduling guarantee: the scheduler will only place the pod where that much CPU is available. A CPU limit is enforced by the kernel's CFS quota over a 100-millisecond period. Hit the quota and the process is stopped until the next period begins.</p>
+
+        <p>That stopping is the problem. A PHP request that needs 300ms of CPU, in a container limited to 500 millicores, gets 50ms of CPU per 100ms period — so it takes 600ms of wall time, and 300ms of that is the process sitting frozen. The container's average CPU usage looks like a comfortable 50%, and the p99 latency is terrible. It is genuinely difficult to diagnose from utilisation graphs, because the graph looks fine.</p>
+
+        <p>My position, which is not universal: set CPU requests carefully and either omit CPU limits or set them high enough to only catch runaway processes. Set memory requests and limits equal, because memory is incompressible — exceeding the limit means the OOM killer, not throttling, and a pod that gets OOM-killed under load is worse than one that was never scheduled.</p>
+
+        <pre><code class="language-yaml">resources:
+  requests:
+    cpu: "500m"        # scheduling guarantee, based on observed p50
+    memory: "768Mi"
+  limits:
+    # No CPU limit: this pod may burst into idle capacity on the node.
+    # Revisit if a noisy neighbour ever becomes a real problem rather than
+    # a theoretical one.
+    memory: "768Mi"    # equal to the request: predictable, no overcommit</code></pre>
+
+        <p>Check whether you are already being throttled before changing anything. The metric is <code>container_cpu_cfs_throttled_periods_total</code> divided by <code>container_cpu_cfs_periods_total</code>. Anything sustained above a few percent is costing you latency.</p>
+
+        <pre><code class="language-promql"># Proportion of scheduling periods in which the container was throttled.
+# Above 0.05 on a latency-sensitive workload, raise or remove the CPU limit.
+sum by (pod) (
+  rate(container_cpu_cfs_throttled_periods_total{namespace="shop"}[5m])
+)
+/
+sum by (pod) (
+  rate(container_cpu_cfs_periods_total{namespace="shop"}[5m])
+)</code></pre>
+
+        <p>One PHP-specific note: PHP-FPM's process manager needs to agree with the container's resources. A pool configured with <code>pm.max_children = 120</code> inside a container with 768MB of memory will be OOM-killed the moment traffic arrives, because 120 PHP processes at 60MB each is 7.2GB. Size the pool from the memory limit divided by observed per-process usage, and set it explicitly rather than leaving a default from a shared-hosting era config.</p>
+
+        <h2>11. Autoscaling Traffic That Arrives All at Once</h2>
+
+        <p>Retail traffic is spiky in a way that suits autoscaling and punishes naive autoscaling configuration. An email campaign goes out at 10:00 and traffic triples in ninety seconds.</p>
+
+        <p>The default HPA behaviour is too slow for that, and the reason is a chain of delays nobody accounts for: metrics are scraped every 15 to 30 seconds, the HPA evaluates every 15 seconds, the new pod is scheduled, the image is pulled if the node is cold, the container starts, the startup probe passes, opcache warms. Two and a half minutes is a realistic total, and your spike was ninety seconds.</p>
+
+        <pre><code class="language-yaml">apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: magento-app-hpa
+  name: shop-web
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: magento-app
+    name: shop-web
   minReplicas: 4
-  maxReplicas: 32
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 75</code></pre>
+  maxReplicas: 30
 
-        <hr />
+  metrics:
+    # CPU is a lagging indicator for PHP: by the time it is at 70% the queue
+    # is already forming. Keep it as a floor but do not rely on it alone.
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 60 }
+
+    # Requests per second per pod, from the ingress controller. This reacts
+    # to the cause rather than the symptom and is worth the setup cost of
+    # a custom metrics adapter.
+    - type: Pods
+      pods:
+        metric: { name: http_requests_per_second }
+        target: { type: AverageValue, averageValue: "45" }
+
+  behavior:
+    scaleUp:
+      # React immediately. There is no downside to being early on the way up
+      # beyond a few minutes of extra node cost.
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100          # double the replica count...
+          periodSeconds: 30   # ...at most every 30 seconds
+        - type: Pods
+          value: 6
+          periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      # Slow on the way down. Scaling down into a second wave of traffic is
+      # how a campaign spike turns into an outage.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 120</code></pre>
+
+        <p>Asymmetry is the point. Aggressive up, patient down. The cost of ten unnecessary pods for ten minutes is pennies; the cost of a checkout outage during a campaign is not.</p>
+
+        <p>Two things that matter more than tuning the HPA. First, keep the warm node pool large enough that scaling up does not require scaling nodes, because node provisioning adds minutes. Overprovisioning with low-priority placeholder pods that get evicted when real workload needs the space is a well-worn trick and it works. Second, scale on a leading indicator if you can. For a scheduled campaign, the best autoscaler is a cron job that raises <code>minReplicas</code> at 09:50, and I am not being glib — predictive scaling for known events beats reactive scaling every time.</p>
+
+        <h2>12. Rolling Out a Monolith Without Dropping Requests</h2>
+
+        <p>Rolling updates are straightforward until database migrations enter the picture, at which point the monolith's single shared schema becomes the constraint.</p>
+
+        <p>During a rolling deploy, old and new pods run simultaneously against one database. If your migration drops a column the old code still selects, every request served by an old pod fails for the duration of the rollout. This is not a Kubernetes problem — it exists with any zero-downtime deploy — but containers make rollouts so easy that people stop thinking about it.</p>
+
+        <p>The discipline is expand-and-contract, over three releases. Release one adds the new column and writes to both. Release two reads from the new column. Release three, days later, drops the old one. It is tedious and it is the only approach that actually works. I have watched a team try to shortcut it with a maintenance window and discover that their maintenance page was served by the same pods they were replacing.</p>
+
+        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-web
+spec:
+  replicas: 6
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2          # two extra pods during rollout
+      maxUnavailable: 0    # never go below the declared replica count
+  # A pod that starts and immediately serves errors should not be counted as
+  # available. 30s means a broken release is caught before it fully rolls.
+  minReadySeconds: 30
+  progressDeadlineSeconds: 600
+  template:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: shop-web }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: shop-web
+spec:
+  minAvailable: 4
+  selector:
+    matchLabels: { app: shop-web }</code></pre>
+
+        <p>The PodDisruptionBudget is the piece most teams omit and then need. It stops a node drain — a cluster upgrade, a spot instance reclaim, a routine maintenance operation performed by the platform team who did not tell you — from taking down more replicas at once than you can afford. Without one, a cluster autoscaler consolidating nodes at 03:00 can evict every pod of a deployment simultaneously and it will be entirely within its rights.</p>
+
+        <p>Migrations themselves belong in a Job that runs to completion before the rollout starts, not in an init container on every pod. Six pods each running <code>setup:upgrade</code> concurrently against one database is a race with a data-loss ending. If you are wiring this into a pipeline, the ordering is the interesting part of the exercise, and it fits naturally into <a href="/blog/cicd-pipeline-ecommerce/">an ecommerce CI/CD pipeline</a> as an explicit gated stage.</p>
+
+        <h2>13. Cron, Queues, and Everything That Is Not a Web Request</h2>
+
+        <p>A commerce monolith has a substantial amount of work that is not HTTP: indexers, order export, email sending, feed generation. The instinct is to run cron inside the web container. Resist it.</p>
+
+        <p>Cron in the web container means every replica runs every job. Six pods, six copies of the nightly price import, all writing to the same tables. Even with locking, you have converted a scheduled task into a contention problem, and the jobs compete for CPU with customer requests.</p>
+
+        <p>Run a separate Deployment for consumers and Kubernetes CronJobs for scheduled work, from the same image with a different command. Same code, different resources, independent scaling.</p>
+
+        <pre><code class="language-yaml">apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: shop-cron-default
+spec:
+  schedule: "*/5 * * * *"
+  # If the previous run is still going, skip this one rather than stacking
+  # up. Magento's cron is not safe to run concurrently with itself.
+  concurrencyPolicy: Forbid
+  # A cluster hiccup should not trigger a burst of catch-up runs an hour later.
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1500   # kill a wedged run before the next hour
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: cron
+              image: registry.example.com/shop:2024.11.14-a3f91c2
+              command: ["php", "bin/magento", "cron:run", "--group=default"]
+              resources:
+                requests: { cpu: "250m", memory: "512Mi" }
+                limits:   { memory: "1Gi" }</code></pre>
+
+        <p>Queue consumers are a Deployment rather than a CronJob, because they are long-running. Give them their own HPA driven by queue depth — the number of messages waiting is a far better scaling signal than CPU, and it is the metric that actually correlates with whether customers are getting their order confirmation emails.</p>
+
+        <p>One operational detail that cost me an afternoon: a consumer pod being terminated during a deploy must finish the message it is handling. That means catching <code>SIGTERM</code>, stopping the fetch of new messages, and exiting cleanly, with a <code>terminationGracePeriodSeconds</code> longer than the slowest message. Magento's consumers support <code>--max-messages</code> for exactly this reason; a consumer that exits after a bounded number of messages and is restarted by the Deployment controller is crude but very reliable.</p>
+
+        <h2>14. Seeing Inside the Thing</h2>
+
+        <p>Containerisation removes the debugging technique everyone actually uses, which is SSH-ing into the box and tailing a log file. Replace it deliberately or the first incident will be miserable.</p>
+
+        <p>Logs go to stdout and stderr as structured JSON, and are collected by the platform. A PHP application writing to <code>var/log/system.log</code> inside a container is writing to a filesystem that will be deleted, and worse, is writing to a filesystem that will fill up and take the node with it.</p>
+
+        <pre><code class="language-php">&lt;?php
+// Structured logging to stdout. The request id is the thing that makes logs
+// usable at all once six pods are interleaving their output.
+use Monolog\Logger;
+use Monolog\Handler\StreamHandler;
+use Monolog\Formatter\JsonFormatter;
+
+$handler = new StreamHandler('php://stdout', Logger::INFO);
+$handler-&gt;setFormatter(new JsonFormatter());
+
+$log = new Logger('app');
+$log-&gt;pushHandler($handler);
+$log-&gt;pushProcessor(function (array $record) {
+    $record['extra']['pod']        = getenv('POD_NAME');
+    $record['extra']['release']    = getenv('RELEASE_SHA');
+    $record['extra']['request_id'] = $_SERVER['HTTP_X_REQUEST_ID'] ?? null;
+    return $record;
+});</code></pre>
+
+        <p>The pod name and release SHA come from the downward API, which is a small piece of manifest that pays for itself the first time you need to know whether an error came from the new release or the old one during a rollout.</p>
+
+        <pre><code class="language-yaml">env:
+  - name: POD_NAME
+    valueFrom:
+      fieldRef: { fieldPath: metadata.name }
+  - name: NODE_NAME
+    valueFrom:
+      fieldRef: { fieldPath: spec.nodeName }
+  - name: RELEASE_SHA
+    value: "a3f91c2"</code></pre>
+
+        <p>The four alerts I would set up before the first production traffic: pod restart rate above zero over fifteen minutes, CFS throttling above 5%, readiness probe failures, and 5xx rate at the ingress. That is a short list on purpose. Alerting on everything means alerting on nothing.</p>
+
+        <h2>15. The Edge: Ingress, TLS, and Where Caching Lives</h2>
+
+        <p>An ingress controller terminates TLS and routes to Services. The thing worth deciding early is where full-page caching lives, because a containerised Magento with Varnish has two sensible topologies and they behave differently.</p>
+
+        <p>Varnish as a separate Deployment in front of the application is the arrangement I use. It scales independently, it can be restarted without touching the application, and cache invalidation targets a Service rather than a list of hosts. The cost is that each Varnish replica has its own cache, so a four-replica Varnish deployment has a lower combined hit rate than one large instance, and a cache purge must reach all of them.</p>
+
+        <p>Varnish as a sidecar in the application pod gives perfect locality and terrible cache efficiency, since every application pod has a cold cache when it starts. I have seen this configuration recommended and I would not use it above two replicas.</p>
+
+        <p>The alternative worth considering is skipping Varnish and doing full-page caching at the CDN, which is where I would start on a new build. Fastly and Cloudflare both support the surrogate-key invalidation model Magento's cache tags map onto, and it removes an entire tier from your cluster. The catch is that CDN-level page caching and personalised content need careful separation, and if your storefront renders customer-specific content server-side you will be doing more work than you saved.</p>
+
+        <pre><code class="language-yaml">apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Checkout POSTs with large payloads; the default 1m body limit rejects
+    # some file uploads in the admin with a confusing 413.
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+    # Long enough for the slowest legitimate admin operation, short enough
+    # that a wedged backend does not hold connections indefinitely.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [shop.example.com]
+      secretName: shop-tls
+  rules:
+    - host: shop.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: varnish
+                port: { number: 80 }</code></pre>
+
+        <h2>16. What It Costs, Honestly</h2>
+
+        <p>Kubernetes is not free and the bill is mostly not the control plane.</p>
+
+        <p>The direct costs are modest: a managed control plane is around £60 a month, and nodes cost roughly what the equivalent VMs cost. The real cost is expertise. You now need someone who understands scheduling, networking, and storage in Kubernetes, and either you hire that person, train them, or pay a managed provider. A team of four running one monolith on three VMs does not obviously benefit from this, and I have talked two clients out of it.</p>
+
+        <p>The case is strong when you have several applications sharing infrastructure, traffic that varies by more than about three times between peak and trough, a team large enough that environment drift is a real problem, or a compliance requirement that benefits from immutable, scanned artefacts.</p>
+
+        <p>The case is weak when you have one application, flat traffic, and two developers. Container images alone — built in CI, deployed to a small number of VMs with Compose or a simple orchestrator — capture most of the environment-parity benefit at a fraction of the operational cost. That is a legitimate destination, not a stepping stone you are obliged to leave.</p>
+
+        <h2>17. Worked Example: Seven Months on a Magento Monolith</h2>
+
+        <p>The project from the opening, with numbers.</p>
+
+        <p><strong>Before.</strong> Four bare VMs behind a hardware load balancer, rsync deploys, file sessions on a shared NFS mount, Varnish on two of the four boxes. Deploy time 38–45 minutes. Roughly one failed deploy in six. Peak traffic 240 requests per second; the infrastructure was sized for peak and idled at about 15% CPU the rest of the year.</p>
+
+        <p><strong>The work.</strong> Redis for sessions and cache first, on the existing VMs, two weeks including a week of observation. Then the Dockerfile and CI pipeline, three weeks. Then media to S3 via the remote storage module, one week plus a weekend for the initial 180GB sync. Then the cluster and manifests, four weeks. Then a month of running both in parallel with a percentage of traffic shifted gradually.</p>
+
+        <p><strong>After.</strong> Deploy time 6–8 minutes end to end, including migrations and a canary stage. Rollback 90 seconds. Failed deploys effectively zero over the following year, because the failure mode we had was structurally impossible. Infrastructure cost fell 34%, not because Kubernetes is cheaper but because autoscaling meant they stopped paying for peak capacity in February.</p>
+
+        <p><strong>What went wrong.</strong></p>
+
+        <p>I started with NFS for <code>pub/media</code> because it was the smallest change, and it cost us two weeks. Product pages that triggered an image resize went from 40ms to 180ms, and because checkout was unaffected the whole team spent days looking at the wrong subsystem. Moving to object storage was always the right answer and I chose the expedient one. If I did it again, media goes to S3 before the first container is built.</p>
+
+        <p>We set CPU limits at 1000m on the web pods because it seemed prudent. Throttling ran at 18% under load and p95 response time was 40% worse than on the old VMs, which nearly killed the project's credibility — the sponsors' reasonable question was why the shiny new platform was slower. Removing the CPU limits fixed it in one deploy. The metric existed the whole time and nobody was looking at it.</p>
+
+        <p>The liveness probe on the first version hit an endpoint that queried the database. A Redis failover caused a five-second blip, every pod failed its liveness probe, and Kubernetes restarted all six simultaneously. Total outage from a five-second dependency blip: eleven minutes. That is entirely a configuration error and it is in every tutorial I have read.</p>
+
+        <p>And we underestimated the training. Two of the six developers were comfortable with Kubernetes at go-live and four were not, which meant every production issue routed through two people for the first quarter. I would now budget explicit time for the rest of the team to break things in a staging cluster, and treat that as part of the project rather than something that happens afterwards.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Do we have to break the monolith into microservices first?"</strong> No, and doing so first is usually a mistake. Containerise the monolith, get deploys and scaling working, and then — if there is still a reason — extract the one or two components that genuinely need different scaling characteristics. Search and product feed generation are the usual candidates. Extracting services from a monolith you cannot yet deploy reliably means debugging two hard problems at once.</p>
+
+        <p><strong>"Can we run the database in Kubernetes too?"</strong> You can. I would not, on a first migration. Managed MySQL or Postgres gives you backups, failover, and point-in-time recovery that someone else is accountable for, and the operational difference between a stateless deployment and a stateful one is larger than the manifests suggest. Once your team has run stateless workloads in production for a year, revisit it if there is a reason.</p>
+
+        <p><strong>"What about developer machines?"</strong> This is where containerisation pays off earliest and it is worth doing before any production work. A Compose file that brings up the application, MySQL, Redis, and Varnish means a new developer is productive in an hour rather than a day. Use the same base image as production, with a development target in the same Dockerfile that adds Xdebug and enables <code>opcache.validate_timestamps</code>. The gap between the developer image and the production image should be one <code>FROM</code> stage.</p>
+
+        <p><strong>"How do we handle scheduled sales where we know traffic will spike?"</strong> Raise <code>minReplicas</code> ahead of time with a scheduled job, and warm the caches before the traffic arrives. Reactive autoscaling always lags a spike, and for an event you know about there is no reason to be reactive. For the retailer I worked with, a job at T-minus-20-minutes that scaled to the expected peak and ran a crawler over the top 500 category URLs removed the entire first-five-minutes problem.</p>
+
+        <p><strong>"Is Alpine really safe for PHP in production?"</strong> Yes, with the caveat that musl's DNS resolver historically behaved differently from glibc's in ways that could surprise you, particularly around search domains and parallel A/AAAA queries. Modern musl versions are much better and I have not hit it in years. If you are running something with unusual native dependencies, test properly rather than assuming, and remember that the Debian image working is always an option.</p>
+
+        <p><strong>"Should the image be rebuilt per environment?"</strong> Never. One image, promoted through environments, with configuration injected. The moment you rebuild for staging you no longer know that the thing you tested is the thing you shipped, which was the entire reason for containerising. If a value must be baked in at build time — and front-end frameworks do this with public environment variables — treat that as a design flaw to work around, not a licence to build twice.</p>
+
+        <p><strong>"How do we handle image scanning and CVEs?"</strong> Scan in CI and fail on high-severity findings in your own dependencies. Be pragmatic about base image CVEs, most of which are in packages you do not invoke. Rebuild weekly on a schedule so base image patches land without a code change; an image built once and run for eight months accumulates real vulnerabilities regardless of how clean it was on day one.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>In this order, and the ordering is the advice.</p>
+
+        <p><strong>One.</strong> Move sessions and cache off the local filesystem to Redis, on your existing infrastructure, and run it for a week. This is independently valuable, it is reversible, and it removes the state that makes containerisation hardest.</p>
+
+        <p><strong>Two.</strong> Move user-uploaded media to object storage. Also independently valuable, also reversible. Do it before you build a single container, so you are never tempted by a shared filesystem.</p>
+
+        <p><strong>Three.</strong> Write the Dockerfile and get it building in CI, producing a tagged image per commit. Do not deploy it anywhere. Use it locally, get the whole team developing against it, and let it be exercised for a fortnight before it goes near production.</p>
+
+        <p><strong>Four.</strong> Deploy that image to a single non-production environment with Compose, not Kubernetes. Find the configuration problems, the signal handling problems, and the logging problems in the simplest possible orchestrator. Everything you fix here is a problem you do not have to debug through kubectl.</p>
+
+        <p><strong>Five.</strong> Only now, the cluster. Start with the web deployment, a Service, and an Ingress. Add cron and consumers once web is stable. Add autoscaling last, because a badly configured HPA on an unstable deployment produces confusing failures.</p>
+
+        <p><strong>Six.</strong> Before production traffic, deliberately break things in staging. Delete a pod mid-request. Drain a node. Take Redis down and watch what the liveness probes do. Fill a disk. Every one of those will teach you something about your configuration, and the staging cluster is a much better place to learn it than the Friday of a campaign launch.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -237,12 +867,11 @@ spec:
               <p>Migrating to AWS ECS and EKS clusters.</p>
             </li>
             <li>
-              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability & Cost Optimization</a></strong>
+              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
               <p>AWS Lambda container execution.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -276,6 +905,6 @@ spec:
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

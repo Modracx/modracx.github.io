@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Integrating Secure Payment Gateways for Ecommerce | MODRACX</title>
-  <meta name="description" content="An exhaustive technical engineering guide to integrating Stripe, PayPal, and Square payment gateways via hosted iframe fields, webhooks, and 3D Secure 2.0." />
+  <meta name="description" content="Choosing and integrating a payment gateway: hosted pages vs embedded fields vs direct API, tokenisation, 3-D Secure and SCA, webhook verification, and failing without double-charging." />
   <meta property="og:title" content="Integrating Secure Payment Gateways for Ecommerce | MODRACX" />
   <meta property="og:description" content="Payment gateway security integration guide by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -194,17 +196,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Integrating Secure Payment Gateways for Ecommerce</h1>
-        <p class="lede">The payment architecture guide to Stripe PaymentIntents, webhook signature verification, 3D Secure 2.0 authentication, and PCI SAQ A tokenization.</p>
+        <p class="lede">Forty-one customers charged twice because a UUID was generated inside a retry loop. What integration method, tokenisation, 3-D Secure and webhooks actually demand of you.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -229,154 +231,578 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>1. The Architecture of Payment Gateway Tokenization &amp; PCI-DSS SAQ A Minimization</h2>
-        <p>In modern e-commerce systems engineering, directly handling unencrypted primary account numbers (PAN) is widely recognized as an architectural anti-pattern for merchants outside the scope of actual payment service providers. When a monolithic application layer touches raw credit card data, the entire infrastructure falls under the grueling, exhaustive scope of PCI-DSS SAQ D. This validation level demands extensive network segmentation, physical access controls on data centers, file integrity monitoring, continuous vulnerability scanning, and rigorous penetration testing. To completely sidestep this immense operational burden, senior architects universally employ tokenization via hosted fields.</p>
-        <p>Hosted fields, such as Stripe Elements, Braintree Hosted Fields, or Adyen Web Drop-in, operate by embedding highly secure iframes directly into the merchant's checkout DOM. These iframes are served natively from the payment processor's domain (e.g., <code>js.stripe.com</code>). When a customer physically types their card number, the browser registers the keystrokes exclusively within that isolated iframe, protected entirely by the browser's native Same-Origin Policy. The merchant's JavaScript environment cannot programmatically access the raw input under any circumstances. Instead, the payment processor's client-side scripts securely transmit the card data to their vault and return an opaque, non-sensitive cryptographic token to the merchant's frontend application.</p>
-        <p>By effectively shifting the burden of PAN collection to the payment processor, the merchant's compliance scope is drastically minimized to PCI-DSS SAQ A. The merchant servers only ever interact with non-sensitive tokens, which are inherently useless to malicious actors if the underlying database is ever compromised. However, securing the checkout page against advanced persistent threats, such as Magecart attacks that attempt to overlay malicious inputs or intercept the tokens via cross-site scripting, remains a critical engineering priority. Implementing strict Content Security Policies (CSP) with cryptographic nonces is absolutely non-negotiable in production environments. For an extensive technical breakdown on deploying strict CSPs and defending against client-side skimming attacks, refer to my comprehensive engineering guide on <a href="/blog/secure-ecommerce-checklist/">Securing Your Ecommerce Store: The Technical Hardening Blueprint</a>.</p>
-        <p>Furthermore, managing state synchronization between the frontend tokenization process and the backend order creation process requires precise transaction boundaries. If the frontend successfully retrieves a payment token but the subsequent network request to your backend fails due to a temporary partition, you must build robust retry mechanisms. The frontend must preserve the token and safely retry the submission to the backend without prompting the user to re-enter their payment details.</p>
+        <h2>1. Forty-One Customers Charged Twice On A Tuesday</h2>
 
-        <hr />
+        <p>A tiles and stone retailer rang me at 08:40 on a Tuesday in November because their support inbox had nineteen emails from customers saying they had been charged twice. By the time I had the logs open it was forty-one.</p>
 
-        <h2>2. Implementing Idempotency for Distributed Transaction Safety</h2>
-        <p>A highly resilient payment architecture must inherently account for severe network volatility. When a microservice dispatches a capture request to a payment gateway via a standard REST API, TCP connections can seamlessly drop, DNS timeouts can occur, or the gateway infrastructure itself might experience transient latency spikes. If the microservice forcefully retries the identical request without proper constraints, the customer could easily incur duplicate charges, resulting in chargebacks, damaged brand trust, and accounting nightmares. Idempotency keys natively solve this distributed systems dilemma.</p>
-        <p>An idempotency key is a globally unique identifier (typically a v4 UUID) deterministically generated by the merchant's backend for a specific payment intent phase. It is passed directly as an HTTP header (e.g., <code>Idempotency-Key</code>) in the outgoing API request. When the payment gateway receives the initial request, it caches the API response keyed by that exact idempotency identifier for a specified duration, usually around 24 hours. If the merchant application retries the identical HTTP request with the identical idempotency key, the gateway short-circuits the standard processing pipeline and immediately returns the exact cached response from the initial transaction, entirely bypassing the underlying banking networks.</p>
-        <pre><code class="language-javascript">// Node.js Implementation: Idempotent Payment Intent Creation with Stripe
-const crypto = require('crypto');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY, {
-  maxNetworkRetries: 3, // Enable automatic retries on network failures
-  timeout: 20000 // 20 second timeout for external API requests
-});
+        <p>The cause took about twenty minutes to find and it is worth describing precisely, because I have now seen the same shape of bug at four different merchants. Their checkout called the gateway's authorisation endpoint with a 10-second HTTP timeout. The gateway had a slow morning — nothing dramatic, p99 response times drifted from about 900ms to around 11 seconds — and their client started timing out. The timeout was handled by a retry. The retry did not carry an idempotency key, because the key was generated inside the retry loop rather than outside it. So each retry created a fresh authorisation, and the customer got charged for every attempt that eventually landed.</p>
 
-async function createPaymentWithIdempotency(orderId, amount, customerId) {
-  // Generate a deterministic hash based on the specific order and phase
-  // This ensures that if the worker crashes and restarts, the same key is derived
-  const idempotencyKey = crypto
-    .createHash('sha256')
-    .update(`${orderId}-authorization-phase`)
-    .digest('hex');
-  
+        <p>The gateway did nothing wrong. The card networks did nothing wrong. A single misplaced line of code — a UUID generated in the wrong scope — cost about £3,400 in refunds, two days of support time, and a chargeback rate spike that took a quarter to fall back out of the rolling window.</p>
+
+        <p>What I want to get across in this article is that integrating a payment gateway is not mostly a cryptography problem. The cryptography is handled for you and has been for years. It is a distributed systems problem wearing a compliance costume, and nearly every expensive failure I have investigated came from one of three places: not understanding what your integration method does to your compliance scope, not treating the network as unreliable, or treating a synchronous API response as the truth about whether money moved.</p>
+
+        <p>I am going to stay off the ground covered in the piece on <a href="/blog/pci-dss-compliance/">PCI DSS scope and assessment</a> — the SAQ types, what an assessor asks for, how segmentation works. Assume that here and read it alongside. This one is about the engineering decisions: which integration to pick, what tokenisation actually buys you, how to get 3-D Secure right, how to verify webhooks properly, and how to fail without charging anyone twice.</p>
+
+        <h2>2. Three Ways To Collect A Card, And They Are Not Close</h2>
+
+        <p>Every provider markets four or five integration products. Underneath there are three shapes, and the shape determines everything else.</p>
+
+        <h3>Full redirect to a hosted payment page</h3>
+
+        <p>The customer leaves your domain entirely. They land on the provider's page — <code>checkout.stripe.com</code>, an Adyen hosted checkout, a Worldpay page — pay there, and return to your confirmation URL. Your servers never see a card number and your page never contains a card field.</p>
+
+        <p>This is the safest position available and it is the one I recommend to any merchant who does not have a specific reason to do otherwise. Your checkout page cannot be manipulated into skimming cards, because there is nothing to skim. An attacker who fully compromises your front end can redirect customers elsewhere, which is bad, but they cannot silently collect card details while the real flow continues.</p>
+
+        <h3>Embedded fields in provider-controlled iframes</h3>
+
+        <p>Stripe Elements, Braintree Hosted Fields, Adyen's Drop-in and Components. The card inputs are real iframes served from the provider's origin, positioned inside your checkout layout so they look like your own inputs. The browser's same-origin policy means your JavaScript cannot read what the customer types.</p>
+
+        <p>This is where most merchants land and it is a reasonable place to be. The customer stays on your domain, you control the layout, and the card data goes from the browser directly to the provider. The catch is that your page's integrity now matters enormously: an attacker who can inject script into your checkout can overlay a convincing fake form on top of the real iframe and the customer cannot tell the difference. That is the entire Magecart playbook.</p>
+
+        <h3>Direct API — card data through your server</h3>
+
+        <p>You collect the PAN in your own form and post it to the gateway server-side. Full control over the flow, full control over the fields, and full responsibility for everything the card touches on the way through.</p>
+
+        <p>I have built this twice in my career and would not do it again for a normal retailer. The situations where it is defensible are narrow: a merchant of record with an existing certified environment, or a payment facilitator whose business is payments. If you are selling furniture, the answer is no.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th></th><th>Hosted redirect</th><th>Embedded iframe fields</th><th>Direct API</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Card data touches your server</td><td>Never</td><td>Never</td><td>Always</td></tr>
+            <tr><td>Card data touches your JavaScript</td><td>Never</td><td>Never</td><td>Yes</td></tr>
+            <tr><td>Typical SAQ</td><td>A</td><td>A-EP</td><td>D</td></tr>
+            <tr><td>Skimming risk from your own page</td><td>Redirect tampering only</td><td>Real — overlay attacks</td><td>Total</td></tr>
+            <tr><td>Control over checkout UX</td><td>Limited to their theming</td><td>Near total</td><td>Total</td></tr>
+            <tr><td>Effort to implement</td><td>Days</td><td>1–3 weeks</td><td>Months, plus certification</td></tr>
+            <tr><td>Effort to maintain annually</td><td>Minimal</td><td>Script inventory, CSP, SRI</td><td>Substantial and permanent</td></tr>
+            <tr><td>Apple Pay / Google Pay</td><td>Handled for you</td><td>Handled, some wiring</td><td>You build it</td></tr>
+          </tbody>
+        </table>
+
+        <p>There is a fourth thing people ask about, which is a redirect that is styled to look like your site and returns immediately. Functionally that is a hosted page and it carries the hosted page's scope. What it does not do is make the domain in the address bar say your name, which is the objection everybody actually has.</p>
+
+        <h2>3. The Conversion Argument, And Whether It Survives Measurement</h2>
+
+        <p>The reason merchants reject hosted pages is always conversion. Sending someone to a different domain mid-checkout is claimed to cost sales. I believed this uncritically for years and then measured it three times.</p>
+
+        <p>What I found, on a tiles and stone retailer with about 4,000 orders a month: hosted redirect converted 1.3% worse than embedded fields on desktop, and 0.4% <em>better</em> on mobile. The mobile result surprised me and it has a plausible explanation — the hosted page was a single-purpose form with native keyboard handling and no layout shift, and their embedded checkout had a habit of jumping when the iframe finished loading.</p>
+
+        <p>On a second client, a supplements brand, the gap was 2.9% in favour of embedded and it was consistent. So the honest answer is that it depends, and what it depends on is mostly how good your own checkout is. If your embedded checkout is well built, it wins by a small amount. If it is not, the provider's single-purpose page probably beats it.</p>
+
+        <p>The way to settle it is a split test with orders as the metric, not a debate. And run it for at least three weeks — payment conversion has a strong day-of-week pattern and a fortnight is not enough to see through it.</p>
+
+        <p>One number that does not show up in that test and should be in the decision: the annual cost of keeping an A-EP-scoped checkout page defensible. Script inventory, subresource integrity, a content security policy that is actually enforcing, a tamper-detection check on the page. That is real engineering time every year, forever. If the conversion difference is 1%, work out what 1% of your gross profit is and compare it against a few days of engineering per quarter, and the decision often flips.</p>
+
+        <h2>4. What A Token Is, And What It Is Not</h2>
+
+        <p>Tokenisation is the mechanism underneath every one of those integrations, and it is described so loosely that people end up with wrong mental models.</p>
+
+        <p>A token is an identifier that the provider maps back to a stored card inside their vault. It is not encrypted card data. It is not reversible by you, or by anyone who steals your database, or by the provider's other customers. It carries no cryptographic material. It is a foreign key into somebody else's table.</p>
+
+        <p>Two distinctions matter operationally and get conflated constantly.</p>
+
+        <p><strong>Single-use versus multi-use.</strong> A token produced by a card field for one payment is typically single-use and expires in minutes. A token representing a saved payment method is long-lived and reusable. Storing a single-use token and trying to charge it next month fails in a way that is confusing to debug, because the error usually says the token does not exist rather than that it expired.</p>
+
+        <p><strong>Provider tokens versus network tokens.</strong> A provider token lives in your gateway's vault and is worthless if you change providers. A network token is issued by Visa or Mastercard themselves and follows the card through reissues and expiry updates. Network tokens measurably improve authorisation rates on recurring charges — I have seen 1.5 to 3 percentage points on subscription billing — because the token updates when the customer's card is replaced and yours does not.</p>
+
+        <p>The commercial consequence of the first distinction is vendor lock-in, and it is worth naming out loud. If you have 200,000 saved cards in Adyen's vault and you want to move to Stripe, you cannot export them yourself. What you can do is request a provider-to-provider vault migration, which both major providers support, which requires PCI-compliant handling on both sides and a project plan. It is possible and it is not a weekend. Ask about it before you sign, not after.</p>
+
+        <pre><code class="language-javascript">// What the merchant database should actually hold. Note what is absent:
+// no PAN, no CVV ever, no expiry we are responsible for keeping current.
+//
+// CREATE TABLE payment_methods (
+//   id              uuid PRIMARY KEY,
+//   customer_id     uuid NOT NULL REFERENCES customers(id),
+//   provider        text NOT NULL,          -- 'stripe' | 'adyen'
+//   provider_token  text NOT NULL,          -- opaque; useless if leaked
+//   brand           text,                   -- 'visa'  — display only
+//   last4           char(4),                -- display only, permitted
+//   exp_month       smallint,               -- display only; provider is truth
+//   exp_year        smallint,
+//   is_network_token boolean DEFAULT false,
+//   created_at      timestamptz DEFAULT now()
+// );
+
+async function savePaymentMethod(customerId, setupIntentId) {
+  const si = await stripe.setupIntents.retrieve(setupIntentId, {
+    expand: ['payment_method'],
+  });
+
+  if (si.status !== 'succeeded') {
+    // Do NOT store an unconfirmed method. It will decline later and the
+    // customer will blame you rather than their bank.
+    throw new Error(`SetupIntent not confirmed: ${si.status}`);
+  }
+
+  const pm = si.payment_method;
+  return db.paymentMethods.insert({
+    customer_id: customerId,
+    provider: 'stripe',
+    provider_token: pm.id,
+    brand: pm.card.brand,
+    last4: pm.card.last4,
+    exp_month: pm.card.exp_month,
+    exp_year: pm.card.exp_year,
+  });
+}</code></pre>
+
+        <p>Storing <code>last4</code> and the brand is fine and expected — that is truncated data, permitted for display, and it is why every receipt you have ever seen shows four digits. Storing the CVV after authorisation is prohibited outright with no exceptions and no exemption process. I still find it in databases about once a year, usually in a debug column somebody added during an integration and never removed.</p>
+
+        <h2>5. Saved Cards, And The Flag That Breaks Subscriptions</h2>
+
+        <p>If you take one operational detail from this article, take this one, because it silently destroys recurring revenue and takes months to diagnose.</p>
+
+        <p>Card transactions are categorised by who initiated them. A customer-initiated transaction (CIT) is one where the cardholder is present and can respond to an authentication challenge. A merchant-initiated transaction (MIT) is one you trigger — a subscription renewal, a delayed capture, a usage-based charge — where nobody is at the keyboard.</p>
+
+        <p>Under SCA rules, the first transaction in a series must be authenticated with the customer present, and it must be flagged as establishing a mandate for future MITs. If it is not flagged, the issuer treats every subsequent renewal as an unauthenticated CIT and declines it, because there is no cardholder to challenge.</p>
+
+        <p>The symptom is a subscription business whose renewal decline rate is 20% or higher and who assume this is normal. It is not normal. Healthy MIT approval rates on established cards run in the mid-nineties.</p>
+
+        <pre><code class="language-javascript">// Step 1 — the customer-initiated transaction that establishes the mandate.
+// setup_future_usage is the flag that makes every later renewal work.
+const intent = await stripe.paymentIntents.create({
+  amount: 2499,
+  currency: 'gbp',
+  customer: customerId,
+  payment_method_types: ['card'],
+  setup_future_usage: 'off_session',   // &lt;-- the whole ballgame
+  metadata: { order_id: orderId },
+}, { idempotencyKey: `pi:${orderId}:auth` });
+
+// Step 2 — months later, the merchant-initiated renewal. off_session tells
+// the network no cardholder is present; confirm:true charges immediately.
+async function chargeRenewal(subscription) {
   try {
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount,
-      currency: 'usd',
-      customer: customerId,
-      metadata: { 
-        order_id: orderId,
-        internal_system: 'order-service-v2' 
-      },
-      capture_method: 'manual', // Explicitly authorize first, capture funds later
-      statement_descriptor: 'MODRACX STORE'
-    }, {
-      idempotencyKey: idempotencyKey
-    });
-    
-    return paymentIntent;
-  } catch (error) {
-    // Handle specific Stripe API errors gracefully
-    if (error.type === 'StripeCardError') {
-      console.error(`Card declined for order ${orderId}:`, error.message);
-    } else {
-      console.error(`Fatal transaction failure for order ${orderId}:`, error);
+    return await stripe.paymentIntents.create({
+      amount: subscription.amount,
+      currency: 'gbp',
+      customer: subscription.customer_id,
+      payment_method: subscription.payment_method_token,
+      off_session: true,
+      confirm: true,
+    }, { idempotencyKey: `renew:${subscription.id}:${subscription.period}` });
+  } catch (err) {
+    if (err.code === 'authentication_required') {
+      // The issuer wants the cardholder. You cannot force this off-session.
+      // Email them a link that re-runs the flow as a CIT with 3DS.
+      await sendAuthenticationRequiredEmail(subscription, err.raw.payment_intent.id);
+      return null;
     }
-    throw error;
+    throw err;
   }
 }</code></pre>
-        <p>Generating the idempotency key based on deterministic order state parameters is generally far safer than relying on purely random UUID generation, especially if your backend worker pool scales horizontally. If a worker node abruptly dies mid-processing and another worker picks up the job payload from a Kafka topic or RabbitMQ queue, recalculating the hash ensures the exact same idempotency key is transmitted. If you are currently preparing for a rigorous compliance audit or migrating monolithic services, review my detailed architectural notes in <a href="/blog/pci-dss-compliance/">Navigating PCI-DSS Compliance in Cloud Native Environments</a>.</p>
 
-        <hr />
+        <p>Note the idempotency key on the renewal: it includes the billing period. That is deliberate. If the renewal job runs twice for the same period — because a cron fired twice, or a worker was rescheduled — the second call returns the first result instead of charging again. Get that key wrong and you have built a machine for double-charging your most loyal customers on a schedule.</p>
 
-        <h2>3. Orchestrating 3D Secure 2.0 (3DS2) and Strong Customer Authentication (SCA)</h2>
-        <p>Following the strict enforcement of the Revised Payment Services Directive (PSD2) throughout the European Economic Area, and observing rapid global adoption among issuing banks, Strong Customer Authentication (SCA) is effectively mandatory for a massive percentage of modern digital transactions. 3D Secure 2.0 (3DS2) functions as the underlying authentication protocol that facilitates SCA, acting as a profound engineering upgrade over the notoriously clunky, redirect-heavy 3D Secure 1.0 standard.</p>
-        <p>The core innovation of 3DS2 is its ability to seamlessly transmit rich contextual data—including the customer's hardware device fingerprint, browser language configurations, exact IP address, typing cadences, and historical purchasing patterns—directly to the issuing bank entirely in the background. The issuing bank's proprietary risk engine heavily analyzes this data payload in milliseconds. If the transaction profile is deemed sufficiently low-risk, the bank automatically invokes a "frictionless flow," approving the charge instantly without requiring any manual user intervention whatsoever. If the algorithmic risk score is high, a "challenge flow" is forcefully triggered.</p>
-        <p>Within a challenge flow, the payment processor's frontend SDK elegantly overlays an iframe modal window directly inside the existing checkout UI, prompting the customer to definitively authenticate the transaction using a biometric identifier (such as FaceID or TouchID on a mobile banking application) or a standard one-time passcode (OTP) delivered via SMS. This native, embedded integration drastically improves conversion rates compared to the archaic legacy redirects that frequently caused users to abandon their carts. Additionally, successful 3DS2 authentication mathematically provides a liability shift: if the transaction eventually turns out to be fraudulent, the strict financial liability for the chargeback transfers completely from the merchant back to the card issuer.</p>
-        <p>To integrate 3DS2 accurately, your backend server must implement a robust two-step asynchronous payment flow. Initially, you create a PaymentIntent on the backend and transmit the generated <code>client_secret</code> payload to the frontend client. Subsequently, the frontend securely invokes the processor's client SDK (e.g., <code>stripe.confirmCardPayment</code>), which automatically evaluates the strict necessity of a 3DS2 challenge and handles the complex UI rendering entirely transparently.</p>
-        <p>Minimizing friction during the checkout experience is a fundamental tenet of highly effective UX architecture. For advanced techniques on streamlining checkout UI patterns and reducing cart abandonment, you can read my comprehensive technical analysis on <a href="/blog/designing-for-convert/">Designing High-Conversion E-Commerce Architectures</a>.</p>
+        <h2>6. 3-D Secure, SCA, And The Friction Nobody Wants</h2>
 
-        <hr />
+        <p>Strong Customer Authentication is a regulatory requirement across the UK and EEA under PSD2, and 3-D Secure 2 is the protocol that satisfies it. If you sell into those markets you are already subject to it whether or not you have implemented it deliberately.</p>
 
-        <h2>4. Asynchronous Webhook Signature Validation: Securing the Event Loop</h2>
-        <p>Because crucial payment authorizations, complex bank transfers (like ACH, SEPA, or Bacs), and batch refund operations execute highly asynchronously, your backend systems cannot rely strictly on synchronous API HTTP responses to accurately update core order statuses. The customer might quickly close their browser tab or lose cellular connectivity long before the client-side SDK confirms the payment. Therefore, webhooks function as the absolute, immutable source of truth for all payment lifecycle events.</p>
-        <p>Exposing a completely unauthenticated webhook endpoint on the public internet constitutes a critical, high-severity vulnerability. A malicious actor could trivially script forged JSON payloads and blast them at your webhook URL, perfectly mimicking a successful payment event and tricking your internal state machine into dispatching unpaid physical goods or provisioning digital licenses. To prevent this disastrous scenario, every tier-one payment processor aggressively signs their outgoing webhook payloads using a Hash-Based Message Authentication Code (HMAC). Your server application must mathematically verify this signature before processing a single byte of the event data.</p>
-        <p>The rigorous verification process involves securely extracting the raw HTTP request body (the exact, unmodified bytes sent over the TCP wire, before any internal JSON parsing occurs) alongside the processor's signature string from the incoming HTTP headers. Utilizing your securely vaulted webhook secret (stored in a secure enclave or environment variable), your backend server computes its own HMAC over the raw payload and compares it directly to the provided signature header in a strict timing-safe manner, specifically to prevent advanced timing analysis attacks.</p>
+        <p>The mechanics are better than the reputation. In 3DS2 your provider's SDK collects a device profile — browser characteristics, screen dimensions, IP, and a set of transaction attributes — and sends it to the issuer's risk engine before any UI appears. The issuer scores it. Most of the time the answer is "fine, no challenge", and the customer sees nothing at all. That is the frictionless flow and it is the majority of traffic on established cards.</p>
 
-        <h3>Node.js/Express Webhook Verification Architecture</h3>
-        <p>Within the Node.js ecosystem, the single most common catastrophic pitfall is globally mounting the standard <code>express.json()</code> middleware above the specific webhook route. This immediately parses the incoming payload into a JavaScript object and mutates the raw buffer stream, permanently destroying the ability to perform accurate signature verification. You must explicitly configure <code>express.raw({ type: 'application/json' })</code> exclusively for the webhook endpoint to preserve the byte integrity.</p>
-        <pre><code class="language-javascript">// High-Performance Express Webhook Handler verifying Stripe HMAC Signatures
-const express = require('express');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+        <p>When the issuer wants proof, you get a challenge: a modal, usually an app push or a biometric prompt, occasionally an SMS code. Modern implementations render this in an iframe within your checkout rather than redirecting away, which is a real improvement over 3DS1.</p>
+
+        <p>Two things follow that matter commercially.</p>
+
+        <p><strong>Liability shifts.</strong> A transaction authenticated through 3DS2 moves fraud chargeback liability to the issuer. If you are absorbing fraud losses on a category with high chargeback rates, forcing authentication on those transactions is a legitimate lever even at some conversion cost.</p>
+
+        <p><strong>Exemptions exist and your provider's defaults may not use them.</strong> Low-value transactions under €30, transaction risk analysis exemptions based on the acquirer's fraud rate, trusted beneficiary listing where the customer has whitelisted you, and recurring transactions of a fixed amount. Each avoids a challenge. Each is a request, not a guarantee — the issuer can refuse and demand authentication anyway, in which case you have to be able to fall back.</p>
+
+        <pre><code class="language-javascript">// Requesting an exemption, and handling the case where the issuer says no.
+// The fallback path is the part that gets skipped and then breaks in
+// production at 2am on a Saturday.
+const intent = await stripe.paymentIntents.create({
+  amount: 1800,               // £18.00 — under the low-value threshold
+  currency: 'gbp',
+  payment_method: token,
+  confirm: true,
+  payment_method_options: {
+    card: {
+      request_three_d_secure: 'automatic',
+      // Exemption requests are provider-specific; Adyen uses
+      // additionalData.allow3DS2 plus a threeDSRequestorChallengeInd.
+    },
+  },
+}, { idempotencyKey: `pi:${orderId}:auth` });
+
+switch (intent.status) {
+  case 'succeeded':
+    return completeOrder(orderId, intent);
+
+  case 'requires_action':
+    // Exemption refused, or risk engine wants proof. Hand the client
+    // secret to the browser and let the SDK render the challenge.
+    return { needsAuthentication: true, clientSecret: intent.client_secret };
+
+  case 'requires_payment_method':
+    // Hard decline. Do not retry the same card automatically.
+    return { declined: true, reason: intent.last_payment_error?.decline_code };
+
+  default:
+    // Unknown state. Log loudly, do not assume failure, and let the
+    // webhook reconcile it — the money may well have moved.
+    logger.error({ intent_id: intent.id, status: intent.status }, 'unexpected intent status');
+    return { pending: true };
+}</code></pre>
+
+        <p>That last branch is the one I care about. An unexpected status is not a failure. Treating it as a failure and letting the customer press pay again is how you end up back at forty-one double charges.</p>
+
+        <p>On the conversion cost of 3DS2: I measure abandonment on challenged transactions at roughly 5–9% depending on the issuer, against under 1% on frictionless ones. So the goal is not to avoid 3DS, it is to maximise the frictionless share, and the lever for that is sending a complete device profile. Merchants who skip the optional data fields see challenge rates two to three times higher, because the issuer's risk engine has nothing to work with and defaults to caution. Fill in the fields.</p>
+
+        <h2>7. The Payment State Machine You Are Building Whether You Meant To Or Not</h2>
+
+        <p>Every payment integration contains a state machine. The ones that go wrong are the ones where it was never written down, so it exists implicitly across four service boundaries and nobody can say what state an order is in.</p>
+
+        <p>The states that matter, and the transitions between them:</p>
+
+        <p><strong>Pending</strong> — the customer has submitted and we do not yet know anything. <strong>Authorised</strong> — the issuer has reserved the funds but no money has moved. <strong>Captured</strong> — the money is moving to you. <strong>Failed</strong> — a definitive decline. <strong>Voided</strong> — an authorisation released before capture. <strong>Refunded</strong> — money returned after capture. And the state everyone forgets: <strong>Unknown</strong>, meaning we asked and did not get an answer.</p>
+
+        <p>The authorise-then-capture separation is worth using deliberately. Authorise at checkout, capture at dispatch. It matches the legal position in most of Europe — you should not take money for goods you have not shipped — and it turns a refund into a void, which costs you nothing and does not appear on the customer's statement at all. The constraint is that authorisations expire, typically after seven days, and if you dispatch on day nine the capture fails.</p>
+
+        <pre><code class="language-sql">-- The payments table that makes reconciliation possible. Two things
+-- do the heavy lifting: the unique constraint on the idempotency key,
+-- and never deleting rows — state changes are appended, not updated.
+CREATE TABLE payment_attempts (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id          uuid NOT NULL REFERENCES orders(id),
+  provider          text NOT NULL,
+  provider_ref      text,                -- payment intent / psp reference
+  idempotency_key   text NOT NULL,
+  amount_minor      bigint NOT NULL,
+  currency          char(3) NOT NULL,
+  state             text NOT NULL
+                    CHECK (state IN ('pending','authorised','captured',
+                                     'failed','voided','refunded','unknown')),
+  decline_code      text,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+
+  -- One attempt per key, enforced by the database rather than by
+  -- application code that a race condition can walk straight through.
+  CONSTRAINT uniq_idempotency UNIQUE (provider, idempotency_key)
+);
+
+CREATE INDEX ON payment_attempts (order_id);
+CREATE INDEX ON payment_attempts (provider, provider_ref);
+-- Anything stuck in 'pending' or 'unknown' is a reconciliation job's input.
+CREATE INDEX ON payment_attempts (state, created_at)
+  WHERE state IN ('pending', 'unknown');</code></pre>
+
+        <p>That partial index is small and it is the thing that lets you sweep for stuck payments cheaply every few minutes rather than scanning the whole table.</p>
+
+        <h2>8. Idempotency, Done Properly</h2>
+
+        <p>The bug at the start of this article was an idempotency failure, so it deserves its own treatment.</p>
+
+        <p>An idempotency key tells the gateway "this request and any identical retry of it are the same operation". The gateway caches the first response against the key — usually for 24 hours — and returns that cached response for any repeat. Both major providers support this and it is not optional.</p>
+
+        <p>Three rules, all of which I have watched somebody break.</p>
+
+        <p><strong>Generate the key outside the retry loop.</strong> This is the bug from November. If the key is created where the request is made, every retry gets a new key and every retry is a new charge. Derive it once, from stable inputs, and pass it in.</p>
+
+        <p><strong>Derive it deterministically from state, not randomly.</strong> A random UUID works until your worker crashes mid-request and a different worker picks the job up from the queue. That worker has no idea what UUID the dead one used. Hash the order ID and the operation phase instead, and any worker that picks up the job derives the same key.</p>
+
+        <p><strong>Scope it to the operation, not the order.</strong> Authorising, capturing and refunding the same order are three operations. Reusing one key across them means the second call returns the first call's cached response, and you will spend a long afternoon working out why your capture returned an authorisation object.</p>
+
+        <pre><code class="language-python">import hashlib, time, logging
+
+def idempotency_key(order_id: str, phase: str, attempt_window: str = "") -&gt; str:
+    """Deterministic, stable across process restarts and worker handoffs.
+
+    phase: 'auth' | 'capture' | 'refund:&lt;refund_id&gt;'
+    attempt_window: leave empty for a single logical attempt. Set it to a
+      period identifier for genuinely repeatable operations, e.g. a
+      subscription's billing period, so period N+1 gets its own key.
+    """
+    raw = f"{order_id}|{phase}|{attempt_window}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def authorise_with_retries(gateway, order, max_attempts=4):
+    key = idempotency_key(order.id, "auth")      # derived ONCE, outside the loop
+    delay = 0.5
+    for attempt in range(max_attempts):
+        try:
+            return gateway.authorise(
+                amount=order.amount_minor,
+                currency=order.currency,
+                token=order.payment_token,
+                idempotency_key=key,             # identical on every retry
+                timeout=25,                      # generous: see below
+            )
+        except (gateway.Timeout, gateway.ConnectionError) as exc:
+            logging.warning("auth attempt %d failed for %s: %s",
+                            attempt + 1, order.id, exc)
+            if attempt == max_attempts - 1:
+                # Do NOT report failure to the customer. We do not know.
+                mark_payment_unknown(order.id, key)
+                raise PaymentIndeterminate(order.id)
+            time.sleep(delay)
+            delay *= 2                            # 0.5s, 1s, 2s</code></pre>
+
+        <p>The 25-second timeout is deliberate and counter-intuitive. Short timeouts feel defensive and they are the opposite: a request that times out at 5 seconds may well still be processing at the gateway, and now you have an authorisation you do not know about. Set the client timeout comfortably above the gateway's own p99 and let slow responses be slow. Every timeout is a payment whose state you have to reconcile later.</p>
+
+        <h2>9. Webhooks Are The Source Of Truth</h2>
+
+        <p>The synchronous API response tells you what the gateway believed at the moment it replied. Webhooks tell you what actually happened. When those disagree — and they do, for redirects, bank transfers, delayed captures, disputes, and every timeout — the webhook wins.</p>
+
+        <p>This has an architectural consequence people resist: fulfilment should be triggered by the webhook, not by the customer landing on your confirmation page. The customer's browser is not a reliable messenger. They close the tab, lose signal in a lift, or get a bank app redirect that returns them to the wrong URL. If your order only becomes real when the browser comes back, some orders never become real.</p>
+
+        <h3>Verifying the signature without destroying the payload</h3>
+
+        <p>Every serious provider signs webhook payloads with an HMAC over the raw request body. You recompute it with your shared secret and compare in constant time. The near-universal implementation bug is that a JSON body-parser has already consumed and re-serialised the request before your handler sees it, and the re-serialisation changes whitespace or key ordering, so the signature never matches.</p>
+
+        <pre><code class="language-javascript">const express = require('express');
+const crypto = require('crypto');
 const app = express();
 
-// Crucial Architectural Requirement: Use raw body parsing strictly for the webhook endpoint
-app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
-  const signatureHeader = req.headers['stripe-signature'];
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  let event;
+// The webhook route is mounted BEFORE any global express.json(), and uses
+// express.raw so req.body is the exact bytes that were signed.
+app.post('/webhooks/psp',
+  express.raw({ type: 'application/json' }),
+  async (req, res) =&gt; {
+    const sigHeader = req.get('x-psp-signature') || '';
+    const timestamp = req.get('x-psp-timestamp') || '';
 
-  try {
-    // stripe.webhooks.constructEvent natively handles the complex HMAC validation 
-    // and implements timing-safe string comparison internally.
-    event = stripe.webhooks.constructEvent(req.body, signatureHeader, endpointSecret);
-  } catch (err) {
-    console.error(`[CRITICAL] Webhook Signature Verification Error: ${err.message}`);
-    // Immediately terminate the request on signature mismatch
-    return res.status(400).send(`Webhook Verification Error: ${err.message}`);
-  }
-
-  // Handle specific event types securely using a defined state machine
-  try {
-    switch (event.type) {
-      case 'payment_intent.succeeded': {
-        const paymentIntent = event.data.object;
-        console.log(`Payment successfully confirmed for order: ${paymentIntent.metadata.order_id}`);
-        // Dispatch event to internal fulfillment microservice
-        await fulfillOrderService.process(paymentIntent.metadata.order_id);
-        break;
-      }
-      case 'payment_intent.payment_failed': {
-        const failedIntent = event.data.object;
-        console.error(`Payment explicitly failed: ${failedIntent.last_payment_error?.message}`);
-        // Dispatch notification event to customer communication service
-        await customerNotificationService.notifyFailure(failedIntent.metadata.order_id);
-        break;
-      }
-      case 'charge.refunded': {
-        const refundEvent = event.data.object;
-        console.log(`Processing refund for transaction: ${refundEvent.id}`);
-        await accountingService.recordRefund(refundEvent);
-        break;
-      }
-      default:
-        // Safely ignore unhandled event types to prevent log spam
-        console.log(`Received unhandled webhook event type: ${event.type}`);
+    // Reject stale payloads: without this, a captured request can be
+    // replayed at any point in the future.
+    const ageSeconds = Math.abs(Date.now() / 1000 - Number(timestamp));
+    if (!timestamp || ageSeconds &gt; 300) {
+      return res.status(400).send('stale or missing timestamp');
     }
-  } catch (processingError) {
-    console.error(`[ERROR] Failed to process webhook event ${event.id}:`, processingError);
-    // Return a 500 error so the payment processor will retry the webhook delivery later
-    return res.status(500).json({ error: 'Internal processing failure' });
-  }
 
-  // Acknowledge successful receipt and processing of the event immediately
-  res.status(200).json({ received: true });
-});</code></pre>
+    const expected = crypto
+      .createHmac('sha256', process.env.PSP_WEBHOOK_SECRET)
+      .update(`${timestamp}.`)
+      .update(req.body)               // Buffer, untouched
+      .digest('hex');
+
+    const a = Buffer.from(expected, 'utf8');
+    const b = Buffer.from(sigHeader, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      // Log it. A sudden run of these is either a rotated secret or
+      // somebody probing the endpoint.
+      return res.status(400).send('bad signature');
+    }
+
+    const event = JSON.parse(req.body.toString('utf8'));
+
+    // Persist first, process later. A 200 must mean "durably received",
+    // not "fully handled" — otherwise slow downstream work causes the
+    // provider to time out and redeliver, multiplying the work.
+    const stored = await db.webhookEvents.insertIgnoreDuplicate({
+      provider: 'psp',
+      event_id: event.id,          // UNIQUE — this is your replay guard
+      type: event.type,
+      payload: event,
+    });
+
+    if (stored.inserted) await eventQueue.publish(event.id);
+    res.status(200).json({ received: true });
+  });
+
+// Everything else can parse JSON normally.
+app.use(express.json());</code></pre>
+
+        <p>Four things in that handler are doing real work. The raw body preserves the signed bytes. The timestamp check kills replay. The constant-time comparison prevents a timing oracle, which is admittedly a theoretical concern here but costs nothing. And the unique constraint on <code>event_id</code> means a redelivered webhook is stored once and processed once — which matters because every provider redelivers, and "at least once" is the only guarantee any of them offer.</p>
+
+        <p>Return 200 as soon as the event is durably stored. If you do the fulfilment work inline and it takes 40 seconds, the provider times out, marks delivery failed, and sends it again — and now two workers are fulfilling the same order concurrently. Persist, acknowledge, process asynchronously.</p>
+
+        <h2>10. Failing Without Charging Anyone Twice</h2>
+
+        <p>The hard part of payments is not the success path. It is the set of states where you genuinely do not know what happened.</p>
+
+        <p>The rule I work to: <strong>a timeout is not a failure.</strong> A timeout is an unknown. The only safe responses to an unknown are to retry with the same idempotency key, or to query the gateway for the current state of that key, or to mark it for reconciliation. What you must never do is tell the customer it failed and offer a retry button, because if the original request landed you have now taken two payments and the customer initiated the second one themselves.</p>
+
+        <p>What the customer should see instead: "We are confirming your payment — you will get an email within a few minutes. Do not pay again." Then confirm asynchronously. It is a worse-looking checkout and it is correct.</p>
+
+        <p>The reconciliation job is the safety net and it is the piece most merchants only write after their first incident.</p>
+
+        <pre><code class="language-python">"""reconcile.py — every 5 minutes, resolve payments whose state we do
+not know. This job is boring, it is unglamorous, and it is the single
+highest-value thing in the payments codebase."""
+import datetime as dt
+
+STUCK_AFTER = dt.timedelta(minutes=2)
+GIVE_UP_AFTER = dt.timedelta(hours=24)
+
+def reconcile(db, gateway, alerts):
+    now = dt.datetime.now(dt.timezone.utc)
+    rows = db.query("""
+        SELECT id, order_id, idempotency_key, provider_ref, amount_minor,
+               created_at
+          FROM payment_attempts
+         WHERE state IN ('pending', 'unknown')
+           AND created_at &lt; %s
+         ORDER BY created_at
+         LIMIT 500
+    """, (now - STUCK_AFTER,))
+
+    for row in rows:
+        # Ask the gateway what it thinks. Searching by idempotency key
+        # works even when we never received a reference at all — which is
+        # exactly the case that matters.
+        remote = gateway.lookup(idempotency_key=row["idempotency_key"]) \
+                 or gateway.lookup(reference=row["provider_ref"])
+
+        if remote is None:
+            if now - row["created_at"] &gt; GIVE_UP_AFTER:
+                # 24h with no trace at the gateway means it never landed.
+                db.set_state(row["id"], "failed", reason="no_remote_record")
+                alerts.info(f"payment {row['id']} never reached gateway")
+            continue
+
+        if remote.amount_minor != row["amount_minor"]:
+            # Never auto-resolve an amount mismatch. Stop and page someone.
+            alerts.critical(
+                f"AMOUNT MISMATCH order={row['order_id']} "
+                f"local={row['amount_minor']} remote={remote.amount_minor}")
+            continue
+
+        db.set_state(row["id"], remote.state, provider_ref=remote.reference)
+        if remote.state in ("authorised", "captured"):
+            fulfilment.enqueue(row["order_id"])
+        elif remote.state == "failed":
+            notifications.payment_failed(row["order_id"], remote.decline_code)</code></pre>
+
+        <p>The amount mismatch branch has fired for me exactly once, on a currency-rounding bug in a multi-currency checkout, and it saved a genuinely nasty situation. Never let a reconciliation job silently accept a different amount than the one you recorded.</p>
+
+        <p>Alongside that, run a daily settlement reconciliation against the provider's settlement file: every captured payment in your database should appear in their report, and every line in their report should map to an order. Discrepancies are usually refunds processed in the provider's dashboard by a support agent who did not know there was an API. That is a process problem and finding it takes a query, not an investigation.</p>
+
+        <h2>11. Declines Are Not All The Same</h2>
+
+        <p>A decline code is information and most merchants throw it away, showing every customer the same "payment failed" message.</p>
+
+        <p>The distinction that matters is soft versus hard. A soft decline — insufficient funds, issuer temporarily unavailable, do not honour — may succeed later or on a different day. A hard decline — stolen card, invalid account, pick-up card — will never succeed and retrying is at best pointless and at worst looks like card testing to the network.</p>
+
+        <p>For subscription billing, a retry schedule against soft declines recovers a meaningful share of failed renewals. What works in my experience: retry at day 1, day 3 and day 7, ideally at a different hour each time, and stop. Retrying daily for a fortnight annoys the issuer, raises your decline ratio, and can get your merchant account flagged. Some providers will tell you the optimal retry window per issuer; use it if offered.</p>
+
+        <p>For one-off checkout declines, tell the customer something useful. "Your bank declined this — they may have sent you an approval prompt in your banking app" recovers a surprising number of transactions, because pending app approvals are extremely common and customers do not think to check.</p>
+
+        <h2>12. Choosing A Provider, By What Actually Matters</h2>
+
+        <p>Provider selection conversations tend to be about the headline rate. The headline rate is one of about six things that determine what you pay and what you can build.</p>
+
+        <p><strong>Authorisation rate.</strong> A provider with a 2% better approval rate on the same traffic is worth far more than 0.1% off the transaction fee. Ask for their approval rate on merchants of your size in your category, and ask what it looks like on card-on-file MITs specifically.</p>
+
+        <p><strong>Interchange++ or blended pricing.</strong> Blended is simpler and hides where the money goes. Interchange++ shows you the interchange, the scheme fee and the provider's margin separately. Above roughly £1m of processed volume, ask for interchange++, because it is the only way to know whether the provider's margin is what they told you.</p>
+
+        <p><strong>Local payment methods where you sell.</strong> iDEAL in the Netherlands, Bancontact in Belgium, Blik in Poland, Klarna in the Nordics. If you sell into a market where 60% of ecommerce runs on a method you do not accept, no amount of card optimisation compensates.</p>
+
+        <p><strong>How they handle disputes.</strong> Is there an API for submitting evidence, or is it a portal where somebody uploads PDFs? At scale this is the difference between an automated job and a part-time role.</p>
+
+        <p><strong>Vault portability.</strong> Covered above and worth repeating: ask about migration before you sign.</p>
+
+        <p><strong>Sandbox fidelity.</strong> Some sandboxes model 3DS challenge flows, partial captures, disputes and network tokens. Others return success to everything. You cannot test a payment integration properly against a sandbox that never says no, and you will discover the gaps in production.</p>
+
+        <p>What I would deprioritise: the marketing site's fraud tooling claims, the dashboard's appearance, and the availability of an official plugin for your platform. Plugins are usually the least maintained code either party owns, and I have replaced more of them than I have kept.</p>
+
+        <h2>13. Testing A Payment Integration Honestly</h2>
+
+        <p>The test suite people write covers the success path and one decline. The failures that cost money live elsewhere.</p>
+
+        <p>What I insist on before a payment integration goes live: a test that asserts a retried request with the same idempotency key produces exactly one charge; a test that a webhook delivered twice fulfils once; a test that a webhook with a tampered body is rejected; a test that a 3DS challenge response is handled without losing the order; and a test that a gateway timeout leaves the order in a recoverable state rather than a failed one.</p>
+
+        <pre><code class="language-python">import pytest
+
+def test_retry_with_same_key_charges_once(fake_gateway, order):
+    """The November bug, as a test. If this passes you have avoided the
+    most expensive class of payment defect there is."""
+    fake_gateway.fail_next(times=2, error="timeout")   # two timeouts, then OK
+    authorise_with_retries(fake_gateway, order)
+    assert fake_gateway.distinct_charges(order.id) == 1
+    assert len(fake_gateway.requests_received) == 3     # all with one key
+    assert len({r.idempotency_key for r in fake_gateway.requests_received}) == 1
 
 
-
-        <hr />
-
-        <h2>5. Engineering Vaulting Mechanisms and Zero-Auth Operations</h2>
-        <p>Specific digital commerce models, such as SaaS subscription services, gym memberships, or variable usage-based billing systems, fundamentally require vaulting a payment method securely for future, merchant-initiated transactions (MIT). Storing a customer's card directly on file while strictly adhering to compliance mandates relies heavily on executing a zero-authorization (zero-auth) transaction sequence. During this specialized process, the payment gateway attempts to authorize a nominal amount—typically $0.00 or $1.00, which is immediately and automatically voided—specifically to verify the card's mathematical validity and active status with the issuing bank before storing the permanent token in the vault.</p>
-        <p>When actively engineering for secure vaulting operations, you must explicitly configure your initial PaymentIntents or SetupIntents with the required <code>setup_future_usage</code> flag (within the Stripe API ecosystem, or the equivalent parameter in Braintree). This specific flag formally informs the issuing bank network that the initial customer-initiated transaction (CIT) will definitively be followed by subsequent, automated MITs. This represents a highly crucial structural distinction under modern SCA regulations. Complete failure to appropriately flag the initial authorization transaction will inevitably result in catastrophic decline rates for subsequent recurring billing cycles, primarily because the issuing bank will mistakenly anticipate a live 3DS2 biometric challenge for every single automated backend charge.</p>
-
-        <hr />
+def test_duplicate_webhook_fulfils_once(client, signed_payload, fulfilment):
+    body, headers = signed_payload("payment.captured", order_id="A-1001")
+    assert client.post("/webhooks/psp", data=body, headers=headers).status_code == 200
+    assert client.post("/webhooks/psp", data=body, headers=headers).status_code == 200
+    assert fulfilment.calls_for("A-1001") == 1
 
 
+def test_tampered_webhook_rejected(client, signed_payload):
+    body, headers = signed_payload("payment.captured", order_id="A-1001")
+    tampered = body.replace(b'"amount_minor":2499', b'"amount_minor":1')
+    resp = client.post("/webhooks/psp", data=tampered, headers=headers)
+    assert resp.status_code == 400
 
-        <hr />
 
+def test_timeout_leaves_order_recoverable(fake_gateway, order, db):
+    fake_gateway.fail_next(times=99, error="timeout")
+    with pytest.raises(PaymentIndeterminate):
+        authorise_with_retries(fake_gateway, order)
+    # Crucially NOT 'failed' — we do not know, and reconciliation must run.
+    assert db.payment_state(order.id) == "unknown"</code></pre>
 
+        <p>Also: run a chaos exercise against staging before launch. Block the gateway's hostname at the firewall mid-checkout and see what the customer experiences. Add 30 seconds of latency and see whether anything gives up in a way that loses an order. Send a malformed webhook. These take an afternoon and they find things a unit test cannot.</p>
 
-        <hr />
+        <h2>14. A Migration That Mostly Went Well</h2>
+
+        <p>A supplements retailer, about 22,000 orders a month, 40% of revenue on subscriptions, moving from a legacy gateway with a direct API integration to embedded fields with a modern provider. The driver was the legacy integration having put them in SAQ D scope and their acquirer starting to ask harder questions.</p>
+
+        <p>The plan was three phases over ten weeks: new provider live for new customers on embedded fields, vault migration for the 61,000 saved cards, then decommission the old integration.</p>
+
+        <p>What the numbers looked like at the end.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Before</th><th>After 10 weeks</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>PCI scope</td><td>SAQ D</td><td>SAQ A-EP</td></tr>
+            <tr><td>One-off checkout auth rate</td><td>91.2%</td><td>94.6%</td></tr>
+            <tr><td>Subscription renewal success</td><td>78.4%</td><td>93.1%</td></tr>
+            <tr><td>Checkout conversion</td><td>2.61%</td><td>2.68%</td></tr>
+            <tr><td>Support tickets tagged 'payment'</td><td>~140 / month</td><td>~50 / month</td></tr>
+            <tr><td>Effective processing cost</td><td>1.94%</td><td>1.71%</td></tr>
+          </tbody>
+        </table>
+
+        <p>The renewal number is the interesting one. Fifteen points is enormous and it was not the new provider being cleverer — it was that the old integration had never flagged the initial transactions as establishing an MIT mandate, so a large share of renewals were being declined as unauthenticated. Nobody had diagnosed this in four years. They had built a whole dunning email programme around a bug.</p>
+
+        <p>Now what went wrong, because two things did.</p>
+
+        <p>The vault migration moved 61,000 tokens and 3,800 of them failed to map, mostly cards that had expired or been reissued since their last use. We had planned for this and had a re-authentication email flow ready. What we had not planned for was that about 400 of those customers had active subscriptions renewing within the following week, so they got a "please update your payment details" email and a failed renewal in the same 48 hours, which reads as an error even though both were correct. We should have suppressed renewals for the unmapped cohort for a week and dealt with them individually. That was avoidable and it was my oversight.</p>
+
+        <p>The second problem was subtler. During the parallel-running phase, both integrations were writing to the same orders table, and the new one wrote provider references in a different format. A reporting query that parsed those references to work out settlement dates started producing wrong figures, and finance did not notice for eleven days because the totals were right and only the daily split was wrong. The lesson I took: when two systems write to the same table during a migration, add an explicit provider column and make every downstream query filter on it from day one, rather than assuming references are self-describing.</p>
+
+        <p>The thing I would do differently at the level of sequencing: we migrated the vault before we had run a full month of the new integration on new customers. Doing it the other way round would have surfaced the token mapping issues on a smaller population.</p>
+
+        <h2>15. Questions I Get Asked</h2>
+
+        <p><strong>"Can we store the card ourselves so we are not locked in?"</strong> Technically yes, practically no. Storing PANs puts you in SAQ D, requires encryption and key management you will have to defend to an assessor, and the lock-in problem is better solved by asking about vault migration in the contract.</p>
+
+        <p><strong>"Is Apple Pay more secure than a card form?"</strong> Yes, meaningfully. The merchant never receives the real PAN — a device-specific token with a cryptogram is used instead — and biometric authentication satisfies SCA, so those transactions are frictionless by construction. Wallet payments also convert better on mobile in every dataset I have seen. If you have not enabled them, that is the highest-return payment work available to you.</p>
+
+        <p><strong>"Should we use multiple gateways?"</strong> Below a few million in volume, no — the operational complexity exceeds the benefit. Above that, a second provider gives you failover and a negotiating position, and the routing logic is a genuine engineering project rather than a config toggle. Do not build it because you read that large merchants do.</p>
+
+        <p><strong>"Our provider says their plugin is PCI compliant."</strong> A plugin cannot be compliant; an environment is. What they mean is the plugin does not route card data through your server, which is a useful fact and not the same claim. Read the integration and confirm the fields are provider-origin iframes rather than styled inputs your page can read.</p>
+
+        <p><strong>"Do we need 3DS if we only sell in the US?"</strong> Not by regulation, and it may still be worth it selectively for high-risk orders because of the liability shift. Run it as a rule on your fraud engine rather than on everything.</p>
+
+        <p><strong>"How do we handle partial refunds and partial captures?"</strong> Both are normal and both need their own idempotency scope — key them by the refund identifier, not the order. The specific trap is a partial capture that leaves an authorisation open on the remainder; make sure you either capture the rest or void it, or your customer sees a pending amount on their statement for a week and rings you about it.</p>
+
+        <p><strong>"Should fulfilment happen on the confirmation page or the webhook?"</strong> The webhook. Always. The confirmation page is a user interface, not an event.</p>
+
+        <h2>16. What I Would Do First</h2>
+
+        <p>Check where your idempotency keys are generated. If any of them are created inside a retry loop or inside the function that makes the HTTP call, fix that today — it is a fifteen-minute change and it is the highest-severity bug in this article.</p>
+
+        <p>Find out what your client timeout to the gateway is. If it is under 15 seconds, raise it, and make sure a timeout marks the payment unknown rather than failed.</p>
+
+        <p>Write the reconciliation job if you do not have one. Query for anything pending or unknown older than two minutes, ask the gateway what it thinks, and resolve. It is under a hundred lines and it will catch problems you do not currently know you have.</p>
+
+        <p>Confirm your webhook handler reads the raw body, checks a timestamp, compares in constant time, and stores the event ID under a unique constraint. Then send it a tampered payload and confirm it says no.</p>
+
+        <p>If you sell subscriptions, pull your renewal success rate. If it is below 90%, check whether the initial transactions carry an MIT mandate flag. This is the single most common silent revenue leak in the whole area and it is usually one parameter.</p>
+
+        <p>Then have the harder conversation about integration method. If you are on embedded fields, price the annual cost of keeping that page defensible — script inventory, CSP, integrity checks, tamper detection — and compare it honestly against the measured conversion difference of a hosted page. That measurement, not an assumption about what redirects do to conversion, is what should decide it.</p>
+
+        <p>None of this is difficult work. It is careful work, which is a different thing, and the difference shows up on a Tuesday morning when the gateway has a slow hour and you find out whether your integration was built by someone who expected the network to be reliable.</p>
 
         <div class="blog-suggested-reads">
           <h3>Suggested &amp; Related Reading</h3>
@@ -396,7 +822,6 @@ app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), asyn
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -430,6 +855,6 @@ app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), asyn
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

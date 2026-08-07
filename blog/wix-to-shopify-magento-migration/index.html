@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Wix to Shopify & Magento 2 Migration Roadmap | MODRACX</title>
-  <meta name="description" content="Step-by-step technical guide on migrating catalogs, order histories, and SEO URL 301 redirects from Wix to Shopify Plus or Magento 2." />
+  <meta name="description" content="Replatforming from Wix to Shopify or Magento 2: building a complete URL inventory, 301 mapping, variant limits, image originals, customer passwords, and what breaks on cutover day." />
   <meta property="og:title" content="Wix to Shopify & Magento 2 Migration Roadmap | MODRACX" />
   <meta property="og:description" content="Step-by-step technical guide on Wix migration by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Wix to Shopify & Magento 2 Migration Roadmap</h1>
-        <p class="lede">Outgrowing Wix's catalog limits requires migrating product matrices and customer databases to enterprise platforms without losing search engine domain authority.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Wix to Shopify &amp; Magento 2 Migration Roadmap</h1>
+        <p class="lede">A coffee retailer moved off Wix over a weekend and lost 61% of organic traffic. The products migrated fine. The 1,847 URLs did not. Here is how to do the URL work properly.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 37 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,29 +205,728 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Nginx 301 Redirect Mapping Rule Code</h2>
+        <h2>1. The Graph That Fell Off a Cliff</h2>
 
-        <pre><code class="language-nginx"># Nginx 301 Redirect Map for Wix to Shopify Migration
-map $request_uri $new_uri {
-    /product-page/blue-widget   /products/blue-widget;
-    /product-page/red-gadget    /products/red-gadget;
+        <p>In November 2024 a specialist coffee retailer moved off Wix onto Shopify. They did it themselves, with an app, over a weekend. The store launched on the Saturday. By the following Friday organic sessions were down 61% and they called me.</p>
+
+        <p>The migration itself had been fine. Products were there, images were there, the theme looked better than the old one. What had happened was simpler and worse: Wix serves product URLs at <code>/product-page/some-product</code>, and Shopify serves them at <code>/products/some-product</code>. Every one of their 340 product pages had changed address. So had every blog post — Wix used <code>/post/title-slug</code>, Shopify uses <code>/blogs/news/title-slug</code>. So had their category pages, which on Wix had been a single dynamic page with query parameters and on Shopify were collections.</p>
+
+        <p>The migration app had set up redirects for products. It had matched 211 of 340, silently skipping the rest because the handles did not match after Shopify's slug normalisation. Nothing at all had been done for the 180-post blog, which was where roughly half their organic traffic landed.</p>
+
+        <p>We recovered most of it. It took eleven weeks and about thirty hours of work that would have been four hours if done before the cutover. Their peak trading month was December and they went into it with two-fifths of their organic traffic missing.</p>
+
+        <p>That is the shape of nearly every bad replatform I have been called into. The data migrates. The URLs do not. And the people running the project measure success by whether the products appeared, because that is the visible thing.</p>
+
+        <p>This is a guide to doing it properly. It is mostly about URLs, because that is mostly what the job is.</p>
+
+        <h2>2. Why People Leave Wix, and Whether They Should</h2>
+
+        <p>Worth being honest about, because a chunk of replatform projects should not happen.</p>
+
+        <p>Wix is a genuinely competent product for a small store. The editor is good, the hosting is fine, the templates are better than most agency work, and for a store doing under about £250,000 a year with a simple catalogue it is a perfectly reasonable place to be. I have talked two clients out of leaving it.</p>
+
+        <p>The reasons to leave that hold up:</p>
+
+        <p><strong>Catalogue complexity.</strong> Wix Stores handles product options but its variant model gets awkward fast. A product with three option types and thirty combinations, each needing its own SKU, price, weight and stock level, is at the edge of comfortable. A product with distinct pricing per combination and per-variant images is past it. This is the most common genuine driver.</p>
+
+        <p><strong>Integration.</strong> If you need to talk to an ERP, a warehouse system, or a B2B pricing engine, Wix's APIs will frustrate you. They exist, they are improving, and they are not built for this. A store that needs stock synchronised from a warehouse management system every fifteen minutes is going to have a bad time.</p>
+
+        <p><strong>B2B and account-based pricing.</strong> Customer groups, contract prices, quote workflows, net terms. Wix does not really do this and the workarounds are unpleasant.</p>
+
+        <p><strong>Multi-store or multi-region with genuinely different catalogues.</strong> Not just currency switching, which Wix handles, but different products, different tax treatments, different content per market.</p>
+
+        <p>Reasons that do not hold up, in my experience: "we want more control over SEO" — Wix's SEO tooling is adequate and the ceiling is higher than its reputation suggests; "the site is slow" — usually the theme and the images, not the platform, and you will carry both to the new platform; and "we've outgrown it" as a feeling rather than a specific constraint. If you cannot name the specific thing you cannot do, you are about to spend forty thousand pounds to arrive somewhere similar.</p>
+
+        <h2>3. Shopify or Magento, and How to Actually Decide</h2>
+
+        <p>The two destinations people ask about, and they are not close substitutes.</p>
+
+        <p><strong>Shopify</strong> is the right answer for most stores leaving Wix. It is a step up in capability without being a step into infrastructure ownership. Checkout is Shopify's and it is excellent and you cannot break it. Hosting, PCI scope, upgrades and security are somebody else's problem. The app ecosystem covers most needs.</p>
+
+        <p>What you give up: control of the checkout unless you are on Shopify Plus, where you get checkout extensibility rather than genuine freedom; a hard limit of 100 variants per product on standard plans, 2,000 on newer variant models but with caveats; and platform fees on every transaction if you are not using Shopify Payments. That last one matters at scale — 2% on a £3m business is £60,000 a year.</p>
+
+        <p><strong>Magento 2</strong>, now Adobe Commerce or Magento Open Source, is the right answer when you have requirements that Shopify structurally cannot meet. Complex B2B, per-customer catalogues and pricing, multi-warehouse inventory with sourcing rules, deeply custom checkout, or a catalogue in the hundreds of thousands of SKUs.</p>
+
+        <p>What you take on: infrastructure, in earnest. A Magento store needs hosting that somebody owns, a deployment pipeline, security patching within days of release, and a developer who knows the platform. Budget three to four times the annual running cost of an equivalent Shopify store, and be honest that the total cost of ownership over five years is where most Magento decisions go wrong.</p>
+
+        <p>My rule of thumb, which has held up: if you can list your requirements and Shopify plus three apps covers them, go to Shopify. If covering them needs eight apps and two of them are doing something they were not designed for, look at Magento. If you are considering Magento because it feels more "enterprise", stop.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Requirement</th><th>Wix</th><th>Shopify</th><th>Magento 2</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Variants per product</td><td>~300 combinations</td><td>100 (2,000 with limits)</td><td>Effectively unlimited</td></tr>
+            <tr><td>Customer-group pricing</td><td>No</td><td>Plus only, awkward</td><td>Native</td></tr>
+            <tr><td>Multi-warehouse sourcing</td><td>No</td><td>Basic locations</td><td>Native (MSI)</td></tr>
+            <tr><td>Checkout customisation</td><td>None</td><td>Plus: extensions only</td><td>Complete</td></tr>
+            <tr><td>Server-side URL rewrites</td><td>Limited UI</td><td>Redirect list, no regex</td><td>Full, plus web server</td></tr>
+            <tr><td>Who patches security</td><td>Wix</td><td>Shopify</td><td>You, within 48 hours</td></tr>
+            <tr><td>Realistic annual run cost, mid-market</td><td>£300</td><td>£4,000–£30,000</td><td>£25,000–£90,000</td></tr>
+          </tbody>
+        </table>
+
+        <h2>4. Getting Data Out of Wix, Which Is Harder Than It Should Be</h2>
+
+        <p>Wix's export tooling is thin. There is a product CSV export in the Wix Stores dashboard, an orders export, and a contacts export. What is not exported cleanly: blog posts, static page content, product images at original resolution, customer passwords (nowhere does), reviews, and any custom fields you added through Wix's content manager.</p>
+
+        <p>The product CSV is the best of them and it still has problems. Variants are exported as separate rows with a <code>handleId</code> linking them, which is workable. Product descriptions come out as HTML with Wix's own class names and inline styles baked in, which you do not want to carry over. And images are exported as Wix media URLs of the form <code>https://static.wixstatic.com/media/abc123~mv2.jpg</code>, often with transformation parameters appended, so what you import is a resized derivative rather than the original.</p>
+
+        <p>That last one catches people. If you import the URLs as they appear in the export, you may end up with 500-pixel-wide product images on a platform that wants 2,000. Strip the transformation suffix to get the original.</p>
+
+        <pre><code class="language-python">import csv, re, requests, pathlib, hashlib
+
+# Wix media URLs carry a transform segment after the filename:
+#   .../media/abc123~mv2.jpg/v1/fill/w_500,h_500,al_c,q_80/abc123~mv2.jpg
+# Everything from "/v1/" onward is a derivative. Cut it to get the original.
+TRANSFORM = re.compile(r"/v1/.*$")
+
+def original_url(u: str) -> str:
+    u = u.split("?")[0]
+    return TRANSFORM.sub("", u)
+
+out = pathlib.Path("media")
+out.mkdir(exist_ok=True)
+seen = set()
+
+with open("wix-catalog.csv", newline="", encoding="utf-8-sig") as f:
+    for row in csv.DictReader(f):
+        # Wix puts all images in one semicolon-delimited column.
+        for raw in filter(None, row.get("productImageUrl", "").split(";")):
+            url = original_url(raw.strip())
+            if url in seen:
+                continue
+            seen.add(url)
+            # Deterministic filename so a re-run does not duplicate.
+            name = hashlib.sha1(url.encode()).hexdigest()[:16] + ".jpg"
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            (out / name).write_bytes(r.content)
+            print(f"{row['handleId']},{url},{name}")</code></pre>
+
+        <p>For blog content and static pages there is no export at all, so you crawl. Wix renders content client-side in some templates and server-side in others, which determines whether a plain HTTP fetch gets you the text. Check one page with <code>curl</code> before you write the crawler; if the article body is absent from the raw HTML you need a headless browser.</p>
+
+        <p>Wix does have a Data API and a Blog API on newer sites, which is a much better route if your site is on the current stack. Check for <code>/_api/</code> endpoints before resorting to scraping. The catch is that API access requires an app registered in the Wix Developers portal with the right permission scopes, and getting a client to grant those takes longer than the crawl would have.</p>
+
+        <h2>5. The URL Inventory Is the Whole Job</h2>
+
+        <p>Before touching product data, build a complete list of every URL on the current site that has ever received a visit or a link. Not the URLs in the sitemap. Every URL.</p>
+
+        <p>Four sources, and you need all four because each misses things the others catch:</p>
+
+        <p><strong>Google Search Console.</strong> Performance report, filtered to the last sixteen months, exported by page. This gives you URLs that actually receive organic traffic, ranked by how much, which is your prioritisation. Also pull the Pages report under Indexing for everything Google knows about including things it chose not to index.</p>
+
+        <p><strong>A full crawl.</strong> Screaming Frog or equivalent, in JavaScript rendering mode because Wix needs it, following internal links to depth. This catches pages nobody links to externally but which exist and are indexed.</p>
+
+        <p><strong>Server or analytics logs.</strong> Wix does not give you raw access logs, which is a real limitation, so this becomes Google Analytics landing pages instead — twenty-four months, all pages, including ones with a single session. The long tail is where the surprises are.</p>
+
+        <p><strong>Backlink data.</strong> Ahrefs or Search Console's links report, exported by target URL. A page with an external link is a page whose redirect matters more than its traffic suggests, because that link is passing authority you paid for or earned.</p>
+
+        <p>Combine, deduplicate, and you will have between three and ten times as many URLs as anyone expected. The coffee retailer's inventory came to 1,847 unique URLs for a site everyone described as "about 500 pages". The difference was pagination, filtered category views, an old blog structure from a 2019 redesign that still had live redirects, and about 200 URLs with tracking parameters that Wix had allowed to be indexed.</p>
+
+        <pre><code class="language-python">import pandas as pd
+
+# Four sources, one frame. Keep provenance — it tells you how much
+# you should care about a URL that has no traffic but three backlinks.
+gsc   = pd.read_csv("gsc-pages.csv").rename(columns={"Page": "url", "Clicks": "clicks"})
+crawl = pd.read_csv("crawl-internal-html.csv").rename(columns={"Address": "url"})
+ga    = pd.read_csv("ga-landing-pages.csv").rename(columns={"Landing Page": "url"})
+links = pd.read_csv("ahrefs-best-by-links.csv").rename(columns={"URL": "url",
+                                                               "Domains": "ref_domains"})
+
+def norm(s):
+    # Strip the fragment, lowercase the host, drop trailing slashes on
+    # non-root paths, and remove utm_*. Do NOT strip other query params:
+    # on Wix, ?category= is often a real page.
+    return (s.str.strip()
+             .str.replace(r"#.*$", "", regex=True)
+             .str.replace(r"[?&amp;]utm_[^&amp;]*", "", regex=True)
+             .str.replace(r"(?&lt;=.)/$", "", regex=True))
+
+frames = []
+for name, df in [("gsc", gsc), ("crawl", crawl), ("ga", ga), ("links", links)]:
+    df = df.copy()
+    df["url"] = norm(df["url"])
+    df["source"] = name
+    frames.append(df[["url", "source"] +
+                     [c for c in ("clicks", "ref_domains") if c in df.columns]])
+
+inv = (pd.concat(frames)
+         .groupby("url")
+         .agg(sources=("source", lambda s: ",".join(sorted(set(s)))),
+              clicks=("clicks", "sum"),
+              ref_domains=("ref_domains", "max"))
+         .reset_index()
+         .fillna(0)
+         .sort_values("clicks", ascending=False))
+
+inv.to_csv("url-inventory.csv", index=False)
+print(f"{len(inv)} unique URLs; {(inv.clicks &gt; 0).sum()} with organic clicks")</code></pre>
+
+        <p>Sort by clicks descending and look at the cumulative distribution. On most stores, 80% of organic traffic lands on 5 to 8% of URLs. Those must be mapped by hand and verified individually. The tail can be handled by pattern rules, and a small residue can honestly go to a 410 if it is genuinely dead — but decide that deliberately rather than by omission.</p>
+
+        <h2>6. Building the Redirect Map</h2>
+
+        <p>The mapping exercise itself. The patterns are predictable once you know the two platforms' URL structures.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Content</th><th>Wix</th><th>Shopify</th><th>Magento 2</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Product</td><td><code>/product-page/{slug}</code></td><td><code>/products/{handle}</code></td><td><code>/{url-key}.html</code></td></tr>
+            <tr><td>Category</td><td><code>/{page}?category={id}</code></td><td><code>/collections/{handle}</code></td><td><code>/{category-path}.html</code></td></tr>
+            <tr><td>Blog post</td><td><code>/post/{slug}</code></td><td><code>/blogs/{blog}/{handle}</code></td><td><code>/blog/{slug}</code> (module-dependent)</td></tr>
+            <tr><td>Blog index</td><td><code>/blog</code></td><td><code>/blogs/news</code></td><td><code>/blog</code></td></tr>
+            <tr><td>Static page</td><td><code>/{slug}</code></td><td><code>/pages/{handle}</code></td><td><code>/{identifier}</code></td></tr>
+            <tr><td>Cart</td><td><code>/cart-page</code></td><td><code>/cart</code></td><td><code>/checkout/cart</code></td></tr>
+            <tr><td>Account</td><td><code>/account/my-account</code></td><td><code>/account</code></td><td><code>/customer/account</code></td></tr>
+          </tbody>
+        </table>
+
+        <p>Two structural traps in that table.</p>
+
+        <p>The static page row is the nastiest, because on Wix a page called "Shipping Information" lives at <code>/shipping-information</code> and on Shopify the same page lives at <code>/pages/shipping-information</code>. Every static page gains a path segment. On Magento a CMS page keeps the bare slug, which is one small point in Magento's favour on migration day.</p>
+
+        <p>The category row is worse. Wix stores commonly implement categories as a single page with a query parameter, so <code>/shop?category=espresso-machines</code> is a distinct indexed page with distinct rankings. Shopify's redirect list matches on path and ignores query strings entirely, which means you cannot express that redirect in the admin at all. You need either a Liquid-level redirect in the template of the target page, or a Shopify Function, or an app. This is the single most common thing that cannot be done the obvious way, and it needs to be discovered during planning rather than on cutover morning.</p>
+
+        <pre><code class="language-liquid">{%- comment -%}
+  templates/page.shop.liquid — handles legacy Wix category query params
+  that Shopify's redirect list cannot match. This is a client-side
+  fallback and it is NOT as good as a 301: Google will follow it but
+  the signal is weaker. Use it only for the tail; map the top pages
+  properly with an app or at the CDN.
+{%- endcomment -%}
+{%- assign legacy = request.path | append: '?' | append: request.query_string -%}
+{%- case request.query_string -%}
+  {%- when 'category=espresso-machines' -%}
+    &lt;script&gt;window.location.replace('/collections/espresso-machines');&lt;/script&gt;
+    &lt;link rel="canonical" href="{{ shop.url }}/collections/espresso-machines"&gt;
+  {%- when 'category=grinders' -%}
+    &lt;script&gt;window.location.replace('/collections/grinders');&lt;/script&gt;
+    &lt;link rel="canonical" href="{{ shop.url }}/collections/grinders"&gt;
+{%- endcase -%}</code></pre>
+
+        <p>I do not love that and I include it because sometimes it is what you have. The better answer, if you are on Shopify and control your DNS, is to put a small edge worker in front — Cloudflare Workers or similar — that handles query-string-aware redirects with a real 301 before the request reaches Shopify. It is thirty lines of code and it removes the entire class of limitation.</p>
+
+        <pre><code class="language-javascript">// Cloudflare Worker in front of Shopify. Handles the redirects the
+// Shopify admin cannot express: query strings, regex patterns, and
+// anything needing logic. Everything else passes through untouched.
+const EXACT = new Map([
+  ["/shop?category=espresso-machines", "/collections/espresso-machines"],
+  ["/shop?category=grinders",          "/collections/grinders"],
+  ["/cart-page",                       "/cart"],
+]);
+
+const PATTERNS = [
+  // Wix product pages -> Shopify products. Handles differ where Wix
+  // allowed characters Shopify normalises, so the map file below
+  // carries the exceptions; this rule covers the clean majority.
+  [/^\/product-page\/(.+)$/, (m) =&gt; `/products/${slugify(m[1])}`],
+  [/^\/post\/(.+)$/,         (m) =&gt; `/blogs/news/${slugify(m[1])}`],
+];
+
+function slugify(s) {
+  return decodeURIComponent(s)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")   // Shopify's handle rules
+    .replace(/^-+|-+$/g, "");
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const key = url.search ? url.pathname + url.search : url.pathname;
+
+    // Exceptions file, loaded from KV: hand-mapped URLs where the
+    // pattern rule produces the wrong target.
+    const override = await env.REDIRECTS.get(key);
+    if (override) return Response.redirect(url.origin + override, 301);
+
+    if (EXACT.has(key)) {
+      return Response.redirect(url.origin + EXACT.get(key), 301);
+    }
+
+    for (const [re, fn] of PATTERNS) {
+      const m = url.pathname.match(re);
+      if (m) return Response.redirect(url.origin + fn(m), 301);
+    }
+
+    return fetch(request);
+  },
+};</code></pre>
+
+        <p>On Magento the equivalent lives in Nginx or in Magento's own <code>url_rewrite</code> table. I prefer Nginx for bulk pattern rules and the database table for individual product mappings, because the table survives a web server rebuild and is visible to non-engineers in the admin.</p>
+
+        <pre><code class="language-nginx"># Bulk patterns in the server block. A map is O(1) regardless of size,
+# unlike a chain of `rewrite` directives which are evaluated in order.
+map $request_uri $wix_redirect {
+    default                       "";
+    include                       /etc/nginx/wix-redirects.map;
 }
 
 server {
-    if ($new_uri) {
-        return 301 $new_uri;
+    # ... standard Magento config ...
+
+    # Exact-match table first: 4,000 hand-mapped URLs, one per line,
+    # generated from the mapping spreadsheet by CI.
+    if ($wix_redirect) {
+        return 301 $wix_redirect;
+    }
+
+    # Then the pattern rules, for the tail.
+    location ~ ^/product-page/(.+)$ {
+        return 301 /$1.html;
+    }
+    location ~ ^/post/(.+)$ {
+        return 301 /blog/$1;
+    }
+
+    # Anything still matching an old Wix system path is genuinely gone.
+    # 410 rather than 404: it tells Google to stop asking.
+    location ~ ^/(_partials|_api/wix-ecommerce)/ {
+        return 410;
     }
 }</code></pre>
 
-        <hr />
+        <p>The <code>map</code> directive matters at scale. I have seen a configuration with 3,000 sequential <code>rewrite</code> rules that added 40 ms to every request on the site, including ones that matched nothing, because Nginx evaluates them in order for every request. A map is a hash lookup.</p>
+
+        <h2>7. Verifying the Map Before You Need It</h2>
+
+        <p>The redirect map is code and deserves a test suite. Write it as a CSV of source and expected destination, and run it against the staging site before cutover and against production immediately after.</p>
+
+        <pre><code class="language-python">import csv, sys, requests
+from concurrent.futures import ThreadPoolExecutor
+
+BASE = sys.argv[1]          # https://staging.example.com
+rows = list(csv.DictReader(open("redirect-map.csv")))
+
+def check(row):
+    src, want = row["source"], row["destination"]
+    try:
+        r = requests.get(BASE + src, allow_redirects=False, timeout=15)
+    except Exception as e:
+        return (src, "ERROR", str(e))
+
+    if r.status_code not in (301, 308):
+        # 302 is the most common real-world failure here and it is
+        # nearly invisible: the user gets where they are going and
+        # Google does not consolidate the signal.
+        return (src, f"HTTP {r.status_code}", r.headers.get("Location", ""))
+
+    got = r.headers.get("Location", "").replace(BASE, "")
+    if got.rstrip("/") != want.rstrip("/"):
+        return (src, "WRONG_TARGET", got)
+
+    # A 301 to a 404 is worse than no redirect, because it looks fine
+    # in a header check. Follow one hop and confirm a 200.
+    final = requests.get(BASE + want, allow_redirects=True, timeout=15)
+    if final.status_code != 200:
+        return (src, f"TARGET_{final.status_code}", want)
+
+    if len(final.history) &gt; 1:
+        return (src, "CHAIN", " -&gt; ".join(h.headers["Location"] for h in final.history))
+
+    return None
+
+with ThreadPoolExecutor(max_workers=12) as pool:
+    failures = [f for f in pool.map(check, rows) if f]
+
+for src, why, detail in failures:
+    print(f"{why}\t{src}\t{detail}")
+print(f"\n{len(failures)} failures of {len(rows)}", file=sys.stderr)
+sys.exit(1 if failures else 0)</code></pre>
+
+        <p>Four failure modes that script catches, in rough order of how often I find them.</p>
+
+        <p><strong>302 instead of 301.</strong> Shopify's own redirect list issues a 302 in some circumstances, and several migration apps default to temporary redirects. The visitor experience is identical, which is precisely why it survives testing. Google treats a 302 as "keep indexing the old URL", so rankings stay on a page that is gone.</p>
+
+        <p><strong>Redirect to a 404.</strong> The target slug was wrong, usually because the product handle changed during import. The header check passes, the user gets an error page. This is the single most common defect in migration app output.</p>
+
+        <p><strong>Chains.</strong> Old URL redirects to an intermediate that redirects to the destination. Each hop loses a little and adds latency. Common when a site had a previous redesign whose redirects are still in place — you inherit a chain and need to flatten it so every legacy URL points directly at the final target.</p>
+
+        <p><strong>Loops.</strong> Rarer and catastrophic. Usually a trailing-slash disagreement between the redirect rule and the platform's own canonicalisation.</p>
+
+        <h2>8. Product Data and the Variant Matrix</h2>
+
+        <p>The part everybody plans for and which is usually less painful than expected, with three exceptions.</p>
+
+        <p><strong>Option naming inconsistency.</strong> Wix does not enforce consistent option names across products, so you get "Size", "size", "SIZE" and "Sizing" in the same catalogue. On Shopify these become distinct option types and your filtering breaks. Normalise before import, and produce a report of every distinct option name so a human can look at it. On the coffee retailer's catalogue there were 41 distinct option names that reduced to 9.</p>
+
+        <p><strong>Variant limits.</strong> Shopify's classic limit is 100 variants across a maximum of 3 options. A Wix product with 4 option types, or with 240 combinations, does not fit and needs restructuring — usually by splitting into multiple products or moving one option to a line-item property. Find these before you start, because the restructuring is a merchandising decision, not a technical one.</p>
+
+        <pre><code class="language-python">import csv, collections
+
+products = collections.defaultdict(lambda: {"opts": set(), "variants": 0})
+
+with open("wix-catalog.csv", newline="", encoding="utf-8-sig") as f:
+    for row in csv.DictReader(f):
+        h = row["handleId"]
+        products[h]["variants"] += 1
+        # Wix exports options as name/value pairs across numbered columns.
+        for i in (1, 2, 3, 4, 5, 6):
+            name = row.get(f"productOptionName{i}", "").strip()
+            if name:
+                products[h]["opts"].add(name)
+
+blocked = []
+for h, p in products.items():
+    if len(p["opts"]) &gt; 3:
+        blocked.append((h, f"{len(p['opts'])} option types: {sorted(p['opts'])}"))
+    elif p["variants"] &gt; 100:
+        blocked.append((h, f"{p['variants']} variants"))
+
+print(f"{len(blocked)} of {len(products)} products need restructuring for Shopify")
+for h, why in sorted(blocked):
+    print(f"  {h}: {why}")
+
+# Also surface the naming mess, which is the thing nobody checks.
+names = collections.Counter()
+for p in products.values():
+    names.update(p["opts"])
+print("\nDistinct option names:")
+for n, c in names.most_common():
+    print(f"  {c:5d}  {n!r}")</code></pre>
+
+        <p><strong>Description HTML.</strong> Wix descriptions come out full of <code>&lt;span style="..."&gt;</code>, <code>font-family</code> declarations and Wix-specific classes. Import them raw and every product page carries typography that fights your new theme. Strip to a whitelist of tags and let the theme style it. Keep the structure — headings, lists, paragraphs, links — and discard every style attribute.</p>
+
+        <pre><code class="language-python">from bs4 import BeautifulSoup
+
+ALLOWED = {"p", "br", "strong", "em", "b", "i", "u", "ul", "ol", "li",
+           "h2", "h3", "h4", "a", "table", "thead", "tbody", "tr", "th", "td"}
+KEEP_ATTRS = {"a": {"href", "title"}}
+
+def clean(html_in: str) -&gt; str:
+    soup = BeautifulSoup(html_in, "html.parser")
+    for tag in soup.find_all(True):
+        if tag.name not in ALLOWED:
+            tag.unwrap()            # keep the text, drop the wrapper
+            continue
+        allowed = KEEP_ATTRS.get(tag.name, set())
+        for attr in list(tag.attrs):
+            if attr not in allowed:
+                del tag[attr]
+    # Wix wraps everything in nested divs; unwrapping leaves blank
+    # paragraphs behind. Drop them.
+    for p in soup.find_all("p"):
+        if not p.get_text(strip=True) and not p.find("img"):
+            p.decompose()
+    return str(soup)</code></pre>
+
+        <h2>9. Images, and the Thing That Costs You a Week</h2>
+
+        <p>Images are the largest single volume of data and the part most likely to still be wrong a month after launch.</p>
+
+        <p>Download originals rather than importing by URL. If you point the new platform at Wix's CDN and let it fetch, three things go wrong: you get whatever derivative the URL pointed at, the fetch is rate-limited so a 4,000-image catalogue takes hours and silently fails on some, and if the Wix site is ever taken down you have broken images. Download everything to disk first, verify counts, then upload.</p>
+
+        <p>Check dimensions after download. Shopify wants at least 2,048 px on the longest edge for zoom to work well; Magento's default product image settings assume something similar. A catalogue of 800 px images looks acceptable on a Wix theme built around them and looks poor on a new theme with a larger product gallery. If the originals are genuinely small, that is a reshoot conversation and it needs to happen before launch, not after someone complains.</p>
+
+        <p>And alt text. Wix stores it, most migration tools drop it, and it is both an accessibility requirement and a source of image search traffic. Carry it across explicitly.</p>
+
+        <pre><code class="language-bash"># Sanity-check the downloaded set before uploading anything.
+# Count, then look at the distribution of longest edge.
+find media -name '*.jpg' -o -name '*.png' -o -name '*.webp' | wc -l
+
+# identify is from ImageMagick. This prints the longest edge per file
+# and buckets it, which shows you the reshoot problem immediately.
+find media -type f -print0 \
+  | xargs -0 -P 8 -n 50 identify -format '%[fx:max(w,h)]\n' 2&gt;/dev/null \
+  | awk '{ if ($1 &lt; 800) b="&lt;800"; else if ($1 &lt; 1500) b="800-1499";
+           else if ($1 &lt; 2048) b="1500-2047"; else b="2048+"; c[b]++ }
+         END { for (k in c) printf "%-10s %d\n", k, c[k] }' \
+  | sort
+
+# Find zero-byte and truncated downloads, which happen on rate limits
+# and which no import tool will warn you about.
+find media -type f -size -1k -print</code></pre>
+
+        <h2>10. Customers, and the Password Problem That Has No Solution</h2>
+
+        <p>You cannot migrate passwords. Wix hashes them, you cannot read them, and even if you could, the hash algorithm will not match the target platform's. Anyone who tells you otherwise is describing a security problem.</p>
+
+        <p>So every customer must reset. What you control is how that feels.</p>
+
+        <p>The wrong way, which I have watched happen: launch, customers try to log in, fail, get a generic "incorrect password" error, try again, give up, and either check out as a guest or leave. Support gets a week of tickets. The customer's stored addresses and order history are sitting right there and they cannot reach them.</p>
+
+        <p>The right way has three parts. Import customers with their email, name, addresses, marketing consent status and tags before launch, so the account exists. Send a proactive email two days before cutover explaining that a password reset will be required and why, with the reset link ready to use on launch day. And detect the failed-login case specifically: when an email exists in the system but the password does not match a hash created after the migration date, show "we moved to a new store — please set a new password" with a one-click link, not a generic failure.</p>
+
+        <p>The marketing consent field deserves care of its own. Wix's contacts export includes subscription status; if you import everyone as subscribed you have a GDPR problem and a deliverability problem, because a chunk of that list never opted in. Map the consent field explicitly, and if the export does not distinguish clearly, import as unsubscribed and run a re-permission campaign. That will cost you list size and it is the correct call.</p>
+
+        <pre><code class="language-python">import csv
+
+# Shopify customer import. The two columns people get wrong are
+# "Accepts Email Marketing" and "Tags" — the first for the legal
+# reason above, the second because it is your only chance to carry
+# segmentation across, and adding tags later means an API run.
+with open("wix-contacts.csv", encoding="utf-8-sig") as src, \
+     open("shopify-customers.csv", "w", newline="", encoding="utf-8") as dst:
+
+    w = csv.DictWriter(dst, fieldnames=[
+        "First Name", "Last Name", "Email", "Accepts Email Marketing",
+        "Address1", "City", "Province", "Country Code", "Zip", "Phone",
+        "Tags", "Note",
+    ])
+    w.writeheader()
+
+    for row in csv.DictReader(src):
+        # Wix uses several values here across export versions.
+        subscribed = row.get("Subscriber Status", "").strip().lower()
+        accepts = "yes" if subscribed in ("subscribed", "active") else "no"
+
+        w.writerow({
+            "First Name": row.get("First Name", ""),
+            "Last Name": row.get("Last Name", ""),
+            "Email": row["Email"].strip().lower(),
+            "Accepts Email Marketing": accepts,
+            "Address1": row.get("Street Address", ""),
+            "City": row.get("City", ""),
+            "Province": row.get("State", ""),
+            "Country Code": row.get("Country Code", "GB"),
+            "Zip": row.get("Postal Code", ""),
+            "Phone": row.get("Phone", ""),
+            # Provenance tag: lets you segment "migrated" customers in
+            # every campaign afterwards, which you will want.
+            "Tags": "migrated-wix,legacy-" + row.get("Created Date", "")[:4],
+            "Note": f"Wix contact ID {row.get('Contact ID', '')}",
+        })</code></pre>
+
+        <h2>11. Order History, and Whether to Bother</h2>
+
+        <p>A genuine decision rather than an obvious one.</p>
+
+        <p>Importing historical orders into Shopify is possible via the Admin API but has real friction: orders created through the API do not behave identically to native ones, financial reporting will show them in the period you imported rather than the period they occurred unless you set <code>processed_at</code> carefully, and there is a per-store limit on backdating that Shopify enforces. Magento is more permissive but you are writing directly into a complex schema.</p>
+
+        <p>The question to ask is what the history is for. If it is so customers can see past orders and reorder, import it — that is a real feature and customers use it. If it is so finance has a record, do not: export to CSV, keep it in the accounting system, and let the new platform start clean. If it is because "we might need it", that is not a requirement.</p>
+
+        <p>My default for a store leaving Wix is to import the last 24 months of orders, customer-visible but marked with a tag, and archive everything older as CSV in cold storage. That covers reorder behaviour, which drops off sharply after two years, without importing a decade of noise.</p>
+
+        <pre><code class="language-graphql"># Shopify Admin GraphQL. The critical fields are processedAt, which
+# backdates the order for reporting, and the financial/fulfillment
+# status, which must be set explicitly or the order looks unpaid and
+# unfulfilled and appears in every operational queue.
+mutation ImportLegacyOrder($order: OrderCreateOrderInput!) {
+  orderCreate(order: $order) {
+    order { id name processedAt }
+    userErrors { field message }
+  }
+}
+
+# Variables:
+# {
+#   "order": {
+#     "email": "customer@example.com",
+#     "processedAt": "2024-03-11T14:22:09Z",
+#     "currency": "GBP",
+#     "tags": ["migrated-wix", "legacy-order"],
+#     "financialStatus": "PAID",
+#     "fulfillmentStatus": "FULFILLED",
+#     "lineItems": [
+#       { "variantId": "gid://shopify/ProductVariant/44...",
+#         "quantity": 2, "priceSet": { "shopMoney": { "amount": "18.50",
+#         "currencyCode": "GBP" } } }
+#     ],
+#     "transactions": [
+#       { "kind": "SALE", "status": "SUCCESS",
+#         "amountSet": { "shopMoney": { "amount": "37.00",
+#         "currencyCode": "GBP" } }, "gateway": "manual" }
+#     ]
+#   }
+# }</code></pre>
+
+        <p>Set <code>financialStatus</code> and <code>fulfillmentStatus</code> or you will import three thousand orders that all appear in the "unfulfilled" queue and your warehouse team will have a bad morning. I have done this. It was not a good morning.</p>
+
+        <h2>12. SEO Preservation Beyond Redirects</h2>
+
+        <p>Redirects are the biggest lever and they are not the only one. Five other things move ranking on a replatform and each is cheap to get right in advance.</p>
+
+        <p><strong>Title tags and meta descriptions.</strong> Wix stores these per page and no migration tool carries them reliably. Export them in the crawl, map them onto the new URLs, and import. If you do not, the new platform generates them from templates and every page's title changes at exactly the moment its URL changes, which is two variables at once. Keep the titles identical through cutover and optimise them a month later when you can attribute the effect.</p>
+
+        <p><strong>Canonical tags.</strong> Verify that the new platform's canonicals point where you expect. Shopify's default behaviour on collection-filtered URLs and on products accessed through a collection path — <code>/collections/x/products/y</code> — is to self-canonicalise in ways that can fragment your signals. Check the rendered canonical on a product reached three different ways.</p>
+
+        <p><strong>Structured data.</strong> Wix emits Product and Offer schema by default. Shopify themes vary; some emit good structured data, some emit none, some emit it with the price in the wrong currency. Losing your rich results on migration day costs click-through even where rankings hold. Validate with the Rich Results Test on a sample before launch, not after.</p>
+
+        <p><strong>Internal linking.</strong> Every internal link in your blog content and page copy points at old URLs. They will redirect and that is not the same as pointing at the destination. Rewrite them in the content during migration, in bulk, with the same map you use for the redirects. A page whose every internal link is a 301 hop is a page you have handicapped for no reason.</p>
+
+        <p><strong>hreflang, if you have it.</strong> Multi-region Wix sites use a language-prefix structure that rarely maps cleanly onto Shopify Markets or Magento store views. The reciprocal requirement means a broken hreflang set is worse than none. If this applies to you, treat it as its own workstream.</p>
+
+        <pre><code class="language-python"># Rewrite internal links in migrated content using the same map as
+# the redirects. Run this on descriptions, blog bodies and CMS pages
+# BEFORE import, not after.
+import re, csv
+
+redirects = {r["source"]: r["destination"]
+             for r in csv.DictReader(open("redirect-map.csv"))}
+
+HREF = re.compile(r'href="(?:https?://(?:www\.)?olddomain\.com)?(/[^"]*)"')
+
+def rewrite(body: str) -&gt; tuple[str, int]:
+    n = 0
+    def sub(m):
+        nonlocal n
+        path = m.group(1)
+        target = redirects.get(path.rstrip("/")) or redirects.get(path)
+        if target:
+            n += 1
+            return f'href="{target}"'
+        return m.group(0)
+    return HREF.sub(sub, body), n
+
+# Anything left pointing at the old domain after this is either a
+# genuine external reference or a URL missing from your map. Report
+# them; do not silently leave them.
+UNMAPPED = re.compile(r'href="https?://(?:www\.)?olddomain\.com(/[^"]*)"')</code></pre>
+
+        <h2>13. Things That Cannot Move</h2>
+
+        <p>A short list of things that surprise people on cutover day because they are not data.</p>
+
+        <p><strong>Payment gateway tokens.</strong> Stored cards, saved payment methods, and subscription mandates are held by the gateway against the old store's account. Some gateways will migrate tokens between accounts on request, with paperwork and a lead time of weeks. Most will not. If you have subscriptions, this is the hardest single problem in your migration and it needs to be the first thing you investigate, not the last. A store with 800 active subscriptions that all need re-authorising is a store that will lose a meaningful fraction of them.</p>
+
+        <p><strong>Reviews.</strong> Wix's native reviews cannot be exported in a structured form on most plans. Third-party review apps often can, and if reviews are on a service like Trustpilot or Judge.me they move with the service rather than the platform. Reviews carry real SEO value through review snippets, and losing 2,000 of them is visible in click-through rate. Check this early.</p>
+
+        <p><strong>Google Search Console history.</strong> Not migrated, and there is no equivalent of the change-of-address tool when the domain stays the same. Your data is continuous if the domain is unchanged, which is another argument for keeping it.</p>
+
+        <p><strong>Domain-level email.</strong> If Wix is hosting the domain's DNS and mail routing goes through it, moving DNS on cutover day can break email. Check the MX records, write them down, and set them explicitly on the new DNS before switching nameservers. This is the mistake that takes down the client's email during the busiest day of the project and it is entirely avoidable.</p>
+
+        <p><strong>Anything using the Wix domain for verification.</strong> Google Merchant Center, Facebook domain verification, DNS TXT records for third-party services. Enumerate the TXT records on the current zone and carry them over verbatim.</p>
+
+        <h2>14. Cutover Day</h2>
+
+        <p>The sequence matters and the wrong order costs you.</p>
+
+        <p>My runbook, roughly, for a same-domain migration:</p>
+
+        <p><strong>T minus 7 days.</strong> Full data import to the new platform, complete. Redirect map loaded and tested against staging. Password reset email drafted. DNS TTL lowered to 300 seconds — this is the one that people forget and it turns a 15-minute cutover into a 24-hour one.</p>
+
+        <p><strong>T minus 2 days.</strong> Customer email sent. Freeze content changes on the old site; anything edited after this point will not carry across. Final delta import of orders and customers.</p>
+
+        <p><strong>T minus 1 day.</strong> Re-run the redirect test suite. Verify the new site's <code>robots.txt</code> — the number of launches I have seen go out with <code>Disallow: /</code> still in place from staging is genuinely alarming, and Shopify's password page has the same effect. Confirm analytics and tag manager are firing on the new site.</p>
+
+        <p><strong>Cutover.</strong> Point DNS. With a 300-second TTL the switch propagates in minutes. Watch for the first real order on the new platform, which is your genuine smoke test — synthetic checkout tests miss payment configuration problems that only appear with a real card.</p>
+
+        <p><strong>T plus 1 hour.</strong> Run the redirect test suite against production. Submit the new sitemap in Search Console. Use the URL Inspection tool to request indexing on the top twenty pages, which does nothing magical but does get a crawler there sooner.</p>
+
+        <p><strong>T plus 24 hours.</strong> Check Search Console's Coverage report for a spike in 404s, which is your list of URLs you missed. Check server logs for 404 paths receiving traffic. Both of these will find things your inventory did not.</p>
+
+        <pre><code class="language-bash"># The single most valuable post-launch query: what are real visitors
+# and crawlers actually requesting that returns 404? Your URL
+# inventory missed things. This tells you which ones mattered.
+awk '$9 == 404 { print $7 }' /var/log/nginx/access.log \
+  | sed 's/?.*//' \
+  | sort | uniq -c | sort -rn | head -50
+
+# And separately, what is Googlebot getting? A 404 to a user is a bad
+# experience; a 404 to Googlebot is a deindexed page.
+grep -i 'googlebot' /var/log/nginx/access.log \
+  | awk '$9 ~ /^(404|410)$/ { print $9, $7 }' \
+  | sort | uniq -c | sort -rn | head -30</code></pre>
+
+        <h2>15. The First Six Weeks, and What Normal Looks Like</h2>
+
+        <p>Expectations, because the anxiety after a migration is worse than the problem usually is.</p>
+
+        <p>A well-executed same-domain replatform typically shows a 10 to 20% dip in organic sessions in weeks one and two, recovering to baseline by week five or six. That dip is Google recrawling, reprocessing the redirects, and reassessing pages whose HTML changed. It is normal and it is not a signal to start changing things.</p>
+
+        <p>What is not normal: a dip of more than 35%, a dip that is still deepening in week three, or a dip concentrated on a specific page type. Each points at something specific. A dip concentrated on blog traffic means your blog redirects are wrong. A dip concentrated on one category means that category's collection page is not being indexed, often because of a canonical or a <code>noindex</code> carried from staging.</p>
+
+        <p>Resist the urge to change things in week two. The single most common way a recoverable migration becomes an unrecoverable one is somebody panicking, rewriting the title tags, restructuring the categories, and adding a third variable while the first two are still settling. Fix defects — broken redirects, 404s, missing canonicals. Change nothing that is merely a preference.</p>
+
+        <p>Track four things weekly: total indexed pages in Search Console, 404 count, organic sessions by landing page type, and rankings for your top thirty terms. If indexed pages are climbing and 404s are falling, you are recovering regardless of what the session graph does that week.</p>
+
+        <h2>16. A Migration With Real Numbers</h2>
+
+        <p>A UK homeware and gifting retailer, mid-2025. Wix to Shopify. 1,240 SKUs, 2,900 unique URLs in the final inventory, 41,000 organic sessions a month, £1.4m annual revenue, and a strong blog that accounted for 38% of organic entries.</p>
+
+        <p><strong>Planning.</strong> Three weeks before any data moved. The URL inventory took four days and found 2,900 URLs against the 1,600 in the Wix sitemap. The difference was the blog's old <code>/blog-1/</code> structure from a 2021 rebuild, tag archive pages, and 340 URLs with a legacy <code>?lang=en</code> parameter that Wix had indexed.</p>
+
+        <p><strong>The mapping.</strong> 2,900 URLs. 1,910 mapped by pattern rule, 640 mapped by hand because the slugs differed, 210 sent to a category or the homepage because the specific page no longer existed, and 140 given a 410 because they were genuinely dead — tag archives with one post, mostly. Every URL with a backlink or with any organic click in sixteen months was mapped individually and checked.</p>
+
+        <p><strong>The blocked products.</strong> 34 products exceeded Shopify's three-option limit. Merchandising restructured 28 of them into option combinations that fit and split 6 into separate products, which meant 6 new URLs with no history and a decision about where the old URL should point. We pointed each old URL at the most-searched of its children rather than at the collection, which was the right call on two-thirds of them.</p>
+
+        <p><strong>Result.</strong> Cutover on a Tuesday in June. Organic sessions dipped 14% in week one, 9% in week two, and were 3% above the pre-migration baseline by week five. Conversion rate went from 1.9% to 2.4%, which was the theme and the faster checkout rather than anything I did. Revenue in the first full month was up 21%.</p>
+
+        <p><strong>What went wrong.</strong> Two things.</p>
+
+        <p>The first: 190 product images came across at 800 px because the export contained derivative URLs and my transform-stripping regex did not handle a variant of the Wix URL format that used <code>/v1/crop/</code> rather than <code>/v1/fill/</code>. I caught it four days after launch when someone mentioned the zoom looked bad. Refetching and re-uploading took a day. The lesson is the dimension-distribution check in the image section above, which I now run as a gate rather than as a spot check.</p>
+
+        <p>The second, and more serious: Shopify's automatic redirect creation. When you rename a product handle in the Shopify admin, Shopify creates a redirect from the old handle automatically. During the final data cleanup, a merchandiser corrected 40 product titles, which changed 40 handles, which created 40 new redirects — and 22 of those collided with entries in our imported redirect map. Shopify's redirect list resolved the conflict by keeping its own entry, so 22 of our carefully-mapped legacy URLs began redirecting to a redirect, and 6 of them formed a chain three hops deep.</p>
+
+        <p>Nobody noticed for nine days, because they all resolved to the right place eventually. We found it in the week-two chain check. The fix was mechanical; the lesson was that the redirect map is not write-once and needs re-verifying after any admin work, which is now a weekly cron for the first two months.</p>
+
+        <p><strong>What I would do differently.</strong> I would have run the redirect test suite daily rather than at launch and at week two. It is a five-minute job that runs unattended and it would have caught the chains on day one. And I would have frozen product edits in the admin during the cutover week and made that freeze explicit to the merchandising team, rather than assuming that "we're mid-migration" implied it.</p>
+
+        <h2>17. Migrating to Magento Instead</h2>
+
+        <p>Most of the above applies unchanged. The differences worth calling out.</p>
+
+        <p><strong>The URL suffix.</strong> Magento appends <code>.html</code> to product and category URLs by default. You can turn it off, and the argument for turning it off is aesthetic. The argument for leaving it on is that it is one fewer thing to configure and there is no ranking difference. Decide before you build the map, because changing it afterwards invalidates every redirect target.</p>
+
+        <p><strong>URL rewrites are database rows.</strong> Magento's <code>url_rewrite</code> table holds every product and category URL plus every redirect. It is also where a common performance problem lives: a store with 200,000 rewrites and no index tuning has a slow router. And Magento generates a rewrite for every product in every category path by default, which multiplies fast. Set <code>catalog/seo/generate_category_product_rewrites</code> to off unless you specifically need those paths.</p>
+
+        <pre><code class="language-sql">-- Bulk-load the redirect map into Magento's rewrite table. Doing this
+-- in SQL rather than through the admin is the only sane approach at
+-- volume, but note: entity_type 'custom' and redirect_type 301.
+INSERT INTO url_rewrite
+  (entity_type, entity_id, request_path, target_path, redirect_type, store_id, description)
+VALUES
+  ('custom', 0, 'product-page/moka-pot-6-cup', 'moka-pot-6-cup.html', 301, 1, 'wix-migration'),
+  ('custom', 0, 'post/how-to-grind-coffee',    'blog/how-to-grind-coffee', 301, 1, 'wix-migration');
+
+-- The description column is doing real work here: it lets you find,
+-- audit and if necessary remove the entire migration set later.
+SELECT COUNT(*) FROM url_rewrite WHERE description = 'wix-migration';
+
+-- Find rewrites whose target does not resolve to another rewrite or
+-- a real entity — these are your redirects-to-404.
+SELECT r.request_path, r.target_path
+FROM url_rewrite r
+LEFT JOIN url_rewrite t
+  ON t.request_path = r.target_path AND t.store_id = r.store_id
+WHERE r.description = 'wix-migration'
+  AND r.redirect_type = 301
+  AND t.url_rewrite_id IS NULL
+  AND r.target_path NOT LIKE '%.html';</code></pre>
+
+        <p><strong>Static content and the theme.</strong> A Magento launch adds a build step that Shopify does not have, and the first deploy after DNS switch is the riskiest moment. Deploy and warm the cache before the DNS change, not after. A cold Magento with an empty full-page cache under real traffic is a slow Magento, and slow on day one is a bad first impression for both users and Googlebot. There is more on the infrastructure side of this in the <a href="/blog/azure-cloud-architecture-magento/">Azure architecture piece</a>, and the ERP considerations if you are connecting one are in the <a href="/blog/sap-commerce-cloud-erp-sync/">commerce-to-ERP synchronisation write-up</a>.</p>
+
+        <h2>18. Questions That Come Up</h2>
+
+        <p><strong>"Can we keep the old site running in parallel?"</strong> Only on a different domain or subdomain, and then you must <code>noindex</code> it or you have created a duplicate of your entire catalogue competing with yourself. I would generally not: it splits attention, it creates a route by which stale content gets linked, and the temptation to leave it up "just in case" turns into eighteen months of paying for Wix.</p>
+
+        <p><strong>"How long should we keep the redirects?"</strong> Forever, or as close to it as you can manage. There is a common belief that a year is enough. Links on the internet do not expire, and a redirect costs you essentially nothing. I have found nine-year-old redirects still carrying meaningful traffic. The only reason to remove one is if it has become a chain or a loop.</p>
+
+        <p><strong>"Should we change the URL structure while we're at it?"</strong> No. Do one thing. If your URLs are genuinely bad — keyword-stuffed, or containing dates that make evergreen content look stale — change them six months after the replatform has settled, as a separate project with its own redirect map. Two structural changes at once means you cannot attribute the outcome to either.</p>
+
+        <p><strong>"What about changing the domain at the same time?"</strong> Also no, for the same reason, unless the domain change is the point of the exercise. If you must do both, do the platform migration first on the existing domain, let it settle for two months, then move the domain with the change-of-address tool. Domain moves are actually the more predictable of the two when done alone.</p>
+
+        <p><strong>"Do migration apps work?"</strong> They move product data adequately and I use them for that. They do not do URL mapping properly, they do not handle option normalisation, and they do not tell you what they skipped. Use one for the bulk product load and do the redirect work yourself. The coffee retailer's problem was not that they used an app; it was that they believed the app had finished.</p>
+
+        <p><strong>"How long does this take?"</strong> For a 1,000 to 3,000 SKU store with a blog, on a same-domain move to Shopify with a bought theme: six to nine weeks end to end, of which three are planning and mapping, two are build and import, one is testing, and the rest is contingency you will use. Anyone quoting two weeks is not doing the URL work.</p>
+
+        <p><strong>"What if traffic doesn't come back?"</strong> Then something specific is broken and it is findable. In every case I have investigated, a permanent loss traced to one of four things: redirects that were 302s, a <code>noindex</code> left in place, redirects pointing at 404s, or a large content section that was never migrated at all. Check those four before considering anything more exotic.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>If you are planning a move off Wix, in this order.</p>
+
+        <p>First, build the URL inventory. Before choosing a platform, before pricing a theme, before anything. It takes two to four days and it tells you the true size of the project. Every migration that has gone badly for someone I have talked to skipped this step, and every one that went well started with it.</p>
+
+        <p>Second, investigate the things that cannot move. Payment tokens, subscriptions, reviews, and any third-party service tied to the current setup. These have long lead times and they are the only items on the list that can make the project not viable. Find out in week one.</p>
+
+        <p>Third, run the option-name and variant-limit report against the product export. If forty products need restructuring, that is a merchandising conversation that runs in parallel with everything else rather than blocking the import.</p>
+
+        <p>Fourth, write the redirect map and the test suite together. The map is worthless without something that verifies it, and the suite takes an hour to write. Run it against staging every day from the moment the new site has content.</p>
+
+        <p>Fifth, export title tags and meta descriptions and plan to keep them identical through cutover. Free, five minutes of work, and it removes an entire variable from your post-launch diagnosis.</p>
+
+        <p>And decide, before you start, who owns the outcome and how you will know. "The site launched" is not the measure. Organic sessions back to baseline by week six, 404 rate below where it was, and every URL with a backlink resolving to a 200 in one hop — those are measurable, and a project with a measurable definition of done gets finished. The coffee retailer's migration was declared complete on the Saturday it launched. That was the actual mistake; everything else followed from it.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/technical-seo-structured-data/">Technical SEO: Schema, Site Speed & Structured Data</a></strong>
+              <strong><a href="/blog/technical-seo-structured-data/">Technical SEO: Schema, Site Speed &amp; Structured Data</a></strong>
               <p>Preserving SEO ranking during migrations.</p>
             </li>
             <li>
@@ -234,7 +935,6 @@ server {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -268,6 +968,6 @@ server {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Optimizing Core Web Vitals for Ecommerce Success | MODRACX</title>
-  <meta name="description" content="An exhaustive engineering guide to Core Web Vitals remediation: LCP image preloading, INP long task chunking with scheduler.yield(), and CLS layout stabilization." />
+  <meta name="description" content="Hands-on Core Web Vitals remediation for storefronts: identifying the LCP element, splitting its four phases, breaking long tasks for INP, and reserving space for CLS." />
   <meta property="og:title" content="Optimizing Core Web Vitals for Ecommerce Success | MODRACX" />
   <meta property="og:description" content="Core Web Vitals optimization guide by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -194,17 +196,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Optimizing Core Web Vitals for Ecommerce Success</h1>
-        <p class="lede">The definitive engineering manual on LCP hero image prioritization, INP main-thread chunking, and CLS zero-shift layout engineering.</p>
+        <p class="lede">Ninety-one percent of a homeware retailer's mobile URLs failed LCP with no deploy behind it. Finding the actual element took a minute; fixing it took forty. Here is the diagnostic order I use.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 28 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -229,268 +231,544 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>1. The Core Web Vitals Benchmark Architecture</h2>
-        <p>Google's Core Web Vitals program measures real-user experience metrics collected via the Chrome User Experience Report (CrUX) field data. Pages failing Web Vitals thresholds suffer immediate organic ranking penalties and increased bounce rates. As e-commerce platforms grow in complexity—incorporating third-party trackers, dynamic pricing engines, massive client-side state managers, and heavy interactive UI components—maintaining green scores across the board becomes a severe engineering constraint. This requires systemic architectural patterns to prioritize critical rendering paths, yield main-thread execution, and maintain absolute geometric stability during network responses.</p>
+        <h2>1. The Ticket That Started This</h2>
 
-        <p>Modern browser engines operate within strict limits. When a main thread is occupied executing JavaScript, it cannot paint layout updates or respond to user inputs. This fundamental constraint dictates our optimization strategy. We must orchestrate asset delivery over HTTP/3 streams, decompose monolithic JavaScript tasks, and enforce strict dimensional boundaries for rendering components. This methodology aligns closely with principles discussed in <a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify</a>.</p>
+        <p>A haberdashery retailer emailed me a screenshot of Search Console on a Tuesday morning in March. Ninety-one percent of their mobile URLs had moved into the "Needs improvement" bucket for Largest Contentful Paint over the preceding twenty-eight days. Nothing had been deployed. No theme change, no new app, no migration. Their developer had spent two days looking and found nothing, and the working theory by the time it reached me was that Google had changed the thresholds.</p>
 
-        <hr />
+        <p>Google had not changed the thresholds. What had changed was that the retailer had run a spring campaign, and the campaign had put a full-width video banner at the top of the category templates. The video element itself was not the LCP element — video does not qualify. The LCP element was the poster image behind it, which was a 1.4MB JPEG served at full resolution to every device, injected by the campaign app after hydration, and therefore invisible to the browser's preload scanner. On a mid-range Android on 4G it landed at 5.8 seconds.</p>
 
-        <h2>2. Largest Contentful Paint (LCP) Engineering</h2>
-        <p>Largest Contentful Paint measures the time it takes to render the largest image or text block visible within the initial viewport. For product detail pages (PDPs), this is invariably the main product image. For category landing pages (PLPs), it is often the promotional hero banner. A slow LCP is rarely a single bottleneck; it is a compound failure across four distinct phases: Time to First Byte (TTFB), Resource Load Delay, Resource Load Time, and Element Render Delay. Optimizing LCP requires addressing each segment of this critical path.</p>
-        
-        <p><strong>Phase 1 & 2: TTFB and Resource Load Delay.</strong> TTFB must be aggressively minimized using edge-tier caching. E-commerce platforms must implement Server-Side Rendering (SSR) or Static Site Generation (SSG) for all primary landing pages, ensuring the HTML document is served directly from a CDN edge node. To eliminate resource load delay, we deploy declarative fetch directives. The <code>fetchpriority="high"</code> attribute signals to the browser's heuristic scanner that a specific asset must supersede parser-blocking scripts.</p>
+        <p>The fix took forty minutes. Serve the poster as a responsive AVIF, put it in the server-rendered HTML with an explicit <code>src</code>, add <code>fetchpriority="high"</code>, and remove the <code>loading="lazy"</code> the theme applied to everything. Mobile LCP came back at 2.1 seconds in the lab and, twenty-nine days later, at 2.4 seconds at the 75th percentile in the field.</p>
 
-        <pre><code class="language-html">&lt;!-- Preloading critical fonts to prevent layout shift and text rendering delays --&gt;
-&lt;link rel="preload" href="/fonts/space-grotesk-v1.woff2" as="font" type="font/woff2" crossorigin&gt;
+        <p>I open with this because it is the shape of almost every Core Web Vitals problem I have been paid to fix. The metric is not mysterious. The element causing it is usually identifiable in under a minute. And the fix is usually small, specific, and boring. What makes this work hard is not the remediation — it is that most teams never identify the actual offending element, and so they optimise things that were never the problem.</p>
 
-&lt;!-- Prioritizing the LCP hero image directly in the document head based on viewport --&gt;
-&lt;link rel="preload" as="image" href="https://cdn.modracx.com/media/catalog/product/hero-mobile.avif" fetchpriority="high" media="(max-width: 767px)"&gt;
-&lt;link rel="preload" as="image" href="https://cdn.modracx.com/media/catalog/product/hero-desktop.avif" fetchpriority="high" media="(min-width: 768px)"&gt;</code></pre>
+        <p>This article is about the fixing. Identifying what is actually slow, and then changing it. The companion piece on <a href="/blog/core-web-vitals-optimization/">measuring and defending Core Web Vitals</a> covers the other half — how to know your numbers are real, how field data differs from lab data, and how to stop a regression before it ships. If you do not yet trust your measurements, start there and come back. Everything below assumes you can see a number and believe it.</p>
 
-        <p><strong>Phase 3 & 4: Resource Load Time and Element Render Delay.</strong> We combat network transmission duration using modern image codecs (AVIF or WebP) generated dynamically via an edge image optimization service.</p>
+        <h2>2. What The Three Metrics Are Actually Timing</h2>
 
-        <pre><code class="language-html">&lt;!-- Render component enforcing aspect ratio and priority --&gt;
-&lt;picture&gt;
-  &lt;source type="image/avif" srcset="hero-mobile.avif" media="(max-width: 767px)"&gt;
-  &lt;source type="image/avif" srcset="hero-desktop.avif" media="(min-width: 768px)"&gt;
-  &lt;img 
-    src="hero-desktop.jpg" 
-    alt="Premium Leather Boot"
-    width="800" 
-    height="1000" 
-    fetchpriority="high" 
-    decoding="sync"
-    style="aspect-ratio: 4/5; object-fit: cover;"
-  &gt;
+        <p>You need the mechanics, not the definitions. The definitions are on web.dev and they are one paragraph each. The mechanics are what tell you where to look.</p>
+
+        <p><strong>LCP</strong> is a timestamp, not a duration. The browser watches paint operations and keeps a running record of the largest contentful element painted so far. Every time something bigger paints, LCP updates. When the user first interacts — scrolls, taps, presses a key — the record freezes. So LCP is "when did the biggest visible thing appear", measured from navigation start. Crucially, the candidate can change several times during load, and the one that sticks is often not the one you would have guessed.</p>
+
+        <p><strong>INP</strong> is a percentile over a session, not a single event. The browser measures every discrete interaction — click, tap, keypress; not scroll, not hover — from the moment the input event is received to the moment the next frame is painted showing the result. At the end of the session it reports roughly the worst one, with a small allowance for high-interaction pages. That last detail matters: one bad interaction out of fifty will be your INP. You cannot average your way out of a slow filter panel.</p>
+
+        <p><strong>CLS</strong> is a sum of session windows, which is the part everyone gets wrong. It is not the total of every shift on the page. The browser groups shifts into windows of at most five seconds, separated by gaps of a second with no shift, and reports the worst window. A page that shifts badly once and then settles scores worse than a page that shifts trivially forty times. And shifts within 500ms of a user interaction are excluded, which is why opening an accordion does not count against you but a banner arriving on its own does.</p>
+
+        <p>The thresholds, for reference, because people misquote them constantly: LCP good under 2.5 seconds, poor over 4.0. INP good under 200ms, poor over 500. CLS good under 0.1, poor over 0.25. Everything between good and poor is "needs improvement", which in practice means Google is not rewarding you and your users are noticing.</p>
+
+        <h2>3. Identify The LCP Element Before You Touch Anything</h2>
+
+        <p>This is the step teams skip, and skipping it is why so much performance work produces nothing.</p>
+
+        <p>I have watched a team spend a sprint compressing product thumbnails on a category page whose LCP element was the H1 heading, blocked by a web font. I have watched another team preload a hero image that had not been the LCP element since a redesign eight months earlier. Both teams were competent. Both were optimising a guess.</p>
+
+        <p>Paste this into the console on the page you care about and reload:</p>
+
+        <pre><code class="language-javascript">// The LCP element, its URL, and the timestamp — logged every time the candidate changes.
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    console.log(
+      Math.round(entry.startTime) + 'ms',
+      entry.element ? entry.element.tagName : '(no element)',
+      entry.url || '(text node)',
+      entry.size
+    );
+    if (entry.element) entry.element.style.outline = '4px solid magenta';
+  }
+}).observe({ type: 'largest-contentful-paint', buffered: true });</code></pre>
+
+        <p>The outline is the useful part. You will see the candidate change two or three times during load, and the magenta box will land on the final one. On a product page that is nearly always the main product image. On a category page it is a toss-up between the hero banner and the first product tile, and it changes depending on viewport height — which means your desktop answer and your mobile answer can be different elements requiring different fixes.</p>
+
+        <p>Do this on mobile emulation with CPU throttling, not on your desktop. On a fast machine with a fibre connection the whole page paints so quickly that the candidate sequence is compressed and you can misread which element actually sticks. Set the throttle to 4x CPU slowdown and Fast 4G, and reload three times.</p>
+
+        <h3>The four phases, and which one you are actually in</h3>
+
+        <p>Once you know the element, break its timeline into four parts. This decomposition is the single most useful diagnostic in performance work, and it comes straight out of Google's own analysis of LCP:</p>
+
+        <p><strong>Time to First Byte</strong> — navigation start to the first byte of the HTML document. <strong>Resource load delay</strong> — TTFB to the moment the browser starts fetching the LCP resource. <strong>Resource load time</strong> — how long that fetch takes. <strong>Element render delay</strong> — download complete to actually painted.</p>
+
+        <p>Each phase has an entirely different set of fixes, and knowing which one dominates saves you from doing the wrong work. Here is a script that prints the split:</p>
+
+        <pre><code class="language-javascript">// Break LCP into its four phases. Run after the page has settled.
+new PerformanceObserver((list) =&gt; {
+  const lcp = list.getEntries().at(-1);
+  const nav = performance.getEntriesByType('navigation')[0];
+  const ttfb = nav.responseStart;
+
+  // The resource entry for the LCP image, if it is an image at all.
+  const res = performance.getEntriesByName(lcp.url)[0];
+  const loadStart = res ? res.requestStart : lcp.loadTime;
+  const loadEnd = res ? res.responseEnd : lcp.loadTime;
+
+  console.table({
+    ttfb: Math.round(ttfb),
+    loadDelay: Math.round(loadStart - ttfb),
+    loadTime: Math.round(loadEnd - loadStart),
+    renderDelay: Math.round(lcp.startTime - loadEnd)
+  });
+}).observe({ type: 'largest-contentful-paint', buffered: true });</code></pre>
+
+        <p>In my experience the distribution across storefronts is roughly: half the time it is load delay, a quarter it is TTFB, a fifth it is load time, and render delay is rare but spectacular when it happens. Load delay dominating means the browser did not know about the image early enough. That is a discoverability problem, not a compression problem, and no amount of squeezing the JPEG will help.</p>
+
+        <h2>4. Fixing Load Delay: Make The Image Discoverable</h2>
+
+        <p>Load delay is the gap between the HTML arriving and the browser deciding to fetch your hero image. On a well-built page that gap is close to zero, because the preload scanner sees the <code>&lt;img&gt;</code> tag while the main parser is still busy and starts the fetch immediately. On a badly built page it can be three seconds.</p>
+
+        <p>There are exactly four ways to break discoverability, and I see all four regularly.</p>
+
+        <p><strong>The image is set by JavaScript.</strong> A carousel that stores slide URLs in <code>data-src</code> and assigns <code>src</code> after hydration. The scanner sees nothing. The fetch cannot begin until your bundle has downloaded, parsed and executed — on a mid-range Android that is two seconds before the request is even made. This is the single most common cause of catastrophic LCP on Shopify themes, because every slider app does it.</p>
+
+        <p><strong>The image is a CSS background.</strong> A background image is discovered only after the stylesheet has downloaded, parsed, and matched a selector to an element in the layout tree. That is three sequential steps. Worse, until quite recently background images were not eligible as LCP candidates at all in some engines, which produces the confusing situation where your visually largest element is not your LCP element. If the hero is a background image and it matters, make it an <code>&lt;img&gt;</code> with <code>object-fit: cover</code>.</p>
+
+        <p><strong>The image is lazy-loaded.</strong> <code>loading="lazy"</code> on the LCP element is a self-inflicted wound and it is depressingly common, because themes apply it globally and nobody exempts the first image. The browser defers the fetch until layout confirms proximity to the viewport, which by definition happens after CSS. I have measured this at 400–700ms on category pages.</p>
+
+        <p><strong>The page is client-side rendered.</strong> If the HTML the server sends is an empty <code>&lt;div id="root"&gt;</code>, nothing is discoverable. No hint fixes this. The fix is server-side rendering, and if that is out of scope, at minimum emit the hero image markup in the initial document even if the framework replaces it.</p>
+
+        <p>The remediation, for the common case:</p>
+
+        <pre><code class="language-html">&lt;!-- The LCP image on a PDP. Every attribute here is load-bearing. --&gt;
+&lt;img
+  src="/media/catalog/product/oak-dining-table-1200.avif"
+  srcset="/media/catalog/product/oak-dining-table-640.avif 640w,
+          /media/catalog/product/oak-dining-table-960.avif 960w,
+          /media/catalog/product/oak-dining-table-1200.avif 1200w"
+  sizes="(max-width: 767px) 100vw, 640px"
+  width="1200" height="1500"
+  alt="Solid oak dining table, seats six"
+  fetchpriority="high"
+  decoding="sync" /&gt;
+&lt;!-- No loading="lazy". No data-src. Real src, in the server-rendered HTML. --&gt;</code></pre>
+
+        <p><code>fetchpriority="high"</code> deserves its own paragraph because it is the highest-return single attribute on the platform. Browsers assign images a low initial priority and only promote them once layout reveals they are in the viewport. That promotion happens after CSS, which is exactly the delay you were trying to avoid. <code>fetchpriority="high"</code> short-circuits it. I have measured 300–500ms from that one attribute on image-heavy product pages, and it costs nothing.</p>
+
+        <p>The corollary is that you must also demote things. Priority is a bandwidth share, not a queue position — a high-priority request does not jump ahead of a low-priority one, it gets a fatter slice of the same pipe. If you mark six things high, you have marked nothing high. Put <code>fetchpriority="low"</code> on carousel slides two through six, and <code>loading="lazy"</code> on everything below the fold.</p>
+
+        <pre><code class="language-html">&lt;!-- Slide 2 onward: explicitly deprioritised so they do not starve slide 1 --&gt;
+&lt;img src="/media/gallery/detail-2.avif" fetchpriority="low" loading="lazy"
+     width="800" height="1000" alt="Table edge detail" decoding="async" /&gt;</code></pre>
+
+        <h2>5. Fixing Load Time: The Bytes Themselves</h2>
+
+        <p>Once the fetch starts promptly, the remaining question is how long it takes. This is the phase where compression actually matters, and it is worth getting right, but it is rarely the dominant phase and I would not start here.</p>
+
+        <p>The three levers, in order of return: serve a modern format, serve the right dimensions, and serve it from somewhere close.</p>
+
+        <p>On format, AVIF beats WebP by roughly 20–30% at equivalent perceptual quality on photographic content, and WebP beats JPEG by 25–35%. The catch with AVIF is encode time — it is an order of magnitude slower to encode than WebP, which matters if you are transforming on the fly at the edge rather than at upload. My default is AVIF with a WebP fallback and a JPEG floor, generated asynchronously at upload and cached forever.</p>
+
+        <pre><code class="language-html">&lt;picture&gt;
+  &lt;source type="image/avif"
+          srcset="/media/p/table-640.avif 640w, /media/p/table-1200.avif 1200w"
+          sizes="(max-width: 767px) 100vw, 640px" /&gt;
+  &lt;source type="image/webp"
+          srcset="/media/p/table-640.webp 640w, /media/p/table-1200.webp 1200w"
+          sizes="(max-width: 767px) 100vw, 640px" /&gt;
+  &lt;img src="/media/p/table-1200.jpg" width="1200" height="1500"
+       fetchpriority="high" alt="Solid oak dining table, seats six" /&gt;
 &lt;/picture&gt;</code></pre>
 
-        <p><strong>Phase 4: Element Render Delay.</strong> Notice the deliberate use of <code>decoding="sync"</code> for the LCP candidate. While asynchronous decoding prevents main-thread lockups for below-the-fold assets, synchronous decoding forces the browser to paint the critical image concurrently with the layout render. Below-the-fold assets must aggressively utilize <code>loading="lazy"</code> and <code>decoding="async"</code> to conserve bandwidth and CPU cycles.</p>
+        <p>On dimensions, the mistake I see most is a <code>sizes</code> attribute that lies. If your product image is 640px wide in the desktop layout but <code>sizes</code> says <code>100vw</code>, the browser picks the 1600px candidate on a 1600px viewport and you have quadrupled the bytes for nothing. Check <code>sizes</code> against the actual computed width at each breakpoint. In Chrome, hovering the <code>currentSrc</code> in the Elements panel tells you which candidate was chosen; if it is not the one you expected, <code>sizes</code> is wrong.</p>
 
-        <p>Client-side rendering (CSR) frameworks are the enemy of LCP. If a JavaScript bundle must download, parse, and execute before injecting the LCP image into the DOM, the LCP metric is mathematically guaranteed to fail on mobile devices. The LCP element must be present in the initial HTML payload.</p>
+        <p>Here is a quick audit that catches the worst offenders on any page:</p>
 
-        <hr />
+        <pre><code class="language-javascript">// Images served far larger than they are displayed. Ratio &gt; 2 is waste.
+[...document.images]
+  .map(img =&gt; ({
+    src: img.currentSrc.split('/').pop(),
+    natural: img.naturalWidth,
+    displayed: Math.round(img.getBoundingClientRect().width * devicePixelRatio),
+    ratio: +(img.naturalWidth / Math.max(1, img.getBoundingClientRect().width * devicePixelRatio)).toFixed(2)
+  }))
+  .filter(r =&gt; r.ratio &gt; 2)
+  .sort((a, b) =&gt; b.ratio - a.ratio)
+  .forEach(r =&gt; console.log(r));</code></pre>
 
-        <h2>3. Interaction to Next Paint (INP) Remediation</h2>
-        <p>Interaction to Next Paint replaces First Input Delay (FID) as the definitive interactivity metric. While FID measured only the input delay of the first interaction, INP calculates the latency of all interactions across the entire session lifecycle. It measures the time from the user's input (mouse click, tap, keypress) to the exact moment the browser paints the next frame reflecting that visual update.</p>
+        <p>On delivery, an image served from an origin in Frankfurt to a customer in Sydney costs you 300ms before a byte of payload moves. Put images behind a CDN. This is table stakes and I will not spend more words on it, except to say that a surprising number of Magento installations serve <code>/media/</code> from origin while serving <code>/static/</code> from the CDN, because the CDN rule was written against the wrong path prefix.</p>
 
-        <p>The browser event loop processes tasks sequentially on a single thread. Long tasks—JavaScript executions exceeding 50 milliseconds—block this thread. If a user interacts during a long task, the input event is queued, causing high INP. E-commerce sites are notorious for high INP due to heavy client-side state management, massive DOM trees recalculating styles, and bloated third-party tag managers injecting tracking scripts.</p>
-        
-        <p>Remediation requires decomposing monolithic tasks into smaller chunks. The <code>scheduler.yield()</code> API provides a native mechanism to pause execution, allowing the browser to flush pending rendering updates or process user inputs before resuming the heavy computation. When <code>scheduler.yield()</code> is unavailable, we must rely on fallback mechanisms utilizing <code>setTimeout</code> or <code>MessageChannel</code>.</p>
+        <h2>6. Fixing Render Delay: When The Image Arrives And Nothing Happens</h2>
 
-        <pre><code class="language-javascript">// Yielding Main Thread Control During Complex Product Swatch Calculations
-async function updateProductOptions(selectedSku) {
-  // 1. Update selected UI button state immediately to provide visual feedback
-  document.getElementById(`swatch-${selectedSku}`).classList.add('is-active');
-  document.getElementById('add-to-cart-btn').setAttribute('aria-busy', 'true');
+        <p>Render delay is the rarest phase and the most confusing when you hit it. The image downloaded at 900ms and painted at 2,400ms. What happened in between?</p>
 
-  // 2. Yield thread control back to browser painter
-  // This allows the browser to paint the 'is-active' class state before locking up the thread
-  await yieldToMain();
+        <p>Usually one of three things. The main thread was busy — a long task was executing and the browser could not paint. A render-blocking stylesheet had not finished. Or the element was inside a container that was hidden, or had zero height, until some script gave it dimensions.</p>
 
-  // 3. Recalculate price and stock state without locking input responsiveness
-  const { price, stock, deliveryData } = await computeComplexPriceMatrix(selectedSku);
-  
-  // 4. Yield again before applying massive DOM updates
-  await yieldToMain();
+        <p>The main-thread case is the common one, and it is where LCP and INP problems share a root cause. If your page executes 900ms of JavaScript during load, everything queues behind it, including the paint of an image that arrived long ago. The fix is not an image fix, it is the long-task work described further down.</p>
 
-  // 5. Apply final DOM mutations
-  updatePriceDOM(price);
-  updateStockStatusDOM(stock);
-  document.getElementById('add-to-cart-btn').removeAttribute('aria-busy');
-}
+        <p>The render-blocking CSS case is worth a specific check. Every stylesheet in the head blocks the first paint, and therefore blocks LCP. A theme that ships one 340KB stylesheet for the whole site is blocking paint on rules that apply to the checkout while the customer is looking at a category page.</p>
 
-// Robust yielding utility with fallback mechanisms
+        <pre><code class="language-html">&lt;!-- Inline what is needed to paint the first viewport --&gt;
+&lt;style&gt;/* critical: header, hero, first product row. ~12KB budget. */&lt;/style&gt;
+
+&lt;!-- Load the rest without blocking paint --&gt;
+&lt;link rel="stylesheet" href="/static/theme.css" media="print"
+      onload="this.media='all'" /&gt;
+&lt;noscript&gt;&lt;link rel="stylesheet" href="/static/theme.css" /&gt;&lt;/noscript&gt;</code></pre>
+
+        <p>The <code>media="print"</code> trick works because a print stylesheet is not render-blocking; the <code>onload</code> flips it to <code>all</code> once it has arrived. It is a hack, it has been a hack for years, and it is still the most reliable way to do this without a build step. If you have a build step, extract genuine critical CSS instead — there is more on doing that properly in the <a href="/blog/critical-css-optimization/">critical CSS extraction guide</a>.</p>
+
+        <p>One caveat I have been bitten by: inlining critical CSS makes your HTML bigger, and if your HTML is not cached, you now pay for those bytes on every navigation. On a site with good full-page caching that is fine. On a site where every product page is generated fresh, inlining 40KB of CSS into every response can cost more than it saves. Measure the whole page, not the one metric.</p>
+
+        <h2>7. When The LCP Element Is Text</h2>
+
+        <p>Roughly a fifth of the pages I audit have a text LCP — usually the H1 or a large promotional heading. This changes the fix entirely and people rarely notice they are in this case.</p>
+
+        <p>A text block cannot paint until its font is available or the browser gives up waiting. With <code>font-display: block</code>, which is the default behaviour for a bare <code>@font-face</code>, the browser hides the text for up to three seconds. Your LCP is then gated on a font file that is discovered inside a stylesheet, which is itself discovered inside the HTML — two round trips deep.</p>
+
+        <pre><code class="language-css">@font-face {
+  font-family: 'Storefront Sans';
+  src: url('/fonts/storefront-sans.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;   /* paint immediately in the fallback, swap when ready */
+  /* Subset to Latin so the file is 24KB, not 180KB */
+  unicode-range: U+0000-00FF, U+2000-206F, U+20A0-20BF;
+}</code></pre>
+
+        <p><code>font-display: swap</code> fixes LCP and creates a CLS problem, which we deal with below. <code>font-display: optional</code> fixes both but means first-time visitors see the fallback for the whole session. I use <code>swap</code> plus metric overrides, which gets you most of both.</p>
+
+        <p>Pair that with a preload, because a font referenced inside CSS is discovered late by construction:</p>
+
+        <pre><code class="language-html">&lt;link rel="preload" href="/fonts/storefront-sans.woff2" as="font"
+      type="font/woff2" crossorigin /&gt;</code></pre>
+
+        <p>The <code>crossorigin</code> attribute is mandatory even for same-origin fonts, because font requests are made in anonymous CORS mode. Omit it and the preload does not match the real request, so you download the font twice and make the page slower. If a site has font preloads at all, this is the first thing I check, and it is wrong perhaps half the time.</p>
+
+        <h2>8. INP: Find The Interaction, Not The Bundle</h2>
+
+        <p>INP work fails the same way LCP work fails: teams optimise in general rather than finding the specific interaction that is slow.</p>
+
+        <p>Remember that INP reports approximately your worst interaction. If a customer clicks eight things on a product page and seven of them respond in 80ms, and the eighth — the size selector, which recalculates price and stock and re-renders the gallery — takes 640ms, your INP is 640ms. Making the seven fast ones faster does literally nothing.</p>
+
+        <p>So find the eighth. In the field this is what attribution data is for, and it is covered in the <a href="/blog/core-web-vitals-optimization/">measurement companion</a>. In the lab, this console snippet is enough:</p>
+
+        <pre><code class="language-javascript">// Log every interaction slower than 100ms, with its target element.
+new PerformanceObserver((list) =&gt; {
+  for (const e of list.getEntries()) {
+    if (!e.interactionId || e.duration &lt; 100) continue;
+    console.log(
+      Math.round(e.duration) + 'ms',
+      e.name,                                    // pointerdown, click, keydown...
+      e.target ? e.target.tagName + '.' + e.target.className : '?',
+      'delay=' + Math.round(e.processingStart - e.startTime),
+      'work=' + Math.round(e.processingEnd - e.processingStart)
+    );
+  }
+}).observe({ type: 'event', durationThreshold: 40, buffered: true });</code></pre>
+
+        <p>Then use the site. Click everything a customer would click: add to cart, open the size dropdown, apply a filter, open the mini-cart, expand the description accordion, type in the search box. Six or seven interactions. The list you get back is your actual INP work queue, in priority order, and it is almost never what you expected.</p>
+
+        <h3>The three parts of an interaction</h3>
+
+        <p>Every interaction splits into input delay, processing time, and presentation delay, and the split tells you what to fix.</p>
+
+        <p><strong>Input delay</strong> is the time between the user touching the screen and your handler starting. Non-zero input delay means the main thread was busy with something unrelated — usually a third-party script, a hydration pass, or an analytics flush. The fix is not in your handler at all.</p>
+
+        <p><strong>Processing time</strong> is your event handlers running. This is the part people assume dominates and it usually does not, but when it does, the culprit is normally a synchronous re-render of far more of the page than needed.</p>
+
+        <p><strong>Presentation delay</strong> is from your handler finishing to the frame appearing. Large values mean the resulting style recalculation, layout, and paint were expensive — a huge DOM, a CSS selector that forces the whole tree to be re-matched, or an animation on a layout-triggering property.</p>
+
+        <p>I keep this distinction front of mind because the wrong diagnosis wastes weeks. A team once rewrote their filter logic in a Web Worker to fix an INP of 520ms. The processing time was 40ms. The input delay was 430ms, caused by a tag manager loading four vendor scripts synchronously on first scroll. The worker rewrite changed nothing.</p>
+
+        <h2>9. Breaking Long Tasks</h2>
+
+        <p>A long task is any block of main-thread work over 50ms. During one, the browser cannot respond to input and cannot paint. The whole of INP remediation is, at bottom, making long tasks shorter.</p>
+
+        <p>The native tool for this is <code>scheduler.yield()</code>, available in Chrome 129 and later. It yields to the browser and returns a promise that resumes with priority over other pending tasks — which is the crucial difference from the old <code>setTimeout(0)</code> trick, where your continuation goes to the back of the queue behind everything else that woke up.</p>
+
+        <pre><code class="language-javascript">// Yield to the browser, with a fallback for engines without scheduler.yield.
 function yieldToMain() {
-  if (globalThis.scheduler && globalThis.scheduler.yield) {
-    return globalThis.scheduler.yield();
+  if ('scheduler' in window &amp;&amp; 'yield' in scheduler) {
+    return scheduler.yield();
   }
-  // Fallback pushing the continuation to the end of the macrotask queue
-  return new Promise(resolve => {
-    setTimeout(resolve, 0);
-  });
+  // Fallback: back of the task queue, but still better than blocking.
+  return new Promise(resolve =&gt; setTimeout(resolve, 0));
 }
 
-async function computeComplexPriceMatrix(sku) {
-  // Simulating heavy synchronous calculation (e.g., parsing massive tier price arrays)
-  const data = window.productStateCache[sku];
-  let calculatedPrice = data.basePrice;
-  
-  for (let i = 0; i < data.rules.length; i++) {
-    // Process rules in chunks to avoid a single massive blocking task
-    if (i % 50 === 0) {
+// Apply a facet filter over 800 product tiles without blocking for 400ms.
+async function applyFilter(products, predicate, render) {
+  let lastYield = performance.now();
+  const visible = [];
+
+  for (const product of products) {
+    visible.push(predicate(product) ? product : null);
+    // Yield roughly every 50ms rather than every N items — item cost varies.
+    if (performance.now() - lastYield &gt; 50) {
       await yieldToMain();
+      lastYield = performance.now();
     }
-    calculatedPrice = applyDiscountRule(calculatedPrice, data.rules[i]);
   }
-  
-  return {
-    price: calculatedPrice,
-    stock: data.inventory > 0 ? 'In Stock' : 'Out of Stock'
-  };
+  render(visible.filter(Boolean));
 }</code></pre>
 
+        <p>Yield on elapsed time, not on item count. I have seen <code>if (i % 100 === 0)</code> in production code where the per-item cost varied by a factor of thirty depending on whether the product had variants, so the yields landed in completely the wrong places.</p>
 
+        <p>The other half of the technique is answering the user immediately and doing the work afterwards. If a customer taps a filter checkbox, the checkbox should tick within one frame. Whether the grid has finished re-rendering is a separate question.</p>
 
-        <hr />
+        <pre><code class="language-javascript">checkbox.addEventListener('change', async (e) =&gt; {
+  // 1. Visual acknowledgement, synchronously, in this frame.
+  e.target.closest('.facet').classList.toggle('is-active', e.target.checked);
 
-        <h2>4. Cumulative Layout Shift (CLS) Zero-Shift Layout Engineering</h2>
-        <p>Cumulative Layout Shift quantifies unexpected visual displacement of page content. A layout shift occurs when a visible element changes its position between rendered frames. In e-commerce, CLS is predominantly caused by dynamically loaded promotional banners, custom web fonts triggering flash of unstyled text (FOUT), and asynchronous images lacking explicit dimensional attributes.</p>
-        
-        <p>The standard defense is reserving spatial boundaries before asynchronous content arrives. The CSS <code>aspect-ratio</code> property is highly effective for responsive containers, ensuring the browser allocates the exact required geometric space before the image payload is downloaded.</p>
+  // 2. Let the browser paint that before we do anything expensive.
+  await yieldToMain();
 
-        <pre><code class="language-css">/* Zero-Shift Layout for Product Grid Items */
-.product-card {
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  /* Prevent width reflows */
-  width: 100%;
-}
+  // 3. Now the heavy part. INP was already recorded against step 1.
+  const results = await fetchFilteredProducts(currentFacets());
+  renderGrid(results);
+});</code></pre>
 
-.product-card__image-wrapper {
-  position: relative;
-  width: 100%;
-  /* Reserve space for responsive image */
-  aspect-ratio: 3 / 4;
-  background-color: var(--color-skeleton-bg);
-  overflow: hidden;
-}
+        <p>In React 18 and later, <code>useTransition</code> expresses the same idea declaratively — mark the expensive state update as non-urgent and React will keep the urgent one responsive:</p>
 
-.product-card__image {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0;
-  transition: opacity 0.3s ease-in-out;
-}
+        <pre><code class="language-javascript">const [isPending, startTransition] = useTransition();
 
-.product-card__image.is-loaded {
-  opacity: 1;
-}
-
-/* Dynamic Banners Space Reservation */
-.promo-banner-container {
-  min-height: 60px; /* Base height for mobile */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  contain: paint layout; /* CSS containment isolates layout recalculations */
-}
-
-@media (min-width: 768px) {
-  .promo-banner-container {
-    min-height: 40px; /* Base height for desktop */
-  }
+function onFacetToggle(facet) {
+  setCheckedFacets(prev =&gt; toggle(prev, facet));   // urgent: the checkbox
+  startTransition(() =&gt; {
+    setActiveQuery(buildQuery(facet));             // non-urgent: the 800-tile grid
+  });
 }</code></pre>
 
-        <p>Notice the use of the <code>contain</code> CSS property on the banner container. CSS containment instructs the browser that the element and its descendants are isolated from the rest of the page. This means that if the banner content changes dynamically, the browser does not need to recalculate the layout for the entire document, strictly limiting the scope of any potential layout shifts.</p>
+        <p>This is genuinely effective on headless storefronts, where the usual INP failure is a global state mutation forcing the whole product grid to re-render synchronously. But it is not a substitute for rendering less. If your grid re-renders 800 components on every keystroke, <code>startTransition</code> makes that interruptible rather than cheap, and on a slow device interruptible-but-enormous is still slow.</p>
 
-        <p>Web font optimization is a notorious vector for layout shifts. When a fallback system font renders text, and the custom web font subsequently loads and swaps in, differences in x-height, kerning, and letter-spacing cause line wraps to recalculate, violently shifting all subsequent DOM nodes. We mitigate this using CSS <code>size-adjust</code>, <code>ascent-override</code>, and <code>descent-override</code> within the <code>@font-face</code> declaration to mathematically normalize the fallback font metrics against the target custom font.</p>
+        <h2>10. The Third-Party Problem</h2>
 
-        <pre><code class="language-css">/* Normalizing fallback font to match target web font metrics perfectly */
+        <p>On most storefronts I audit, more than half the main-thread time during load belongs to code the merchant did not write. Tag manager, analytics, chat widget, reviews, personalisation, consent banner, A/B testing, affiliate tracking, and two things nobody can identify.</p>
+
+        <p>Quantify it before you argue about it. This gives you a per-origin breakdown of main-thread cost:</p>
+
+        <pre><code class="language-javascript">// Long tasks, grouped by the script origin that caused them.
+const byOrigin = {};
+new PerformanceObserver((list) =&gt; {
+  for (const task of list.getEntries()) {
+    const src = task.attribution[0]?.containerSrc
+             || task.attribution[0]?.containerName
+             || 'unattributed';
+    let host = 'inline';
+    try { host = new URL(src).host; } catch (e) { /* inline or same-doc */ }
+    byOrigin[host] = (byOrigin[host] || 0) + task.duration;
+  }
+}).observe({ type: 'longtask', buffered: true });
+
+// After the page settles:
+setTimeout(() =&gt; console.table(byOrigin), 8000);</code></pre>
+
+        <p>Take that table to whoever owns the marketing stack. "The review widget costs 1.9 seconds of main-thread time on mobile" is a conversation. "The site feels slow" is not.</p>
+
+        <p>Three tactics, in the order I try them. First, delay loading until interaction or idle — most third-party scripts do not need to run in the first three seconds, and the pattern used on this very site defers the analytics tag until first pointer event or browser idle, whichever comes first. Second, move what you can into a Web Worker via Partytown, which genuinely works for tag managers and genuinely does not work for anything that needs synchronous DOM access. Third, and most effective, remove it. I have never audited a storefront that needed all of its tags, and the fastest script is the one that is not there.</p>
+
+        <p>What I would not do is <code>async</code> everything and call it done. <code>async</code> stops the script blocking the parser; it does nothing about the 400ms of execution once it arrives, which lands at an unpredictable moment and is frequently exactly when the customer is trying to tap something.</p>
+
+        <h2>11. CLS: Reserve The Space</h2>
+
+        <p>CLS is the most tractable of the three metrics. Every layout shift has an identifiable cause and nearly every cause has a mechanical fix. If your CLS is bad, it is because nobody has looked, not because it is hard.</p>
+
+        <p>Find the shifts first:</p>
+
+        <pre><code class="language-javascript">// Log each layout shift with the elements that moved.
+new PerformanceObserver((list) =&gt; {
+  for (const shift of list.getEntries()) {
+    if (shift.hadRecentInput) continue;   // user-initiated shifts do not count
+    console.log('shift', shift.value.toFixed(4), 'at', Math.round(shift.startTime) + 'ms');
+    for (const source of shift.sources || []) {
+      console.log('   moved:', source.node);
+      if (source.node?.style) source.node.style.outline = '3px dashed orange';
+    }
+  }
+}).observe({ type: 'layout-shift', buffered: true });</code></pre>
+
+        <p>The <code>sources</code> array is the whole game. It names the DOM nodes that actually moved. Nine times in ten the answer is immediately obvious once you can see the node.</p>
+
+        <h3>Images and media</h3>
+
+        <p>Every <code>&lt;img&gt;</code>, <code>&lt;video&gt;</code> and <code>&lt;iframe&gt;</code> needs intrinsic dimensions. On <code>&lt;img&gt;</code> that means <code>width</code> and <code>height</code> attributes — not CSS, attributes — because the browser uses them to compute an aspect ratio and reserve the box before any bytes arrive.</p>
+
+        <pre><code class="language-css">/* The attributes give the ratio; this keeps it responsive. */
+.product-media img {
+  width: 100%;
+  height: auto;      /* required, or the height attribute wins and distorts */
+  display: block;
+}
+
+/* For containers whose content arrives later and has a known shape */
+.promo-slot {
+  aspect-ratio: 16 / 5;
+  contain: layout paint;   /* isolate: internal changes cannot reflow the page */
+}</code></pre>
+
+        <p><code>contain: layout paint</code> is underused. It tells the browser that the element's internal layout cannot affect anything outside it, so when the slot's content changes, the reflow is scoped to that box. On a page with a lot of independently-loading widgets this converts a page-wide shift into a local one that scores zero.</p>
+
+        <h3>Fonts</h3>
+
+        <p>With <code>font-display: swap</code>, text paints in the fallback font and then re-paints in the real one. If the two fonts have different metrics, every line box changes height and everything below moves. This is the classic "the page settled and then jumped" shift at around 800ms.</p>
+
+        <p>The fix is to make the fallback match the real font's metrics closely enough that the swap is invisible:</p>
+
+        <pre><code class="language-css">/* A fallback tuned to match Storefront Sans, so the swap does not reflow. */
 @font-face {
-  font-family: 'Space Grotesk Fallback';
-  src: local('Arial');
-  size-adjust: 104.5%;
-  ascent-override: 95%;
-  descent-override: 25%;
+  font-family: 'Storefront Fallback';
+  src: local('Arial'), local('Helvetica Neue');
+  size-adjust: 104.2%;      /* scale glyph widths to match */
+  ascent-override: 92.8%;   /* pin the line box height */
+  descent-override: 23.6%;
   line-gap-override: 0%;
 }
 
-body {
-  font-family: 'Space Grotesk', 'Space Grotesk Fallback', sans-serif;
+body { font-family: 'Storefront Sans', 'Storefront Fallback', sans-serif; }</code></pre>
+
+        <p>Getting those four numbers right by hand is tedious. The <code>fontaine</code> package and Next.js's built-in font handling both compute them automatically from the font file's metrics tables, and I would use one of those rather than eyeballing it. When I did eyeball it the first time, I got <code>size-adjust</code> about 6% wrong and turned a vertical shift into a horizontal one, which is somehow worse because it reflows line wraps.</p>
+
+        <h3>Late-injected content</h3>
+
+        <p>The cookie banner that pushes the page down. The free-shipping bar that appears at 1.2 seconds. The "you might also like" strip that expands when its API responds. Every one of these is a shift, and the pattern for all of them is the same: reserve the space in the initial layout, or take the element out of flow entirely.</p>
+
+        <p>For banners at the top of the page, my strong preference is <code>position: fixed</code> at the bottom of the viewport. It cannot shift anything because it is not in flow, and it is less intrusive besides. If it must be in flow at the top, render an empty placeholder of the correct height in the server-rendered HTML and let the script fill it.</p>
+
+        <pre><code class="language-css">/* Reserved from first paint; the script only ever fills it, never resizes it. */
+#promo-bar {
+  min-height: 44px;
+  contain: layout;
+}
+@media (max-width: 767px) {
+  #promo-bar { min-height: 64px; }  /* it wraps to two lines on mobile */
 }</code></pre>
 
-        <p>Animations must strictly utilize <code>transform</code> and <code>opacity</code> properties. Animating <code>top</code>, <code>left</code>, <code>width</code>, or <code>height</code> properties triggers immediate layout recalculations across the entire render tree, annihilating INP and CLS scores simultaneously. The browser can offload <code>transform</code> operations to the GPU compositor thread, completely bypassing main-thread layout engines and ensuring buttery smooth 60fps transitions without any layout shift penalties.</p>
+        <p>That media query matters more than it looks. I have shipped a reserved placeholder that was exactly right on desktop and 20px short on mobile, which produced a small shift on every mobile page load and a CLS of 0.11 — just over the threshold, from a single overlooked breakpoint.</p>
 
+        <h3>Animations</h3>
 
+        <p>Animate <code>transform</code> and <code>opacity</code>. Nothing else. Animating <code>height</code>, <code>top</code>, <code>width</code> or <code>margin</code> triggers layout on every frame, which costs main-thread time and registers as layout shift. <code>transform</code> and <code>opacity</code> are handled by the compositor and touch neither.</p>
 
-        <h2>5. Real User Monitoring (RUM) Telemetry and Observability</h2>
-        <p>Synthetic lab data tools execute in sterile, controlled environments with predictable throttling profiles. They are invaluable for deterministic continuous integration testing but fail to capture the harsh reality of real-world device execution. Establishing a Real User Monitoring (RUM) pipeline is non-negotiable for serious engineering teams.</p>
-        
-        <p>The standard approach involves integrating the official <code>web-vitals</code> JavaScript library. This lightweight module relies on the native <code>PerformanceObserver</code> API to asynchronously capture metrics directly from the browser engine without introducing measurement overhead. Data is batched and transmitted to an ingestion endpoint via <code>navigator.sendBeacon</code> during the page's visibility state change.</p>
+        <p>The awkward case is the accordion, where you genuinely want to animate height. Modern browsers can interpolate to <code>height: auto</code> via <code>interpolate-size: allow-keywords</code>, but support is thin; the portable approach is a grid-rows transition, which is still layout but scoped by containment. Either way, shifts within 500ms of the click are excluded from CLS, so an accordion opening on tap is not your problem. An accordion opening on its own at 900ms is.</p>
 
-        <pre><code class="language-javascript">import { onLCP, onINP, onCLS } from 'web-vitals/attribution';
+        <h2>12. A Diagnostic Table</h2>
 
-const VITALS_ENDPOINT = 'https://telemetry.modracx.com/v1/metrics';
+        <table class="data-table">
+          <thead>
+            <tr><th>Symptom</th><th>Most likely cause</th><th>Fix</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>LCP 4s+, image fetch starts at 2s+</td><td>Image set by JS, or lazy-loaded</td><td>Real <code>src</code> in HTML, remove lazy, add <code>fetchpriority="high"</code></td></tr>
+            <tr><td>LCP high, TTFB &gt; 800ms</td><td>Uncached application response</td><td>Full-page cache; see the platform guide</td></tr>
+            <tr><td>LCP element is the H1</td><td>Font blocking text paint</td><td><code>font-display: swap</code>, preload with <code>crossorigin</code>, subset</td></tr>
+            <tr><td>Image downloads at 900ms, paints at 2.4s</td><td>Main thread blocked, or CSS still blocking</td><td>Break long tasks; inline critical CSS</td></tr>
+            <tr><td>INP high, input delay dominates</td><td>Third-party script executing</td><td>Defer to idle or interaction; remove</td></tr>
+            <tr><td>INP high, processing dominates</td><td>Synchronous over-rendering</td><td>Yield, memoise, scope the update</td></tr>
+            <tr><td>INP high, presentation delay dominates</td><td>Huge DOM or layout-triggering CSS</td><td>Reduce node count, <code>content-visibility</code>, containment</td></tr>
+            <tr><td>CLS spike at ~800ms</td><td>Font swap changing metrics</td><td>Metric-overridden fallback face</td></tr>
+            <tr><td>CLS spike at ~1.5s</td><td>Injected banner or ad slot</td><td>Reserve height, or take out of flow</td></tr>
+            <tr><td>CLS only on mobile</td><td>Reserved height wrong at that breakpoint</td><td>Per-breakpoint <code>min-height</code></td></tr>
+          </tbody>
+        </table>
 
-function sendToAnalytics(metric) {
-  // Construct structured payload for ingestion engine
-  const payload = {
-    metricName: metric.name,
-    metricValue: Math.round(metric.value),
-    metricId: metric.id,
-    rating: metric.rating, // 'good', 'needs-improvement', 'poor'
-    navigationType: metric.navigationType,
-    pagePath: window.location.pathname,
-    connectionEffectiveType: navigator.connection?.effectiveType || 'unknown',
-    deviceMemory: navigator.deviceMemory || 'unknown'
-  };
+        <p>I keep a version of this pinned, because the temptation on every engagement is to start with the fix you enjoy rather than the one the evidence points at.</p>
 
-  // Extract attribution data for debugging specific bottlenecks
-  // This is critical for actionable remediation, not just passive observation
-  if (metric.name === 'CLS') {
-    payload.largestShiftTarget = metric.attribution.largestShiftTarget;
-  } else if (metric.name === 'INP') {
-    payload.interactionTarget = metric.attribution.interactionTarget;
-    payload.loadState = metric.attribution.loadState;
-    payload.processingTime = metric.attribution.processingTime;
-  } else if (metric.name === 'LCP') {
-    payload.lcpElement = metric.attribution.element;
-    payload.ttfb = metric.attribution.timeToFirstByte;
-  }
+        <h2>13. The DOM Size Problem Nobody Talks About</h2>
 
-  // Use sendBeacon for reliable delivery during page unload
-  if (navigator.sendBeacon) {
-    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-    navigator.sendBeacon(VITALS_ENDPOINT, blob);
-  } else {
-    // Fallback using keepalive fetch
-    fetch(VITALS_ENDPOINT, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-      headers: { 'Content-Type': 'application/json' },
-      keepalive: true
-    }).catch(console.error);
-  }
-}
+        <p>There is a failure mode that shows up in INP and CLS simultaneously and has one cause: too many DOM nodes.</p>
 
-// Initialize observers with attribution mapping enabled
-onLCP(sendToAnalytics);
-onINP(sendToAnalytics);
-onCLS(sendToAnalytics);</code></pre>
+        <p>A category page rendering 96 products, each with a card containing an image, a badge, a title, a price block with three states, a colour swatch row, a quick-add form and a wishlist button, is comfortably 8,000 nodes. Every style recalculation walks that tree. Every layout pass measures it. An interaction that changes one class on the body can force a recalculation across all 8,000.</p>
 
-        <p>The attribution module exposes the exact DOM selector of the offending element, providing actionable intelligence directly to the engineering team. By relying exclusively on empirical telemetry, we can construct e-commerce environments that remain blindingly fast regardless of client constraints.</p>
+        <p>Check it in one line:</p>
 
-        <hr />
+        <pre><code class="language-javascript">console.log('nodes:', document.getElementsByTagName('*').length,
+            'max depth:', Math.max(...[...document.querySelectorAll('*')]
+              .map(el =&gt; { let d = 0; while (el.parentElement) { d++; el = el.parentElement; } return d; })));</code></pre>
 
-        <h2>6. Frequently Asked Questions (FAQ)</h2>
+        <p>Under 1,500 nodes is comfortable. Over 3,000 you will feel it on mid-range Android. Over 6,000 you have a structural problem that no amount of yielding will paper over.</p>
 
-        <h3>How does Interaction to Next Paint (INP) replace First Input Delay (FID)?</h3>
-        <p>FID measured only the response delay of the first interaction, completely ignoring subsequent heavy interactions like adding to cart, expanding accordions, or filtering products. INP tracks latency for all clicks, taps, and keypresses throughout the entire user session lifecycle, capturing main-thread long task bottlenecks holistically. It forces developers to optimize complex client-side rendering updates, not just the initial hydration phase.</p>
+        <p>The two useful levers are paginating rather than infinite-scrolling — 24 products per page rather than 96 — and <code>content-visibility: auto</code>, which lets the browser skip layout and paint for off-screen sections entirely:</p>
 
-        <h3>What causes Cumulative Layout Shift (CLS) in e-commerce PDPs?</h3>
-        <p>CLS is primarily caused by images missing explicit width and height dimensions, late-injected promotional banners via tag managers that push content downward, and custom web fonts shifting line heights during the font swap rendering phase. Utilizing the CSS aspect-ratio property and enforcing explicit dimensions neutralizes these unexpected visual shifts.</p>
-        
+        <pre><code class="language-css">.product-grid-row {
+  content-visibility: auto;
+  /* Without this the scrollbar jumps as rows are measured on scroll. */
+  contain-intrinsic-size: auto 420px;
+}</code></pre>
 
+        <p><code>contain-intrinsic-size</code> is not optional. Omit it and the browser assumes zero height for skipped content, the page height collapses, and scrolling becomes an unpleasant lurching experience. The <code>auto</code> keyword tells it to remember the last measured size, which handles variable-height rows well.</p>
 
-        <hr />
+        <p>I would be honest that <code>content-visibility</code> has sharp edges. It breaks in-page find for skipped content in some browsers, it interacts badly with anchor links into skipped regions, and it can confuse sticky positioning. I use it on long product grids and long editorial pages, and nowhere near checkout.</p>
+
+        <h2>14. A Worked Example, Including The Part That Went Wrong</h2>
+
+        <p>A UK furniture retailer, Magento 2.4.6 with a heavily customised Luma-derived theme, roughly 14,000 SKUs. Mobile field data at the 75th percentile when we started: LCP 4.6s, INP 380ms, CLS 0.19. All three failing. Sixty-two percent of sessions were mobile.</p>
+
+        <p><strong>Diagnosis, day one.</strong> The LCP element on product pages was the main gallery image, being injected by the theme's Fotorama-derived slider after hydration. Load delay was 2,300ms of a 4,600ms LCP — the fetch was not starting until the bundle had run. TTFB was a respectable 340ms because Varnish was configured properly. INP was dominated by the size and finish selectors, which triggered a full re-render of the price block, the stock message, the delivery estimate and the gallery. CLS came from three sources: the font swap at 780ms, a delivery-estimate widget that expanded at about 1.4s, and a trust-badge row that loaded from a third party.</p>
+
+        <p><strong>What we changed, and what each was worth.</strong> I insisted on shipping these one at a time over three weeks so we could attribute the movements. That discipline is unglamorous and it is the only reason I can give you these numbers.</p>
+
+        <p>Rendering the first gallery image as a real <code>&lt;img&gt;</code> in the Magento template with <code>fetchpriority="high"</code>, and letting the slider adopt it on init rather than create it: <strong>LCP 4.6s to 2.9s</strong>. One template change. By a distance the best return of the whole project.</p>
+
+        <p>Converting product images to AVIF with a WebP fallback and fixing the <code>sizes</code> attribute, which had been claiming <code>100vw</code> at all breakpoints: <strong>LCP 2.9s to 2.5s</strong>. Median image weight on a PDP dropped from 780KB to 210KB.</p>
+
+        <p>Scoping the variant-selector update so that changing finish updated only the price block and stock message rather than re-rendering the gallery: <strong>INP 380ms to 210ms</strong>.</p>
+
+        <p>Deferring the chat widget and the affiliate pixel to first interaction or idle: <strong>INP 210ms to 155ms</strong>. The chat widget alone was 340ms of main-thread execution during load.</p>
+
+        <p>Metric-overridden font fallback, reserved height for the delivery widget, and fixed dimensions on the trust badges: <strong>CLS 0.19 to 0.03</strong>.</p>
+
+        <p><strong>What went wrong.</strong> Two things, and both are instructive.</p>
+
+        <p>The first: we initially added <code>fetchpriority="high"</code> to the gallery image and also preloaded it, on the theory that belt and braces was safer. The preload had a mismatched <code>imagesizes</code> attribute, so the browser fetched a 1600px candidate for the preload and a 640px candidate for the actual image. Two downloads. LCP got 180ms <em>worse</em> and it took us most of a day to see it, because we had shipped it alongside the AVIF conversion and the net movement was still positive. That is exactly the trap the one-change-at-a-time rule is meant to prevent, and we broke our own rule because the two changes "obviously" belonged together.</p>
+
+        <p>The second: the <code>content-visibility: auto</code> we added to category grid rows made INP worse on scroll-heavy sessions, because the browser was doing layout work for newly-revealed rows at exactly the moment the customer was tapping a product. It measured beautifully in the lab, where nobody scrolls. We kept it on the editorial pages and removed it from the grid.</p>
+
+        <p><strong>Where it landed.</strong> Twenty-eight days after the last change, field data at the 75th percentile: LCP 2.4s, INP 148ms, CLS 0.03. All three green. Conversion rate on mobile moved from 1.31% to 1.44% over the following quarter, which the client's analytics team was comfortable attributing mostly to the performance work, though I would treat any single-cause attribution of a conversion number with some suspicion — they also changed their delivery messaging in the same window.</p>
+
+        <p><strong>What I would do differently.</strong> I would have started with the third-party audit rather than finishing with it. It was the least technically interesting task, it required the most stakeholder conversation, and it turned out that three of the eleven tags loading on every page belonged to campaigns that had ended. Removing dead tags is free performance and I left it until week three because I wanted to do the engineering first.</p>
+
+        <h2>15. Things That Look Like Fixes And Are Not</h2>
+
+        <p>A short list of interventions I have watched teams make that produced no measurable improvement, so you can skip them.</p>
+
+        <p><strong>Minifying an already-gzipped bundle further.</strong> Going from 240KB to 228KB of JavaScript changes nothing. The cost of JavaScript is parse and execute, not transfer, and on a mid-range Android those are roughly proportional to uncompressed size. Ship less code, do not compress the same code harder.</p>
+
+        <p><strong>Preloading everything important.</strong> Priority is zero-sum. Six high-priority preloads means the browser divides your bandwidth six ways and nothing arrives early. Two preloads, maximum, and only for things the preload scanner genuinely cannot find.</p>
+
+        <p><strong>Moving scripts to the footer.</strong> This was good advice in 2011. <code>defer</code> does it properly now, keeps execution order, and lets the preload scanner find the script early. A script at the bottom of the body is discovered late and still blocks the parser when it gets there.</p>
+
+        <p><strong>Upgrading the server.</strong> If TTFB is 340ms and LCP is 4.6s, a faster box moves LCP to 4.5s. Backend spend fixes backend problems; check which phase dominates before you sign a hosting contract. That said, when TTFB genuinely <em>is</em> the problem — and on uncached Magento it often is — the platform-level answer is caching, which is covered in the <a href="/blog/performance-optimization/">Magento and Shopify platform guide</a>.</p>
+
+        <p><strong>Chasing the Lighthouse score.</strong> The score is a weighted composite of lab proxies, tuned to be a teaching tool. You can move it from 62 to 88 without moving a single field metric — TBT, which is heavily weighted, is a synthetic stand-in for INP that correlates only loosely with real interaction latency. Optimise the field metrics. The score follows, mostly.</p>
+
+        <h2>16. Questions That Come Up</h2>
+
+        <p><strong>"We fixed everything and the field data has not moved."</strong> Field data at the 75th percentile is a twenty-eight-day rolling window. Day one after your fix, twenty-seven days of the old experience are still in the average. Expect no visible movement for a week, partial movement by two, and the real answer at four weeks. Check your own RUM instead, which updates immediately.</p>
+
+        <p><strong>"Lighthouse says 96 but CrUX says we are failing."</strong> Almost always device and network. Lighthouse mobile emulation applies a fixed 4x CPU throttle, which is roughly a 2019 mid-range phone; a meaningful share of real ecommerce traffic is slower than that. It also runs with a cold cache, no extensions, and no consent banner, and it does not interact with the page at all, which is why lab tools cannot measure INP.</p>
+
+        <p><strong>"Does CLS include shifts below the fold?"</strong> Yes, if they happen. CLS accumulates across the whole page lifecycle including everything you scroll to, which is why a lazy-loaded footer widget with no reserved height can wreck an otherwise stable page. Lab tools that never scroll will not catch it.</p>
+
+        <p><strong>"Should I use <code>font-display: optional</code>?"</strong> If your brand font is genuinely load-bearing for the design, no — first-time visitors will not see it at all, which on a site whose traffic is mostly first-time is most of your audience. <code>swap</code> with metric overrides gets you a stable layout and the right font. Use <code>optional</code> for secondary faces where nobody will notice the fallback.</p>
+
+        <p><strong>"Is INP worth optimising if we are already under 200ms?"</strong> Check the distribution rather than the 75th percentile. I have seen sites at 180ms overall with a 12% tail above 500ms, concentrated entirely on one interaction on one template. That tail is real customers having a bad time, and it is usually the cheapest thing left to fix.</p>
+
+        <p><strong>"Our LCP element changes depending on the viewport."</strong> Common on category pages and genuinely annoying. Handle both: give the hero <code>fetchpriority="high"</code> and use <code>media</code> attributes on any preload so the right candidate is prioritised per breakpoint. Then verify on both, because the fix for one can pessimise the other.</p>
+
+        <p><strong>"Do Core Web Vitals actually affect rankings?"</strong> They are a real but small signal, and they are a tiebreaker rather than a lever — no amount of speed will outrank genuinely better content. The honest business case is not ranking, it is that a 2.4-second page converts better than a 4.6-second one, and that effect is large and well documented. Sell it on conversion.</p>
+
+        <h2>17. What I'd Actually Do First</h2>
+
+        <p>Assume a storefront you have not seen before and a week to spend. Here is my order, and it is deliberately the order of evidence rather than the order of interest.</p>
+
+        <p>Open a product page and a category page on mobile emulation with 4x CPU throttling. Run the LCP element observer. Note which element it is on each template, and run the four-phase split. That is twenty minutes and it determines everything you do next.</p>
+
+        <p>If load delay dominates — and it usually does — fix discoverability. Real <code>src</code> in the server-rendered HTML, remove <code>loading="lazy"</code> from the LCP candidate, add <code>fetchpriority="high"</code>, demote everything below the fold. This is the highest-return work available and it is normally a day.</p>
+
+        <p>Then use the site like a customer for five minutes with the interaction observer running. Write down every interaction over 200ms. Fix the worst one. Not all of them — the worst one, then re-measure, because INP is a maximum and fixing anything other than the maximum moves nothing.</p>
+
+        <p>Then run the layout-shift observer through a full page load without touching anything, and look at the <code>sources</code>. Reserve space for whatever moved. This is usually half a day and it usually takes CLS to green outright.</p>
+
+        <p>Then, and only then, the third-party audit. Get the per-origin long-task table, take it to the marketing team, and delete what nobody can justify. Budget more calendar time than engineering time for this one.</p>
+
+        <p>Two habits that make the difference between a project that holds and one that regresses in a quarter. Ship one change at a time and let each sit long enough to attribute — I broke that rule on the furniture project and it cost me a day. And put a budget in CI so the next person cannot undo the work by accident, which is the subject of the <a href="/blog/core-web-vitals-optimization/">measurement and regression-detection companion</a> to this piece.</p>
+
+        <p>The thing I would most like you to take away is the diagnostic discipline rather than any specific technique. Every fix in this article is public knowledge and has been for years. The reason storefronts stay slow is not that the fixes are secret; it is that teams apply them to the wrong element, on the wrong template, based on a number they measured in the wrong conditions. Find the element. Split the phases. Fix the dominant one. Then measure again and see if you were right, because about a third of the time you will not have been, and that is the useful part.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce: The Architectural & Business Guide</a></strong>
+              <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce: The Architectural &amp; Business Guide</a></strong>
               <p>Crawler architecture, dynamic rendering, and large-scale taxonomy structuring methodologies.</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify: The Engineering Blueprint</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify: The Engineering Blueprint</a></strong>
               <p>Varnish edge caching, Redis clustering architectures, and database query optimization strategies.</p>
             </li>
             <li>
@@ -499,7 +777,6 @@ onCLS(sendToAnalytics);</code></pre>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -533,6 +810,6 @@ onCLS(sendToAnalytics);</code></pre>
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>JAMstack E-Commerce: Static Generation & Dynamic Hydration | MODRACX</title>
-  <meta name="description" content="Architectural guide on building JAMstack e-commerce storefronts using Next.js, static site generation (SSG), edge functions, and client-side cart hydration." />
+  <meta name="description" content="Static generation for ecommerce catalogues: build times at scale, incremental and on-demand revalidation, and where stock, pricing and cart break the static model." />
   <meta property="og:title" content="JAMstack E-Commerce: Static Generation & Dynamic Hydration | MODRACX" />
   <meta property="og:description" content="Architectural guide on building JAMstack e-commerce storefronts by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>JAMstack E-Commerce: Static Generation & Dynamic Hydration</h1>
-        <p class="lede">JAMstack architecture serves pre-rendered HTML static shells directly from global CDNs while dynamically hydrating pricing and cart state client-side via GraphQL APIs.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>JAMstack E-Commerce: Static Generation &amp; Dynamic Hydration</h1>
+        <p class="lede">A lighting retailer's catalogue tripled and their build went from eleven minutes to four hours and twenty. The static model works — until the parts of commerce that change every minute meet it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,42 +205,494 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Dynamic Cart Hydration React Hook</h2>
+        <h2>1. The Build That Took Four Hours and Twenty Minutes</h2>
 
-        <pre><code class="language-typescript">// React Hook for Client-Side Cart State Hydration on Static Pages
-import { useEffect, useState } from 'react';
+        <p>A specialist lighting retailer moved from Magento 2 to a statically generated Next.js storefront in early 2024. The launch was genuinely good — first-visit LCP went from 3.9s to 1.2s, organic traffic climbed 18% over the following quarter, and the hosting bill dropped from about £1,400 a month to £310.</p>
 
-export function useCartState() {
-  const [cart, setCart] = useState(null);
+        <p>Then the catalogue grew. They added a commercial lighting range in September, went from 6,200 SKUs to 19,800, and the production build went from eleven minutes to four hours and twenty minutes.</p>
 
-  useEffect(() => {
-    // Fetch live customer cart state after static HTML render
-    fetch('/api/cart')
-      .then(res => res.json())
-      .then(data => setCart(data));
-  }, []);
+        <p>The consequence was not that deployments were slow. The consequence was that the merchandising team stopped being able to work. A price correction on one product meant a full rebuild, so corrections were batched into a nightly deploy. A typo in a product description sat live for up to twenty-four hours. When a supplier discontinued a line mid-morning, the pages stayed up until the next night. Somebody in the office started calling it "the four o'clock", because if your change did not make the four o'clock cutoff it was tomorrow's problem.</p>
 
-  return cart;
+        <p>They had built a static site for a business whose data changes continuously, and the build time was the bill arriving.</p>
+
+        <p>None of this means static generation is wrong for ecommerce. I still reach for it. But there is a specific set of things it does not do, and the failure mode is not that it breaks — it is that it works beautifully at 5,000 SKUs and becomes an operational tax at 20,000. This article is about where that line sits, how to move it, and which parts of a storefront should never have been static in the first place.</p>
+
+        <h2>2. What JAMstack Means Now</h2>
+
+        <p>The original definition — JavaScript, APIs, and Markup, pre-rendered and served from a CDN — has aged into something looser. Almost nobody ships a purely static commerce site any more, and the vendors who coined the term have quietly moved on to other language.</p>
+
+        <p>What survives, and what is actually worth adopting, is one architectural commitment: the HTML for a page is produced ahead of the request, not during it. Everything else — where the data comes from, whether there is a Node process, whether some routes render on demand — is negotiable.</p>
+
+        <p>That commitment buys you three things that are hard to get any other way. A CDN edge response has no origin round trip, so time to first byte is measured in tens of milliseconds regardless of where the customer is. A pre-rendered page cannot be slow because of a database query, because there is no query. And a static artefact cannot fall over under load, which means a mention on a popular account is a bandwidth event rather than an incident.</p>
+
+        <p>It also costs you something specific: the page reflects the state of the world at build time, not request time. Every problem in this article is a consequence of that one sentence.</p>
+
+        <p>The content layer question — Sanity, Contentful, Strapi, and how the CMS choice affects all of this — is a separate topic covered in the article on <a href="/blog/headless-cms-seo-performance/">headless CMS SEO and performance</a>. Here I am concerned with the commerce data: catalogue, stock, price, and cart.</p>
+
+        <h2>3. Why Static Wins on a Catalogue, When It Wins</h2>
+
+        <p>Worth stating the case properly before dismantling it.</p>
+
+        <p>A product page is, structurally, an excellent candidate for pre-rendering. The name, description, images, specifications, and category relationships change rarely — on the welding supplies retailer, the median product record had not been edited in fourteen months. The content is identical for every visitor. It is exactly the shape of thing static generation was designed for.</p>
+
+        <p>And the crawlability benefit is real and large. A pre-rendered page is complete HTML in the first response, which sidesteps the entire class of rendering problems described in the piece on <a href="/blog/pwa-seo-performance/">PWA and SPA crawlability</a>. On a catalogue of tens of thousands of low-authority pages, that difference determines how much of your site gets indexed at all.</p>
+
+        <p>The performance numbers on the lighting site, measured at the 75th percentile on mobile:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Magento 2, cached</th><th>Static, CDN</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>TTFB</td><td>620ms</td><td>48ms</td></tr>
+            <tr><td>LCP</td><td>3.9s</td><td>1.2s</td></tr>
+            <tr><td>INP</td><td>310ms</td><td>190ms</td></tr>
+            <tr><td>Origin cost per month</td><td>£1,400</td><td>£310</td></tr>
+            <tr><td>Peak sustained RPS before degradation</td><td>~90</td><td>Not reached in testing</td></tr>
+          </tbody>
+        </table>
+
+        <p>The TTFB row is the one that matters and it is not close. Nothing you do to a PHP application gets you to 48ms in Sydney from an origin in London. That is a physics argument, and it is why I keep coming back to this architecture despite everything below.</p>
+
+        <h2>4. The Build Time Curve</h2>
+
+        <p>Build time on a static catalogue is roughly linear in page count, which sounds manageable and is the trap. Linear growth against a catalogue that doubles is a build that doubles, and there is no point on the curve where it gets better on its own.</p>
+
+        <p>The rough arithmetic, from builds I have measured on Next.js and Astro projects with a remote data source:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Pages</th><th>Naive build</th><th>With data batching</th><th>With incremental cache</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>500</td><td>50s</td><td>35s</td><td>30s</td></tr>
+            <tr><td>5,000</td><td>11 min</td><td>4 min</td><td>2 min</td></tr>
+            <tr><td>20,000</td><td>4h 20m</td><td>18 min</td><td>5 min</td></tr>
+            <tr><td>100,000</td><td>Impractical</td><td>1h 40m</td><td>12 min</td></tr>
+          </tbody>
+        </table>
+
+        <p>The jump from 5,000 to 20,000 in the naive column is worse than linear, and that is the detail worth understanding. It is not the rendering that degrades — rendering 20,000 React trees is a few minutes of CPU. It is the data fetching. A naive implementation makes one API call per page, sequentially or with modest concurrency, and at 20,000 pages you are making 20,000 requests to a commerce API that rate-limits you at 40 per second. That is eight minutes of pure waiting if everything is perfect, and considerably more when it is not, because a rate-limited request gets retried with backoff and the backoff compounds.</p>
+
+        <p>On the welding supplies retailer, profiling the four-hour build showed 92% of wall time in network waits against the Shopify Admin API, and about 6% in image processing. Actual page rendering was under two minutes.</p>
+
+        <p>Which tells you where to look first, and it is almost never where people look.</p>
+
+        <h2>5. Making Builds Fast: The Levers, in Order</h2>
+
+        <p><strong>Fetch the catalogue once, not once per page.</strong> This is the single largest win available and it is usually a two-hour change. Pull the entire catalogue in a bulk operation at the start of the build, write it to a local file, and have every page read from that.</p>
+
+        <pre><code class="language-javascript">// scripts/fetch-catalogue.mjs — runs once, before the build.
+// Bulk operations return a JSONL file instead of paginating a
+// GraphQL query 20,000 times.
+const mutation = `
+  mutation {
+    bulkOperationRunQuery(query: """
+      { products { edges { node {
+          id handle title descriptionHtml
+          variants { edges { node { sku price barcode } } }
+      } } } }
+    """) { bulkOperation { id status } userErrors { message } }
+  }`;
+
+await gql(mutation);
+
+// Poll until the operation completes, then download the JSONL.
+let op;
+do {
+  await sleep(5000);
+  op = (await gql('{ currentBulkOperation { status url objectCount } }'))
+    .currentBulkOperation;
+  console.log(op.status, op.objectCount);
+} while (op.status === 'RUNNING');
+
+const jsonl = await (await fetch(op.url)).text();
+await writeFile('.cache/catalogue.jsonl', jsonl);</code></pre>
+
+        <p>On the lighting site this took the data phase from 3h 58m to 90 seconds. One bulk operation instead of twenty thousand queries. The build went from 4h 20m to about 18 minutes without touching anything else.</p>
+
+        <p><strong>Cache image processing across builds.</strong> The second biggest cost, and it is entirely wasted work — the same source image gets resized to the same six variants on every build. Key the cache on a hash of the source URL plus the transform parameters and persist it in CI.</p>
+
+        <pre><code class="language-yaml"># Persisting the image cache is usually worth more than any
+# other CI optimisation on a catalogue build.
+- uses: actions/cache@v4
+  with:
+    path: |
+      .next/cache
+      .cache/images
+    key: build-cache-${{ github.sha }}
+    restore-keys: build-cache-</code></pre>
+
+        <p><strong>Do not pre-render pages nobody visits.</strong> On the lighting catalogue, 38% of products had received zero organic sessions in twelve months. Pre-rendering the top 60% by traffic and rendering the rest on demand, cached at the edge after the first request, cut the build again with no user-visible difference. The first visitor to a long-tail product waits an extra 400ms; every visitor after that gets the cached copy.</p>
+
+        <pre><code class="language-javascript">// Next.js: pre-render the pages that matter, defer the rest.
+export async function generateStaticParams() {
+  const all = await getCatalogue();
+  // Traffic data exported weekly from analytics into the build.
+  const popular = await getTopSkus(0.6);
+  return all
+    .filter((p) =&gt; popular.has(p.sku))
+    .map((p) =&gt; ({ handle: p.handle }));
+}
+
+// Anything not in the list above is generated on first request
+// and then cached, rather than 404ing.
+export const dynamicParams = true;</code></pre>
+
+        <p><strong>Parallelise across machines only after the above.</strong> Sharding a build across four workers is the lever people reach for first and it is the least effective, because it does nothing about rate limits — four workers hitting a 40-request-per-second API get 10 each. Fix the data access pattern and you probably will not need the shards.</p>
+
+        <h2>6. Incremental Static Regeneration, Precisely</h2>
+
+        <p>ISR is the mechanism that makes static viable for commerce, and it is widely misunderstood, so it is worth being exact about what happens.</p>
+
+        <p>A page is generated with a revalidation period — say 300 seconds. A request arrives. If the cached page is younger than 300 seconds, it is served from cache. If it is older, the cached page is <em>still served</em>, and a regeneration is triggered in the background. The next request after that regeneration completes gets the new version.</p>
+
+        <p>Three consequences fall out of that, and each one has caught somebody out.</p>
+
+        <p><strong>At least one visitor always sees stale content.</strong> The request that triggers regeneration is served the old page. This is by design and it is correct — the alternative is making that visitor wait — but it means "revalidate every 60 seconds" does not mean "at most 60 seconds stale". It means at most 60 seconds plus however long it takes one more person to arrive.</p>
+
+        <p><strong>On a long-tail page, staleness is unbounded.</strong> A product visited once a fortnight regenerates once a fortnight, no matter what revalidation period you set, because regeneration is request-driven. Your 60-second setting is meaningless for the 38% of the catalogue nobody visits. This surprises people badly, and it is the reason time-based revalidation alone is not a stock strategy.</p>
+
+        <p><strong>Regeneration is per edge node in some setups.</strong> Depending on the platform, a page cached at the Frankfurt edge and the Sydney edge revalidates independently. Two customers in different regions can see different versions of the same page for a window, which makes bug reports interesting.</p>
+
+        <pre><code class="language-javascript">// Revalidation periods I actually use, and why.
+export const revalidate = 3600;   // Product content: hourly is generous.
+                                  // Descriptions and images change rarely.
+
+// In the category route, shorter, because ordering and
+// availability badges shift more often.
+export const revalidate = 600;
+
+// Never rely on this for price or stock. See below.</code></pre>
+
+        <p>The right mental model: time-based revalidation is a safety net that stops pages drifting indefinitely. It is not a synchronisation mechanism. If you need a change to be live within a known time, you need the next section.</p>
+
+        <h2>7. On-Demand Revalidation, Which Is the Actual Answer</h2>
+
+        <p>Webhook-driven invalidation is what makes the merchandising team stop hating you. When a product changes in the backend, the backend tells the frontend, and that specific page regenerates within seconds.</p>
+
+        <pre><code class="language-javascript">// app/api/revalidate/route.js
+import { revalidatePath, revalidateTag } from 'next/cache';
+import crypto from 'node:crypto';
+
+export async function POST(request) {
+  const raw = await request.text();
+
+  // Verify the webhook signature. An unauthenticated revalidation
+  // endpoint is a free denial-of-service against your own build.
+  const sig = request.headers.get('x-shopify-hmac-sha256');
+  const expected = crypto
+    .createHmac('sha256', process.env.WEBHOOK_SECRET)
+    .update(raw, 'utf8')
+    .digest('base64');
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+    return new Response('bad signature', { status: 401 });
+  }
+
+  const product = JSON.parse(raw);
+
+  revalidatePath(`/products/${product.handle}`);
+  // Tags let one event invalidate every page that used this data,
+  // including category listings the product appears on.
+  revalidateTag(`product:${product.id}`);
+  for (const collection of product.collections ?? []) {
+    revalidateTag(`collection:${collection.handle}`);
+  }
+
+  return Response.json({ revalidated: true });
 }</code></pre>
 
-        <hr />
+        <p>Two details that matter more than the code.</p>
+
+        <p>The signature check is not optional. An open revalidation endpoint lets anyone force regeneration of arbitrary pages as fast as they can send requests, which on a platform that bills for compute is a way to spend your budget and, on a rate-limited commerce API, a way to get your own build blocked. I have seen this exploited once, not maliciously — a badly configured monitoring tool hitting a health check URL that had been wired to the revalidate handler.</p>
+
+        <p>The tag fan-out is where correctness lives. A price change on one product affects the product page, every category page it appears on, the search index, any "related products" module on other products, and the homepage if it is featured. Miss one and you have inconsistent prices across the site, which is the specific failure customers notice and complain about. Getting the dependency graph right is most of the real work in this architecture, and it is not something a tutorial will teach you because it depends entirely on your merchandising rules.</p>
+
+        <p>On the welding supplies retailer, wiring product, collection, and inventory webhooks to targeted revalidation reduced the median time from an edit to a live change from about fourteen hours to eleven seconds. That change, more than any performance number, is what made the architecture acceptable to the business.</p>
+
+        <h2>8. Stock: The First Thing That Breaks</h2>
+
+        <p>Here is where the static model starts genuinely failing rather than merely being inconvenient.</p>
+
+        <p>Stock changes on every order. On a busy storefront that is hundreds of changes an hour, arriving from web orders, marketplace channels, EPOS, and warehouse adjustments. There is no revalidation period short enough and no webhook volume sane enough to keep a pre-rendered availability badge accurate.</p>
+
+        <p>People try. The pattern I keep finding is a webhook on inventory updates triggering revalidation, which works fine on a small catalogue and falls over the moment you have volume — you end up regenerating the same page forty times an hour, each regeneration costing an API call and some compute, to keep a badge that says "In stock" saying "In stock".</p>
+
+        <p>The answer is to stop pre-rendering stock at all. Bake in what is stable, fetch what is not.</p>
+
+        <pre><code class="language-javascript">// The product page is static. The availability element is not.
+// It renders a neutral placeholder in the static HTML and fills
+// in on the client from a short-cached endpoint.
+export function Availability({ sku, lastKnown }) {
+  const [state, setState] = useState(null);
+
+  useEffect(() =&gt; {
+    const controller = new AbortController();
+    fetch(`/api/stock/${sku}`, { signal: controller.signal })
+      .then((r) =&gt; r.json())
+      .then(setState)
+      .catch(() =&gt; {}); // Network failure: keep the build-time value.
+    return () =&gt; controller.abort();
+  }, [sku]);
+
+  // lastKnown comes from the build and is what a crawler sees.
+  // Keep it coarse: "available" or "discontinued", never a count.
+  const shown = state ?? lastKnown;
+  return &lt;span data-live={Boolean(state)}&gt;{label(shown)}&lt;/span&gt;;
+}</code></pre>
+
+        <p>The build-time value in that component is deliberate and it needs care. Googlebot indexes what is in the HTML, so your <code>availability</code> in the Product schema comes from the build. If a product is out of stock for two days and your schema says <code>InStock</code>, you will get a Merchant Center mismatch and possibly a suspension. My rule: pre-render availability at a coarse grain that changes slowly — is this product still sold at all — and treat the precise, right-now number as strictly client-side and strictly not in the structured data.</p>
+
+        <p>The stock endpoint itself should be cached for 30-60 seconds at the edge. Not zero: a product page on a popular item can attract enough requests to make an uncached inventory lookup a real load on the commerce backend, and nobody needs second-by-second precision on a badge. Precision at the moment that matters — checkout — is a server-side validation, and it always was, on every architecture. A stock badge has always been a hint.</p>
+
+        <h2>9. Pricing: The One That Ends Projects</h2>
+
+        <p>Stock is a nuisance. Price is where I have seen static commerce projects abandoned.</p>
+
+        <p>The problem is not that prices change. Prices change slowly on most catalogues and webhook revalidation handles it. The problem is that on a serious storefront, price is not a property of a product. It is a function of the product, the customer, the quantity, the region, the currency, the active promotions, the tax rules, and the time of day.</p>
+
+        <p>A B2B distributor with customer-specific contract pricing has, in principle, one price per product per customer account. Twenty thousand products and eight hundred trade accounts is sixteen million prices. You are not pre-rendering that.</p>
+
+        <p>Even in consumer retail it gets ugly fast. VAT-inclusive display for UK visitors, VAT-exclusive for exports. Three currencies with rates that move. A promotion that applies to a collection between two timestamps. A bundle discount at quantity three. Each of those multiplies your cache key space, and cache key space is the actual constraint in this architecture.</p>
+
+        <p>What I do, in order of preference:</p>
+
+        <p><strong>Pre-render the anonymous list price only.</strong> One price per product, the one an unauthenticated visitor in your primary market sees. That is what goes in the HTML, in the schema, and in the Merchant Center feed. It is consistent, it is crawlable, and it is honest, because it is genuinely the price for the majority of visitors.</p>
+
+        <p><strong>Fetch anything customer-specific after load, and expect it to look bad.</strong> A trade customer sees the list price for 200ms and then it changes. This is a real experience problem and I have not found a fully satisfying answer. What helps: rendering the price element with a subtle loading treatment for authenticated sessions so the change reads as "loading your price" rather than "the price went up", and detecting the logged-in state from a cookie at the edge so you know before paint which treatment to use.</p>
+
+        <pre><code class="language-javascript">// middleware.js — the edge knows the session before the page renders.
+export function middleware(request) {
+  const isTrade = request.cookies.has('trade_session');
+  const response = NextResponse.next();
+  // The static page reads this header to decide whether to render
+  // the list price as final or as a placeholder awaiting trade pricing.
+  response.headers.set('x-price-mode', isTrade ? 'pending' : 'list');
+  return response;
+}
+
+export const config = { matcher: ['/products/:path*'] };</code></pre>
+
+        <p><strong>For a small number of price variants, generate them all.</strong> Three currencies and two tax modes is six variants per page, which is a build you can afford. Route them by path — <code>/uk/</code>, <code>/de/</code>, <code>/us/</code> — rather than by cookie, because path-based variants are separately cacheable, separately indexable, and can carry hreflang. Cookie-based price switching on a CDN-cached page is a category of bug I would rather not have again; the first time a Frankfurt edge node serves a euro price to a UK customer, you will understand why.</p>
+
+        <p><strong>If pricing is genuinely per-customer, do not make the product page static.</strong> Render it on the server. Accept the 200ms TTFB. This is the honest answer for most B2B, and refusing to accept it is how the welding supplies retailer's competitor spent nine months building a caching layer that reimplemented, badly, a server they already had.</p>
+
+        <h2>10. The Cart, Which Was Never the Problem</h2>
+
+        <p>Cart and checkout come up constantly as objections to static commerce and they are the easy part.</p>
+
+        <p>A cart is client state plus a server API. It was never rendered into the page on any sensible architecture — even Magento serves the cart contents via a separate call so the page itself can be full-page-cached. Moving to a static frontend changes nothing about this. You hold a cart token, you call an API, you render the result on the client.</p>
+
+        <p>Checkout is similarly unaffected. Either you use the platform's hosted checkout, in which case it is somebody else's problem, or you build one, in which case it is a dynamic authenticated application that should never have been static and can happily be server-rendered alongside the static catalogue.</p>
+
+        <p>The one thing to watch is the cart count badge in the header, because the header is in every pre-rendered page. Render it empty in the static HTML and populate it on the client. If you render a count into the static page, every visitor sees whatever count was true at build time, which is a genuinely funny bug the first time and an embarrassing one when it reaches production.</p>
+
+        <pre><code class="language-javascript">// The header is baked into 20,000 pages. Anything personal in it
+// must start empty and fill in, or you ship one customer's state
+// to everybody.
+export function CartBadge() {
+  const [count, setCount] = useState(null);
+  useEffect(() =&gt; {
+    getCart().then((c) =&gt; setCount(c.itemCount));
+  }, []);
+  // null renders nothing at all — no zero, no skeleton, no shift.
+  return count ? &lt;span className="badge"&gt;{count}&lt;/span&gt; : null;
+}</code></pre>
+
+        <p>The same principle applies to anything else personal in shared chrome: recently viewed items, a greeting with the customer's name, a loyalty points balance. Every one of those has to be a hole in the static HTML that gets filled client-side, and every one of those holes is a potential layout shift. Reserve the space.</p>
+
+        <h2>11. Personalisation and the Cache Key Explosion</h2>
+
+        <p>The deeper structural issue behind both pricing and personalisation is that a static page is a cache entry, and every dimension of variation multiplies the number of entries you need.</p>
+
+        <p>Country, currency, language, tax mode, customer tier, A/B test bucket, and a promotional segment gives you, for a modest configuration, something like 4 x 3 x 4 x 2 x 3 x 2 x 3 — over a thousand variants of every page. At 20,000 products that is twenty million artefacts and a build measured in weeks.</p>
+
+        <p>So the discipline is to keep the number of pre-rendered dimensions as small as you can defend, and to push everything else to the client or the edge. In practice I allow two: locale, which becomes a path prefix and is genuinely a different page with different content and its own hreflang, and nothing else. Currency follows from locale. Tax mode follows from locale. Customer tier is a client-side overlay. A/B tests run client-side or at the edge with a rewrite, never as separate builds.</p>
+
+        <p>Edge middleware is the pressure valve here and it is worth understanding its limits before relying on it. It runs before the cache, it can read cookies and geography, and it can rewrite to a different static variant. What it cannot do cheaply is generate content, and what it must not do is make the response uncacheable, which is what happens the first time somebody adds a <code>Vary</code> header on a cookie. The trade-offs of pushing logic to the edge are covered in more depth in the piece on <a href="/blog/edge-computing-ecommerce/">edge computing for ecommerce</a>.</p>
+
+        <h2>12. Search and Faceted Navigation</h2>
+
+        <p>Two things that look like catalogue pages and behave nothing like them.</p>
+
+        <p>Site search has an unbounded key space. You cannot pre-render results for arbitrary queries, and there is no reason to want to — search result pages should be noindexed anyway. Route search to a hosted service, render the results client-side, and stop thinking about it.</p>
+
+        <p>Faceted navigation is the interesting one, because some facet combinations are valuable landing pages and most are crawl waste. "Black pendant lights" is a page worth having and worth indexing. "Black pendant lights, 15-20cm, dimmable, in stock, sorted by price descending" is a URL that should exist for customers and be invisible to search engines.</p>
+
+        <p>The split I use: pre-render a curated list of facet combinations — typically the ones with search volume, which the SEO team can supply — as real static pages with proper titles, descriptions, and copy. Everything else is handled client-side against the search service and marked noindex. This gets you the landing pages without the index bloat, and it keeps the build finite.</p>
+
+        <pre><code class="language-javascript">// Curated facet landing pages, from a file the SEO team maintains.
+// Anything not on this list resolves client-side and is noindexed.
+import curated from '../data/facet-landing-pages.json';
+
+export async function generateStaticParams() {
+  return curated.map((p) =&gt; ({ slug: p.slug }));
+}
+
+export async function generateMetadata({ params }) {
+  const page = curated.find((p) =&gt; p.slug === params.slug);
+  if (!page) return { robots: { index: false, follow: true } };
+  return {
+    title: page.title,
+    description: page.description,
+    alternates: { canonical: `/c/${page.slug}` }
+  };
+}</code></pre>
+
+        <p>Keeping that list in a JSON file the marketing team can edit through a pull request has worked better for me than any admin interface. It is version controlled, it is reviewable, and it makes the deliberate decision to create an indexable page visible to everyone.</p>
+
+        <h2>13. Hydration, and How Much of It You Need</h2>
+
+        <p>The other half of the phrase in this article's title. Having pre-rendered your HTML, how much JavaScript do you ship to make it interactive?</p>
+
+        <p>The default in a React framework is full hydration: the entire page tree is reconstructed in the browser and attached to the server-rendered DOM. On a product page where the only interactive elements are a quantity selector, an image gallery, and an add-to-cart button, this is enormously wasteful. You are shipping and executing the component code for the header, the footer, the description, the specification table, and the breadcrumbs, none of which will ever do anything.</p>
+
+        <p>The measurable cost is INP and the time to interactive. On the welding supplies retailer's original build, hydration was 340ms of main thread work on a mid-range Android, during which taps did nothing. Customers tapping "add to cart" in that window got no response and tapped again, which produced a small but real number of duplicate line items.</p>
+
+        <p>Islands architecture — Astro's model, and increasingly available elsewhere via server components — ships JavaScript only for the components that need it. Rebuilding the lighting product page as static HTML with three interactive islands took the hydration cost to 40ms and the JavaScript payload from 210KB to 34KB.</p>
+
+        <pre><code class="language-html">&lt;!-- Astro: everything is static HTML unless you say otherwise. --&gt;
+&lt;ProductGallery images={product.images} client:visible /&gt;
+&lt;!-- client:visible defers loading until it scrolls into view --&gt;
+
+&lt;AddToCart sku={variant.sku} client:idle /&gt;
+&lt;!-- client:idle loads at browser idle; the button is a real
+     form submit until then, so it works without JavaScript --&gt;
+
+&lt;SpecificationTable specs={product.specs} /&gt;
+&lt;!-- No directive: pure HTML, zero JavaScript, forever --&gt;</code></pre>
+
+        <p>The detail I would underline is the progressive enhancement on the add-to-cart. Making it a real form post to a real endpoint that works before hydration means the most important interaction on the page is never dead. It costs a server route you would otherwise not need and it is the difference between a fast page and a page that only looks fast.</p>
+
+        <p>My honest position on islands: they are the right default for a catalogue, and they are harder to staff for. React developers are abundant and Astro developers are not, and a client who cannot hire for their stack has a problem no architecture diagram solves. On two projects I have used server components in Next.js instead, purely because the team already existed, and accepted a heavier result.</p>
+
+        <h2>14. The Hybrid That Actually Works</h2>
+
+        <p>Nothing above argues for a purely static site, and nothing argues against static. The useful outcome is a per-route decision.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Route</th><th>Strategy</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Homepage</td><td>Static, webhook revalidated</td><td>Changes on merchandising, not per request</td></tr>
+            <tr><td>Product, top 60% by traffic</td><td>Static, webhook revalidated</td><td>Crawl-critical, stable content</td></tr>
+            <tr><td>Product, long tail</td><td>On-demand, then cached</td><td>Build cost not justified</td></tr>
+            <tr><td>Category, curated facets</td><td>Static, hourly revalidate</td><td>Landing pages with search value</td></tr>
+            <tr><td>Category, arbitrary facets</td><td>Client-side, noindex</td><td>Unbounded key space</td></tr>
+            <tr><td>Search results</td><td>Client-side, noindex</td><td>Unbounded, no SEO value</td></tr>
+            <tr><td>Stock and live price</td><td>Edge API, 30-60s cache</td><td>Changes continuously</td></tr>
+            <tr><td>Cart</td><td>Client-side against API</td><td>Per-session state</td></tr>
+            <tr><td>Account, orders, wishlist</td><td>Server-rendered, noindex</td><td>Authenticated, never cached</td></tr>
+            <tr><td>Checkout</td><td>Server-rendered or hosted</td><td>Money; correctness over speed</td></tr>
+            <tr><td>Blog and guides</td><td>Fully static</td><td>The easy case, and a real traffic source</td></tr>
+          </tbody>
+        </table>
+
+        <p>Reading down that table, the static portion is the part of the site search engines care about and customers browse, and the dynamic portion is the part that involves money and identity. That division is not a coincidence — it is the same line every caching architecture has drawn since Varnish, and JAMstack is a restatement of it with better tooling.</p>
+
+        <h2>15. The Lighting Retailer, Six Months On</h2>
+
+        <p>What we changed, in order, and what each thing bought.</p>
+
+        <p><strong>Bulk catalogue fetch.</strong> Two days of work. Build from 4h 20m to 18 minutes. The single highest-value change in the project by a wide margin.</p>
+
+        <p><strong>Persistent image cache in CI.</strong> Half a day. 18 minutes to 11 minutes.</p>
+
+        <p><strong>Webhook revalidation with tag fan-out.</strong> Two weeks, most of it spent working out the dependency graph between products, collections, and the homepage. Edit-to-live went from up to fourteen hours to about eleven seconds, and the four o'clock deadline stopped existing.</p>
+
+        <p><strong>Stock and trade price moved to client fetch.</strong> One week. Eliminated a class of complaint about wrong availability, and stopped the inventory webhook from triggering thousands of unnecessary regenerations a day.</p>
+
+        <p><strong>Long-tail products moved to on-demand.</strong> Three days. 11 minutes to about 4 minutes.</p>
+
+        <p>Final state: full build 4 minutes, targeted revalidation in seconds, hosting around £340 a month including the compute for on-demand rendering. Organic traffic up 31% against the pre-migration baseline at month nine, which I would attribute mostly to the speed and to having every product indexed rather than to anything clever.</p>
+
+        <p><strong>What went wrong.</strong> The webhook fan-out had a gap for about six weeks. When a product's price changed we revalidated the product page and its collection pages, but not the "you may also like" modules on other products, which were built from a related-products list baked in at build time. So a product could show one price on its own page and a different, older price in the recommendation carousel on a sibling page. A customer noticed, screenshotted both, and posted it. It was not a legal problem because the checkout price was always correct, but it was an avoidable embarrassment and the fix — treating the recommendation module as a client-fetched component rather than baked data — was something we should have decided at design time.</p>
+
+        <p>The other thing I got wrong was optimism about the merchandising team's tolerance. In the first month, before webhook revalidation, I told them a fifteen-minute build was fine and they should batch their changes. It was not fine. A merchandiser making a typo correction expects to see it immediately, and any delay reads as the system being broken. I now treat edit-to-live latency as a headline requirement in these projects, gathered in the first week alongside the performance targets, rather than something to be optimised later.</p>
+
+        <h2>16. Preview, and the Editor Experience</h2>
+
+        <p>An underrated reason static commerce projects fail: content editors cannot see their work.</p>
+
+        <p>On a traditional CMS-backed site, an editor saves a draft and views it. On a statically generated site the page does not exist until it is built, so a naive implementation gives the editor nothing until deploy. Editors respond to this rationally by publishing to production to see what things look like, which is exactly the behaviour you did not want.</p>
+
+        <p>Draft mode solves it: a signed cookie that switches specific routes from cached static output to live server rendering against draft data.</p>
+
+        <pre><code class="language-javascript">// app/api/preview/route.js
+import { draftMode } from 'next/headers';
+
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
+  // The token is issued by the CMS and scoped to one document,
+  // so a leaked preview link does not expose the whole draft site.
+  const valid = await verifyPreviewToken(searchParams.get('token'));
+  if (!valid) return new Response('invalid token', { status: 401 });
+
+  draftMode().enable();
+  return Response.redirect(new URL(searchParams.get('path'), request.url));
+}</code></pre>
+
+        <p>Two things worth doing alongside it. Put a persistent, obvious banner on the page when draft mode is active, because an editor who forgets they are in preview will report bugs about content that is not live. And make sure preview routes send <code>noindex</code> and are excluded from the CDN cache, because a preview URL that gets shared and indexed is a draft in the search results.</p>
+
+        <h2>17. When I Would Not Use This Architecture</h2>
+
+        <p><strong>Per-customer pricing across the whole catalogue.</strong> If every visitor sees a different price on every product, pre-rendering the price is impossible and pre-rendering everything except the price gets you a page that flashes and a Merchant Center feed you cannot trust. Server-render it and use a conventional cache with the session in the key. This is most serious B2B.</p>
+
+        <p><strong>A catalogue that changes structurally every day.</strong> Flash sale sites, auction formats, anything where the set of available products is different by the hour. The revalidation volume approaches the request volume and you have built a slow, complicated dynamic site.</p>
+
+        <p><strong>A team without a deployment culture.</strong> This architecture assumes CI, environment management, and people comfortable with a build failing. A retailer whose technical capability is one part-time developer editing templates through an admin panel will find it hostile, and the fact that it is architecturally superior will not help them.</p>
+
+        <p><strong>Under about a thousand SKUs, on a platform that already works.</strong> The absolute gains are real but the migration cost is not proportionally smaller. A well-configured Shopify or Magento site with a decent theme, a CDN, and someone who has done the performance basics will get you a long way for a fraction of the effort. I have talked two clients out of this migration on exactly those grounds and do not regret either.</p>
+
+        <p><strong>When the actual problem is something else.</strong> The most common one: a site is slow because of 900KB of third-party tags, and somebody has proposed a rearchitecture. Static generation will not remove the tags. It will give you a 40ms TTFB followed by the same 4 seconds of tag manager. Measure where the time goes before committing to a rebuild.</p>
+
+        <h2>18. Questions That Come Up</h2>
+
+        <p><strong>"Is JAMstack dead? The vendors stopped using the word."</strong> The word is out of fashion and the architecture is now mainstream enough not to need a name. Pre-rendering, CDN delivery, and API-driven data are in every major framework's defaults. Ignore the branding argument.</p>
+
+        <p><strong>"How many products before builds become a problem?"</strong> With naive per-page fetching, around 3,000. With bulk data fetching and a persistent cache, I have run 60,000-page builds in under fifteen minutes. The catalogue size is rarely the real constraint; the data access pattern is.</p>
+
+        <p><strong>"Can I do this on Shopify?"</strong> Yes, and it is the most common version of this project. The Storefront API and bulk operations are well suited to it, checkout stays hosted so the hardest problem is not yours, and Hydrogen exists if you want an opinionated starting point. The trade-offs of that specific route are covered in <a href="/blog/headless-commerce-seo-performance/">headless commerce SEO and performance</a>.</p>
+
+        <p><strong>"What happens when the commerce API goes down mid-build?"</strong> The build fails, and that is the correct behaviour — you do not want a deploy that silently drops half the catalogue. What you must have is a deployment model where a failed build leaves the previous version serving, which every serious platform does by default and which you should verify rather than assume. Test it deliberately once.</p>
+
+        <p><strong>"Do we still need a service worker?"</strong> It is orthogonal. A statically generated site is already fast on first visit, so the marginal benefit of caching is smaller than on a slow origin — but the offline and repeat-visit behaviour is unchanged, and the same cautions apply. The <a href="/blog/service-workers-offline-caching/">caching strategies and the kill switch</a> matter just as much here.</p>
+
+        <p><strong>"How do we handle a product being deleted?"</strong> Deliberately, because static artefacts persist. A deleted product needs its page removed from the deploy and a 410 or a 301 configured, and if your build simply stops emitting the page you may be left with a stale artefact on the CDN or a 404 with no redirect. Make deletion an explicit webhook path, not something that falls out of the next build.</p>
+
+        <p><strong>"Is the cost saving real?"</strong> On origin hosting, yes and substantially. Be careful about the rest: build minutes, image transformations, edge function invocations, and on-demand rendering are all metered on most platforms, and a badly tuned site can spend more on regeneration than it saved on servers. Model it at your actual traffic before quoting anyone a number.</p>
+
+        <h2>19. What I Would Do First</h2>
+
+        <p><strong>One.</strong> Profile your existing build if you have one, and find out what fraction of wall time is data fetching. On every project I have looked at it has been the majority, and fixing it is days rather than months.</p>
+
+        <p><strong>Two.</strong> Write down, before any code, the edit-to-live latency the business needs. If merchandisers need a price change visible in under a minute, you need webhook revalidation from day one and time-based revalidation will not save you.</p>
+
+        <p><strong>Three.</strong> Draw the dependency graph. Which pages change when a product changes, when a collection changes, when a price changes. This is the artefact that determines whether your revalidation is correct, and it is worth an hour on a whiteboard with a merchandiser in the room.</p>
+
+        <p><strong>Four.</strong> Decide what is never pre-rendered: stock, customer-specific price, cart, anything authenticated. Get that list agreed before anyone writes a component, because retrofitting a value out of the static HTML is much harder than leaving it out.</p>
+
+        <p><strong>Five.</strong> Pre-render the traffic-carrying portion of the catalogue and defer the tail. You will not be able to tell the difference and your build will be a quarter of the size.</p>
+
+        <p><strong>Six.</strong> Build the preview flow before you hand the CMS to anyone. An editor who cannot see their draft will publish to production to look at it, and you will spend the next year explaining why that is a problem.</p>
+
+        <p>The welding supplies retailer still runs this architecture and would not go back. But the thing that made it work was not the static generation — it was accepting, after four painful months, that a storefront has a stable half and a live half, and that trying to pre-render the live half is a fight with the shape of the business rather than with the tooling.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO & Performance Strategies</a></strong>
+              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
               <p>Combining JAMstack SSG with Next.js edge revalidation.</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>GraphQL backend integrations.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -272,6 +726,6 @@ export function useCartState() {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

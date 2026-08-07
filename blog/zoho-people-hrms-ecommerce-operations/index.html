@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Zoho People HRMS & Operations Management for E-Commerce | MODRACX</title>
-  <meta name="description" content="Engineering guide on automating warehouse staff shift tracking and employee onboarding by integrating Zoho People HRMS REST API with internal operations portals." />
+  <meta name="description" content="Making Zoho People the system of record for warehouse operations: joiner-mover-leaver provisioning, rosters, capacity forecasting and the reconciliation that finds ghosts." />
   <meta property="og:title" content="Zoho People HRMS & Operations Management for E-Commerce | MODRACX" />
   <meta property="og:description" content="Engineering guide on Zoho People HRMS integration by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Zoho People HRMS & Operations Management for E-Commerce</h1>
-        <p class="lede">Automating warehouse fulfillment staff shifts and attendance logging with Zoho People HRMS API streamlines peak-season logistics workforce management.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Zoho People HRMS &amp; Operations Management for E-Commerce</h1>
+        <p class="lede">The access control system named 71 people. Payroll named 54. One of the seventeen had resigned in September and had picked 340 orders since.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,31 +205,463 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Zoho People Attendance API Request</h2>
+        <h2>1. The Picker Who Left in September</h2>
 
-        <pre><code class="language-javascript">// Node.js Zoho People Attendance Log Post
-const axios = require('axios');
+        <p>A footwear retailer I work with runs a 4,000 square metre warehouse in the Midlands. In December they had a stock loss investigation — about £11,000 of trainers, spread across eight weeks, all high-value lines. The obvious question was who had been in the building.</p>
 
-async function logAttendance(employeeId, checkInTime) {
-  const url = 'https://people.zoho.com/people/api/attendance';
-  return await axios.post(url, null, {
-    params: {
-      authtoken: process.env.ZOHO_PEOPLE_TOKEN,
-      empId: employeeId,
-      checkIn: checkInTime
-    }
-  });
-}</code></pre>
+        <p>The access control export named 71 people. The payroll run named 54. Of the seventeen difference, twelve were agency staff who genuinely were on site under a different arrangement. Four were data entry errors. One was a picker who had resigned on 12 September, whose badge still opened the goods-in door, and whose warehouse management system account had picked 340 orders since.</p>
 
-        <hr />
+        <p>He had not been stealing. He had been rehired by the agency in November, put back on the floor by a shift supervisor who recognised him, and nobody had told HR because as far as the supervisor was concerned he already worked there. His badge worked, his WMS login worked, and for six weeks he was an employee of no system except the door.</p>
+
+        <p>The stock loss turned out to be a mispick pattern on a fast-moving line, which is a different article. But the audit produced something more useful: a clear picture of how many systems in that business held an opinion about who worked there, and how few of them agreed. Zoho People said 54. The WMS said 63. Active Directory said 68. The access control system said 71. Every one of those numbers had been maintained by a different person with a different definition of "current".</p>
+
+        <p>That gap is what this article is about. Not HR software as a product, but the specific engineering of making an HRMS the authoritative source for who exists, who is on shift, and what they are allowed to touch — in a business where the operational cost of getting it wrong is measured in unshipped orders.</p>
+
+        <h2>2. Why an Ecommerce Team Should Care About the HR System At All</h2>
+
+        <p>Engineers building storefronts do not usually think about HR data, and for a pure dropship operation they are right not to. The moment you have a warehouse, a customer service floor, or shift-based operations of any kind, three things start depending on it.</p>
+
+        <p><strong>Identity.</strong> Every operational system needs to know who a person is and whether they still work here. If that answer lives in four places, it will be wrong in at least two.</p>
+
+        <p><strong>Capacity.</strong> Your ability to ship tomorrow depends on how many pickers are rostered, how many are on leave, and how many called in sick this morning. That data lives in the HRMS and is almost never connected to the systems making dispatch promises.</p>
+
+        <p><strong>Cost.</strong> The labour cost of fulfilling an order is usually the second-largest variable cost after the goods themselves, and most merchants cannot state it per order. The inputs — hours worked, shift premiums, department allocation — are sitting in the HRMS and in the WMS, unjoined.</p>
+
+        <p>Zoho People is a reasonable HRMS for a business of this size, and it has an API that is adequate rather than delightful. What follows assumes it, but the design applies to any HRMS; the specific quirks are flagged as such.</p>
+
+        <h2>3. What Zoho People Actually Models</h2>
+
+        <p>Zoho People is form-driven, which is the most important structural fact about it. Almost everything is a record in a form, and forms are configurable per tenant. That means there is no fixed schema you can code against — there is your tenant's schema, which someone in HR can change on a Tuesday.</p>
+
+        <p>The core forms you will interact with:</p>
+
+        <p><strong>Employee</strong> — the person record. Employee ID, email, department, designation, reporting manager, location, employment status, dates of joining and exit. Extensible with custom fields, and every client I have worked with has extended it.</p>
+
+        <p><strong>Departments, Designations, Locations</strong> — the organisational structure, referenced by the employee record. These are the values your provisioning logic will branch on, so their stability matters more than HR realises.</p>
+
+        <p><strong>Shift</strong> and <strong>Shift Rotation</strong> — the roster. Shifts have start and end times, and employees are assigned to them for date ranges.</p>
+
+        <p><strong>Attendance</strong> — check-in and check-out records, from a web clock, a mobile app, a biometric device, or the API.</p>
+
+        <p><strong>Leave</strong> — leave types, balances, requests and approvals.</p>
+
+        <p><strong>Timesheets and Jobs</strong> — time booked against jobs or projects, which is where cost allocation lives if you use it.</p>
+
+        <p><strong>Onboarding</strong> — a checklist workflow attached to a new joiner.</p>
+
+        <p>The trap in a form-driven system is field naming. A field labelled "Employee ID" in the UI has an internal API name that may be <code>EmployeeID</code>, <code>Employee_ID</code>, or something a consultant chose in 2019. Never hardcode field names from the interface. Fetch the form metadata once at startup, build a label-to-API-name map, and fail loudly if an expected field has vanished — because it will, the first time HR tidies up a form.</p>
+
+        <pre><code class="language-python">import functools
+
+@functools.lru_cache(maxsize=8)
+def field_map(client, form_name):
+    """Label -> internal API name, resolved at runtime.
+
+    Hardcoding API names works until HR renames a field in the form builder,
+    at which point your integration starts writing nulls silently. This costs
+    one call at startup and removes an entire class of Monday-morning bug."""
+    meta = client.get(f"forms/{form_name}/fields")
+    return {f["displayName"]: f["apiName"] for f in meta["fields"]}
+
+
+REQUIRED = ["Employee ID", "Email address", "Department", "Employment Status",
+            "Date of Joining", "Date of Exit"]
+
+def assert_schema(client):
+    m = field_map(client, "P_Employee")
+    missing = [label for label in REQUIRED if label not in m]
+    if missing:
+        # Loud, at deploy time, rather than quiet at 3am.
+        raise SchemaDrift(f"Zoho People form P_Employee is missing: {missing}")
+    return m</code></pre>
+
+        <h2>4. Making the HRMS the System of Record for People</h2>
+
+        <p>The single decision that fixes the problem this article opened with: one system owns the answer to "does this person work here", and every other system derives from it.</p>
+
+        <p>It has to be the HRMS, for a reason that is organisational rather than technical. The HRMS is the system a leaver's exit is recorded in because payroll depends on it, and payroll is the one process no business forgets to run. Access control, WMS accounts and email are all things that can be forgotten without immediate consequence. Payroll is not. So the HRMS has an incentive structure that keeps it accurate, and the others do not.</p>
+
+        <p>What that means in practice is a directional rule: employment status flows out of Zoho People, never in. No downstream system may create a person. If a supervisor needs a new picker on the floor tomorrow, the route is a record in the HRMS that provisions downstream within minutes, not a WMS account created directly.</p>
+
+        <p>This is unpopular for exactly as long as the provisioning takes. If a new starter's accounts appear four minutes after HR saves the record, everyone accepts the rule. If it takes until the next morning's batch, supervisors will route around it within a fortnight and you are back to seventy-one badges and fifty-four salaries.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Attribute</th><th>System of record</th><th>Flows to</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Person exists / employment status</td><td>Zoho People</td><td>AD, WMS, access control, portal</td></tr>
+            <tr><td>Legal name, dates, department</td><td>Zoho People</td><td>Everything downstream</td></tr>
+            <tr><td>Work email address</td><td>Directory (AD / Google)</td><td>Written back to Zoho People</td></tr>
+            <tr><td>Roster / shift assignment</td><td>Zoho People</td><td>WMS, ops dashboards</td></tr>
+            <tr><td>Actual clock-in times</td><td>Time device or WMS</td><td>Written into Zoho People attendance</td></tr>
+            <tr><td>Pick rates, task output</td><td>WMS</td><td>Ops reporting only, never HR</td></tr>
+            <tr><td>Leave balance and approvals</td><td>Zoho People</td><td>Roster planning</td></tr>
+            <tr><td>WMS role / permissions</td><td>WMS, derived from designation</td><td>Nothing</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two rows deserve comment. Work email is written back rather than forward, because the directory generates it according to its own collision rules and the HRMS should record what was actually created rather than what was requested. And pick rates deliberately never flow into the HRMS. The moment individual productivity metrics land in the HR system, you have created a performance management dataset with consultation obligations, works council implications in some jurisdictions, and a real chilling effect on the floor. Keep operational metrics operational.</p>
+
+        <h2>5. The Joiner, Mover, Leaver Pipeline</h2>
+
+        <p>Everything downstream is one of three events, and the leaver is the one that matters most and gets built last.</p>
+
+        <h3>Joiner</h3>
+
+        <p>A new employee record appears with a joining date. The pipeline creates the directory account, assigns groups from department and designation, creates the WMS user with a role derived from designation, issues an access control credential, and — the part people forget — records the resulting identifiers back onto the employee record so the link is bidirectional.</p>
+
+        <p>Provisioning should happen on a schedule relative to the joining date, not on record creation. HR enters new starters weeks ahead. An account that goes live the moment the record is saved is an account sitting unused and unmonitored for three weeks, which is a security problem for no benefit.</p>
+
+        <h3>Mover</h3>
+
+        <p>Department, designation, location or manager changes. The pipeline recalculates entitlements and applies the difference. The critical property is that it must remove as well as add. A picker promoted to team leader should gain supervisor functions and, if the role no longer requires it, lose goods-in access. Most implementations only ever add, and after two years everyone who has moved internally has accumulated the union of every role they have held. I have audited a warehouse where the longest-serving supervisor had, on paper, more system access than the operations director.</p>
+
+        <h3>Leaver</h3>
+
+        <p>The exit date is set. Access is revoked. This is the event that must be near-instant and must be fail-loud, and it is the one that is nearly always implemented as an overnight batch with no alerting.</p>
+
+        <p>Design it as revocation-first: disable everything immediately on the exit date, then handle the exceptions. The alternative — a careful graceful wind-down with data handover — sounds more considerate and is how you end up with a picker still on the floor in December.</p>
+
+        <pre><code class="language-python">def process_leavers(zoho, targets, today):
+    """Runs every 15 minutes. Revocation is idempotent, so a repeat run
+    is harmless; a missed run is not."""
+    leavers = zoho.search("P_Employee", (
+        f"(Date_of_Exit &lt;= '{today.isoformat()}') and "
+        f"(Employment_Status != 'Terminated_Processed')"
+    ))
+
+    for emp in leavers:
+        results = {}
+        for name, target in targets.items():
+            try:
+                # Every target must implement revoke() idempotently: revoking
+                # an already-revoked account is a success, not an error.
+                results[name] = target.revoke(emp["Employee_ID"])
+            except Exception as exc:
+                results[name] = f"FAILED: {exc}"
+
+        failures = {k: v for k, v in results.items() if str(v).startswith("FAILED")}
+
+        if failures:
+            # A failed revocation is a security incident, not a retry-quietly.
+            # Page someone. Do not mark the record processed.
+            alerting.page(
+                f"Revocation failed for {emp['Employee_ID']} "
+                f"({emp.get('First_Name')} {emp.get('Last_Name')}): {failures}"
+            )
+            continue
+
+        zoho.update("P_Employee", emp["recordId"], {
+            "Employment_Status": "Terminated_Processed",
+            "Access_Revoked_At": now_iso(),
+        })
+        audit.write("revocation", emp["Employee_ID"], results)</code></pre>
+
+        <p>The <code>continue</code> on failure is deliberate. A partial revocation must not be recorded as complete, because the record status is the only thing anyone will look at later. Leaving it unprocessed means the next run retries and the alert keeps firing until a human resolves it, which is the behaviour you want for a security control.</p>
+
+        <h2>6. What "Access" Means in a Warehouse, Specifically</h2>
+
+        <p>Provisioning in an office is mostly email, single sign-on and a laptop. A warehouse has a longer and stranger list, and each item has a different owner and a different revocation mechanism.</p>
+
+        <p><strong>Physical access.</strong> Badge or fob, usually a separate system with its own database, frequently managed by facilities rather than IT, and often with an API that was designed in 2011. This is the one that matters most and is integrated least.</p>
+
+        <p><strong>WMS account.</strong> Role-based, and the roles map to physical capabilities — who can adjust stock, who can authorise a write-off, who can override a pick exception. Stock adjustment rights in particular should be tightly scoped and should be reviewed as a matter of routine.</p>
+
+        <p><strong>Handheld device enrolment.</strong> Often tied to the WMS account, sometimes separate, and sometimes a shared device where the person logs in per shift. Shared devices are the norm and they complicate every audit trail you will later want to build.</p>
+
+        <p><strong>Vehicle and equipment authorisation.</strong> Forklift certification is a compliance record with an expiry date, and it belongs in the HRMS as a field with a renewal reminder. A driver whose certification lapsed is a genuine liability and it is exactly the sort of date nobody tracks.</p>
+
+        <p><strong>Customer service tooling.</strong> Order lookup, refund authority, access to customer records. Refund authority in particular should be limited by value and derived from designation, not granted ad hoc.</p>
+
+        <p>The value of driving all of these from one HR event is not efficiency, it is completeness. Nine manual steps performed by four people will be done consistently for about a month.</p>
+
+        <h2>7. The API, and Its Sharp Edges</h2>
+
+        <p>Zoho People's API shares the Zoho platform's authentication model, which means OAuth 2.0 with refresh tokens and — the point that costs everyone an afternoon — regional data centres. A token from <code>accounts.zoho.eu</code> does not work against the <code>.com</code> API host. The token response tells you the correct API domain; store and use it.</p>
+
+        <p>Beyond that, four things shape how you build against it.</p>
+
+        <p><strong>Records are fetched by form.</strong> You query a form with a search criteria string, and the criteria syntax uses the internal field names, so the field map above is a prerequisite for everything.</p>
+
+        <p><strong>Pagination is index-based and modest.</strong> Fetching a few thousand employee records means paging, and the page size limit is lower than you would like. Do not fetch all employees on every run; fetch by modification time.</p>
+
+        <p><strong>Rate limits are per organisation and include a daily credit budget.</strong> Same platform behaviour as the rest of Zoho. A provisioning job that polls every minute across several forms will consume more of that budget than you expect. Count the calls.</p>
+
+        <p><strong>Bulk attendance and leave writes exist</strong> and you should use them. Writing attendance one record at a time for 200 warehouse staff, twice a day, is 400 calls that could be a handful.</p>
+
+        <pre><code class="language-python">def changed_since(client, form, since, fields):
+    """Delta fetch. Full-table scans are the reason HR integrations
+    exhaust their API budget by mid-afternoon."""
+    page, out = 1, []
+    fmap = field_map(client, form)
+
+    while True:
+        res = client.get(f"forms/{form}/records", params={
+            # Criteria uses internal names, hence the map.
+            "searchParams": f"({fmap['Modified Time']} &gt; '{since.isoformat()}')",
+            "sIndex": (page - 1) * 200 + 1,
+            "limit": 200,
+        })
+        rows = res.get("response", {}).get("result", [])
+        out.extend(project(r, fmap, fields) for r in rows)
+
+        if len(rows) &lt; 200:
+            break
+        page += 1
+
+    return out</code></pre>
+
+        <p>One behaviour worth knowing before it surprises you: modification timestamps update when any field changes, including fields your integration wrote. A provisioning job that writes an identifier back to the employee record will see that record again on its next delta fetch. Handlers must be idempotent, and it is worth stamping a marker field so you can distinguish your own writes from a human's. This is the same discipline as any event-driven integration; the reasoning is set out more fully in the <a href="/blog/sap-commerce-cloud-erp-sync/">ERP synchronisation article</a>, and it applies unchanged here.</p>
+
+        <h2>8. Rosters, and Matching Labour to Demand</h2>
+
+        <p>Here is a connection almost nobody builds, and it is the one with the clearest commercial value: the roster in the HRMS and the order volume in the storefront are related, and neither system knows it.</p>
+
+        <p>Warehouse capacity for a day is roughly the sum of rostered hours times the effective pick rate, less an allowance for non-picking work. Demand is the order backlog plus the day's expected orders. If capacity is below demand, you will miss cut-off, and you can know that at 6am rather than at 4pm.</p>
+
+        <pre><code class="language-python">from datetime import date
+
+def capacity_forecast(zoho, wms, storefront, day: date):
+    """Rostered hours against expected demand. Crude, and far better
+    than the alternative, which is finding out at cut-off."""
+
+    shifts = zoho.roster_for(day)                 # employee, shift, hours
+    on_leave = {l["Employee_ID"] for l in zoho.approved_leave_on(day)}
+
+    # Rostered but on approved leave is a real and common state: the roster
+    # is often built weeks ahead and leave is approved afterwards.
+    effective = [s for s in shifts if s["Employee_ID"] not in on_leave]
+
+    picking_hours = sum(
+        s["hours"] * ROLE_PICK_FRACTION.get(s["designation"], 0.0)
+        for s in effective
+    )
+
+    # Trailing 4-week rate for this weekday, not an all-time average:
+    # Monday and Saturday productivity differ materially in every
+    # warehouse I have measured.
+    rate = wms.pick_rate_p50(weekday=day.weekday(), weeks=4)
+    capacity_lines = picking_hours * rate
+
+    demand_lines = (storefront.open_backlog_lines()
+                    + storefront.forecast_lines(day))
+
+    return {
+        "day": day.isoformat(),
+        "rostered_headcount": len(effective),
+        "removed_for_leave": len(shifts) - len(effective),
+        "capacity_lines": round(capacity_lines),
+        "demand_lines": round(demand_lines),
+        "headroom_pct": round(100 * (capacity_lines - demand_lines)
+                              / max(demand_lines, 1), 1),
+    }</code></pre>
+
+        <p>Two subtleties that make the difference between this being useful and being ignored.</p>
+
+        <p>Approved leave must be subtracted from the roster. Rosters are typically built weeks in advance and leave is approved against them afterwards, so the raw roster overstates availability. Every operations manager knows this and compensates in their head, which means the number in the system is wrong and the number they trust is undocumented.</p>
+
+        <p>The pick rate must be segmented by weekday and ideally by shift. A single blended rate produces a forecast that is systematically optimistic on Mondays and pessimistic at weekends, and a forecast that is wrong in a predictable direction gets discounted entirely within a month.</p>
+
+        <p>Where this pays for itself is peak. A retailer who can see on the Monday that Thursday is 18% short has time to book agency cover at normal rates. The same retailer finding out on Thursday morning pays a premium, or misses the cut-off and eats the customer service cost.</p>
+
+        <h2>9. Attendance, and the Gap Between Clocked and Productive</h2>
+
+        <p>Attendance data flows into Zoho People from a clock — a terminal, a mobile app, or a biometric device. If your WMS already has a login event per shift, you have two sources of the same fact, and they will disagree.</p>
+
+        <p>They disagree for legitimate reasons. Someone badges in at 05:52, collects a handheld, walks to their zone, and logs into the WMS at 06:07. That fifteen minutes is real, paid, and not picking. Across 120 staff it is 30 hours a day of capacity that your forecast should account for and your labour cost model should not attribute to picking.</p>
+
+        <p>Which source is authoritative depends on what the number is for. For pay, the clock is authoritative, because that is the contractual record and in most jurisdictions the legally defensible one. For capacity planning, the WMS session is closer to the truth. Do not try to reconcile them into one number; keep both and label them honestly.</p>
+
+        <p>What is worth automating is the exception report. Clocked in but no WMS session for over 30 minutes. WMS session with no clock-in at all — which is the signature of the December picker. Clocked out while still holding an open pick task. Each of those is a short query and each catches something real.</p>
+
+        <pre><code class="language-sql">-- Ran every 30 minutes during shift hours.
+-- The second branch is the one that would have caught the September leaver
+-- in his first week back rather than in a stock loss investigation.
+SELECT
+    w.wms_user_id,
+    w.employee_id,
+    MIN(w.session_start)      AS first_wms_activity,
+    a.check_in                AS hr_check_in,
+    CASE
+        WHEN a.check_in IS NULL THEN 'WMS_ACTIVITY_NO_ATTENDANCE'
+        WHEN MIN(w.session_start) &gt; a.check_in + INTERVAL 45 MINUTE
+             THEN 'LONG_GAP_CLOCK_TO_TASK'
+    END AS exception_type
+FROM wms_session w
+LEFT JOIN hr_attendance a
+       ON a.employee_id = w.employee_id
+      AND a.work_date   = DATE(w.session_start)
+WHERE DATE(w.session_start) = CURDATE()
+GROUP BY w.wms_user_id, w.employee_id, a.check_in
+HAVING exception_type IS NOT NULL;</code></pre>
+
+        <p>A caution on biometric attendance. Fingerprint and face-recognition clocks are common in warehouses and they process biometric data, which in the UK and EU is a special category under data protection law with a substantially higher bar for lawful processing. A badge or a PIN achieves the same operational outcome without that exposure. If a client already has biometric terminals, that is a conversation for their DPO rather than a technical decision, and it is worth raising explicitly rather than assuming someone else has.</p>
+
+        <h2>10. Leave, and Why Peak Season Planning Fails</h2>
+
+        <p>Leave data is in the HRMS and is almost never consulted when commercial commitments are made. The result is a marketing calendar that promises next-day dispatch through a fortnight when a third of the packing team is on annual leave they booked in March.</p>
+
+        <p>Two things fix most of this and neither is sophisticated.</p>
+
+        <p><strong>Publish leave density as an operational metric.</strong> A simple daily figure — percentage of the fulfilment team on approved leave — visible to whoever plans promotions. Not names, just density by team. This is the cheapest useful thing on the list and it takes an afternoon.</p>
+
+        <p><strong>Enforce blackout capacity, not blackout dates.</strong> Blanket bans on leave during peak are resented and generate exceptions. A cap — no more than 15% of the picking team off on any day in November and December — is fairer, easier to defend, and directly protects the number that matters. Zoho People can express some of this in leave policy; where it cannot, a validation hook on approval will.</p>
+
+        <p>Carry-over is where the sting is. Leave that must be used before the end of the holiday year, in a business whose holiday year ends in December, produces a stampede in exactly the weeks you can least afford it. Shifting the holiday year to April is an HR decision that solves an operations problem, and it is the sort of suggestion an engineer looking at the data is well placed to make. I have made it twice and it was adopted once.</p>
+
+        <h2>11. Labour Cost per Order, Which Almost Nobody Measures</h2>
+
+        <p>Join rostered hours and rates from the HRMS with lines picked and orders shipped from the WMS, and you get cost to fulfil per order. Most merchants I meet cannot produce this figure and are making decisions that depend on it — free shipping thresholds, packaging choices, whether a marketplace channel is actually profitable at its commission rate.</p>
+
+        <p>The calculation is not hard. The reason it does not exist is that the inputs are in two systems owned by two departments, and nobody owns the join.</p>
+
+        <p>Some care is needed to make the number honest. Include shift premiums and agency margins, or your weekend and peak costs will look artificially low, which is precisely when they are highest. Allocate supervision and non-picking roles across the volume rather than excluding them, since they are a real cost of fulfilling orders. Segment by channel where you can — marketplace orders often carry different packing requirements and take measurably longer, and the blended average hides that entirely.</p>
+
+        <p>One client found their cost to fulfil ranged from £1.42 on a weekday single-line order to £4.90 on a weekend multi-line order with agency cover. They had been using £2.10 as a flat assumption in their free shipping threshold. The threshold moved by £8 and margin on the affected orders improved immediately.</p>
+
+        <h2>12. Temporary and Agency Workers, the Biggest Gap</h2>
+
+        <p>The December incident happened at the seam between permanent and agency staffing, and that is where nearly all of these problems live.</p>
+
+        <p>Agency workers are typically not in the HRMS at all, because they are not employees and payroll does not run for them. So the system of record for "who works here" covers a fraction of the people in the building — and during peak it can be a minority. At one client, agency staff were 61% of headcount in the first week of December.</p>
+
+        <p>Three approaches, and I have implemented all of them.</p>
+
+        <p><strong>Do nothing and manage manually.</strong> Defensible for a handful of workers over a short period. It stops being defensible somewhere around fifteen people or three weeks, and everyone crosses that line without noticing.</p>
+
+        <p><strong>Create them in the HRMS as non-payroll records.</strong> A separate employment type, excluded from payroll and from anything that assumes a contract, but present for identity and provisioning. This is what I recommend for most warehouse operations. It gives you one place to ask who is on site, and joiner-mover-leaver works unchanged.</p>
+
+        <p><strong>A separate contingent worker register that feeds the same pipeline.</strong> Right when the agency provides a feed and the volume justifies it. More integration work, better data, and it keeps genuinely different employment relationships modelled separately, which the HR side will prefer.</p>
+
+        <p>Whichever you choose, the property that matters is that agency assignments have an end date and revocation fires from it by default. An agency worker's placement ending should revoke access automatically, with a positive action required to extend — the opposite of the usual arrangement, where access persists until someone remembers to remove it. This is the same default-deny posture I argue for in the piece on <a href="/blog/zero-trust-security/">zero trust security</a>, applied to physical operations rather than networks.</p>
+
+        <h2>13. Data Protection: This Is the Most Sensitive Data You Hold</h2>
+
+        <p>Customer data is regulated. Employee data is regulated and personal in a way that makes mistakes considerably more damaging, because the people affected work for you and will find out.</p>
+
+        <p>The specific hazards in this kind of integration.</p>
+
+        <p><strong>Over-fetching.</strong> A provisioning job needs employee ID, name, email, department, designation and status. It does not need salary, date of birth, home address, next of kin, or the disciplinary record. Zoho People will happily return the whole record. Project down to what you need at the point of fetch, not at the point of use, so the surplus never reaches your logs.</p>
+
+        <p><strong>Logging.</strong> The classic breach in this category is not an attacker. It is an entire employee record serialised into an application log that forty engineers can read and that ships to a third-party log service. Redact at the logging layer, and assume anything you log is readable by more people than you intend.</p>
+
+        <p><strong>Special category data.</strong> Sickness absence reasons, biometric identifiers, and anything relating to health, union membership or religion carry additional obligations. Sickness absence is the one that catches ecommerce teams, because an absence integration that syncs the reason field alongside the dates has just moved health data into an operational system with a different access model.</p>
+
+        <p><strong>Retention.</strong> Leaver records have a defined retention period, and derived data in your systems inherits it. A provisioning audit log holding names and dates for eight years is a liability. Set retention when you build the table, not when someone asks.</p>
+
+        <pre><code class="language-python"># Project at fetch, not at use. What you never retrieve cannot leak
+# from a log, a stack trace, or a debug endpoint someone left enabled.
+PROVISIONING_FIELDS = (
+    "Employee_ID", "First_Name", "Last_Name", "Email_address",
+    "Department", "Designation", "Employment_Status",
+    "Date_of_Joining", "Date_of_Exit", "Work_Location",
+)
+
+def project(record, fmap, fields=PROVISIONING_FIELDS):
+    return {f: record.get(fmap.get(f, f)) for f in fields}
+
+
+class RedactingFormatter(logging.Formatter):
+    """Belt and braces: even projected records should not print names
+    into a shared log stream at INFO level."""
+    PATTERNS = [
+        (re.compile(r'("Email_address"\s*:\s*")[^"]+'), r'\1[redacted]'),
+        (re.compile(r'("(?:First|Last)_Name"\s*:\s*")[^"]+'), r'\1[redacted]'),
+    ]
+
+    def format(self, record):
+        msg = super().format(record)
+        for pattern, repl in self.PATTERNS:
+            msg = pattern.sub(repl, msg)
+        return msg</code></pre>
+
+        <h2>14. The Operations Portal, and Who It Is Actually For</h2>
+
+        <p>Most of these projects grow an internal portal, and the ones that succeed are the ones that solved a specific person's specific problem rather than aggregating dashboards.</p>
+
+        <p>The audiences are genuinely different. A shift supervisor at 05:45 wants to know who is in, who is missing, and whether they need to call anyone. They want that on a phone, in under three seconds, standing up. An operations manager wants tomorrow's capacity against tomorrow's demand and this week's exceptions. A finance analyst wants cost per order by channel by week. These are three products, and building one screen that serves all three serves none.</p>
+
+        <p>Start with the supervisor. It is the smallest scope, it produces the most immediate value, and it generates the data quality feedback loop everything else depends on — a supervisor who looks at a roster screen every morning will report a wrong name within a day, which is a rate of data quality improvement no batch validation will match. The broader architectural considerations for these internal tools are covered in the piece on <a href="/blog/intranet-employee-portal-ecommerce/">employee portals for ecommerce operations</a>.</p>
+
+        <p>One design note that matters more than it should: build it to work on a cheap Android handset over patchy warehouse wifi, because that is the real deployment target. A dashboard that assumes a desktop is a dashboard the floor will never open.</p>
+
+        <h2>15. Reconciliation, Because Everything Drifts</h2>
+
+        <p>Provisioning pipelines drift. A revocation fails during a deploy. A record is edited directly in a downstream system. An API change silently drops a field. None of these announce themselves.</p>
+
+        <p>So run a comparison on a schedule and treat divergence as expected rather than as an emergency. The one that matters most is the four-way headcount check that the footwear retailer's audit performed by hand.</p>
+
+        <p><strong>Active in HRMS versus active in each downstream system.</strong> Daily. Anyone present downstream and not in the HRMS is a finding, full stop. Anyone in the HRMS with no downstream account is usually a provisioning failure worth investigating.</p>
+
+        <p><strong>Access rights versus designation.</strong> Weekly. Everyone whose downstream role does not match what their designation implies. This catches the accumulation problem from internal moves, and the first run of it is always startling.</p>
+
+        <p><strong>Certification expiry.</strong> Weekly, looking thirty days ahead. Forklift licences, first aid, food handling where relevant. Cheap to build and genuinely protective.</p>
+
+        <p>Publish the results even when they are clean, for the same reason as any reconciliation: a report that shows zero every day builds the habit of looking.</p>
+
+        <h2>16. A Peak Season, With Numbers</h2>
+
+        <p>The footwear retailer, the year after the December incident. Around 120 permanent warehouse and customer service staff, rising to roughly 290 at peak with agency cover. Zoho People, a mid-market WMS, Active Directory, and an access control system whose API documentation was a PDF from 2014.</p>
+
+        <p><strong>What we built.</strong> Agency workers as non-payroll records in Zoho People with mandatory assignment end dates. A provisioning service running every five minutes across four targets. Revocation on exit date with paging on failure. The four-way reconciliation, daily. A capacity forecast published at 06:00 for the following three days. And a supervisor screen showing who was rostered, who had clocked in, and who had not.</p>
+
+        <p><strong>What it cost.</strong> About nine weeks of one engineer, of which the access control integration was three — the API accepted credential updates but had no way to query current state, so we had to maintain a shadow table and reconcile against a nightly CSV export. That was the least satisfying work in the project and it was unavoidable.</p>
+
+        <p><strong>Results at peak.</strong> The four-way check ran daily through November and December. It found 31 discrepancies over the two months. Twenty-six were agency workers whose assignment end dates had been extended verbally and never in the system, which the reconciliation surfaced within a day rather than never. Four were provisioning failures where the access control system had accepted a call and not applied it — the shadow table caught these, which retrospectively justified building it. One was a genuine unauthorised account, created directly in the WMS by a supervisor working around a slow onboarding on a Saturday.</p>
+
+        <p>Mean time from HR exit record to full revocation went from 4.5 days, measured over the previous year, to 11 minutes.</p>
+
+        <p><strong>What went wrong.</strong> The capacity forecast was badly wrong for the first fortnight and nearly got switched off. We had built the pick rate from a twelve-week trailing average, which included a quiet October, and it overstated capacity by roughly 20% because peak agency staff are slower than experienced permanent staff — materially so in their first week. The forecast said we had headroom on three days when we did not, and on one of those we missed cut-off on about 400 orders.</p>
+
+        <p>The fix was to segment the rate by tenure band: under two weeks, two to eight weeks, and established. The gap was larger than anyone expected — new agency pickers ran at roughly 55% of the established rate in week one and about 80% by week four. Once that was in, forecast error over the remaining six weeks stayed within 8% on all but two days.</p>
+
+        <p><strong>What I would do differently.</strong> Build the reconciliation first, before any provisioning. It is a read-only report, it can be built in two days, and it would have quantified the problem before we designed a solution to it. We built it in week six, and it immediately told us things that would have changed decisions we had already made in weeks two and three.</p>
+
+        <p>And I would have resisted the capacity forecast until the second phase. It was the feature everyone wanted and it was the one with the least reliable inputs. Shipping it early, wrong, spent credibility that the boring provisioning work had earned.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"Can we not just use the Zoho People and Zoho Directory integration?"</strong> If your whole stack is Zoho, much of the identity provisioning is available without custom code, and you should use it. It does not extend to a third-party WMS or an access control system, which is where the operational risk actually lives. Use the native integration for what it covers and build only the gap.</p>
+
+        <p><strong>"Should attendance flow from the WMS into Zoho People or the other way?"</strong> Clock data into the HRMS, because pay depends on it and the HRMS is the contractual record. WMS session data stays in the WMS and is used for capacity. Do not merge them into a single number; they measure different things and the difference is informative.</p>
+
+        <p><strong>"How real-time does provisioning need to be?"</strong> Revocation: minutes, and it should page on failure. Creation: relative to the joining date, and same-day is fine. Changes: within an hour. The asymmetry is deliberate — the cost of late access is inconvenience, the cost of late revocation is a security incident.</p>
+
+        <p><strong>"What about payroll?"</strong> Different problem, higher stakes, and a mistake there is visible to every employee on the same day. If you are integrating payroll as well, treat it as a separate project with separate testing; the considerations are set out in the article on <a href="/blog/adp-hrms-payroll-integration-enterprise/">HRMS and payroll integration</a>.</p>
+
+        <p><strong>"Our HR team edits things directly in downstream systems. How do we stop that?"</strong> You do not stop it with technology, you stop it by making the sanctioned route faster than the workaround. If provisioning takes four minutes, people use it. If it takes overnight, they route around it, and no amount of policy will change that. Then detect the remainder with reconciliation and treat each instance as a conversation rather than an enforcement action.</p>
+
+        <p><strong>"Is this worth it for a 30-person operation?"</strong> The reconciliation report, yes — two days of work and it is protective at any size. The full provisioning pipeline, probably not below about 50 people or where turnover is low. What changes the calculation is agency staffing: fifteen agency workers through a peak generates more identity churn than sixty permanent staff over a year.</p>
+
+        <p><strong>"How do we test this without touching real employee data?"</strong> A separate Zoho People organisation with synthetic records, and downstream targets in a sandbox. The part that is genuinely hard to test is the access control system, which usually has no test instance. We ended up with a recorded-fixture test double built from real request and response pairs, which is uglier than it sounds and was the only workable option.</p>
+
+        <h2>18. What I Would Do First</h2>
+
+        <p>If I were starting this on Monday, in order.</p>
+
+        <p><strong>One.</strong> Build the four-way headcount comparison, read-only, before touching anything else. HRMS, directory, WMS, access control. It takes two days, it quantifies the problem, and it is the report you will keep running for years. Everything after this is easier to justify once you can put a number on the gap.</p>
+
+        <p><strong>Two.</strong> Fix the leaver path before the joiner path. Revocation on exit date, idempotent, paging on failure, and a record status that is only set when every target succeeded. This is the highest-risk gap and it is smaller than the joiner pipeline.</p>
+
+        <p><strong>Three.</strong> Get agency workers into the HRMS as non-payroll records with mandatory assignment end dates. Until they are there, your system of record covers a fraction of the people in the building and every other control is partial.</p>
+
+        <p><strong>Four.</strong> Build the field map and schema assertion before any write path. Form-driven systems change under you, and failing loudly at deploy time is much cheaper than writing nulls silently for a month.</p>
+
+        <p><strong>Five.</strong> Then joiner and mover provisioning, with the mover path removing entitlements as well as adding them. If you only build one direction, build removal.</p>
+
+        <p><strong>Six.</strong> The supervisor screen. Small, immediately useful, and it turns your floor staff into the data quality process you would otherwise have to build.</p>
+
+        <p><strong>Seven.</strong> Only then the capacity forecast, and segment your pick rates by weekday and tenure before you show anyone a number. A forecast that is wrong in its first fortnight will be ignored for the rest of its life.</p>
+
+        <p>What strikes me looking back at the footwear retailer's audit is that nothing about it was technically difficult. Four systems held a list of people, none of them was designated as correct, and comparing them had never been anybody's job. The engineering that fixed it was ordinary — a scheduled query, an idempotent revocation, an end date that defaults to closed. The reason it did not exist is that it sits between HR, IT and operations, in a gap where three departments each assumed one of the others was watching. That is the same gap that swallows eleven thousand orders in an ERP queue, and it is fixed the same way: name an owner, run the comparison, and alert on the difference.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/adp-hrms-payroll-integration-enterprise/">ADP HRMS & Payroll Integration for Enterprise Organizations</a></strong>
+              <strong><a href="/blog/adp-hrms-payroll-integration-enterprise/">ADP HRMS &amp; Payroll Integration for Enterprise Organizations</a></strong>
               <p>Comparing ADP and Zoho People enterprise payroll connectors.</p>
             </li>
             <li>
@@ -236,7 +670,6 @@ async function logAttendance(employeeId, checkInTime) {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -270,6 +703,6 @@ async function logAttendance(employeeId, checkInTime) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

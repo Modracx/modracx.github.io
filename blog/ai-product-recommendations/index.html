@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>AI-Powered Product Recommendations for Magento & Shopify | MODRACX</title>
-  <meta name="description" content="Engineering guide on deploying vector embeddings, collaborative filtering, and AI product recommendation engines for Magento 2 and Shopify Plus storefronts." />
+  <meta name="description" content="Cold start, collaborative versus content-based recommendations, why offline evaluation lies, when simple rules beat a model, and how to read a vendor&#x27;s uplift claims." />
   <meta property="og:title" content="AI-Powered Product Recommendations for Magento & Shopify | MODRACX" />
   <meta property="og:description" content="Engineering guide on deploying AI product recommendation engines by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -169,17 +171,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>AI-Powered Product Recommendations for Magento & Shopify</h1>
-        <p class="lede">Personalized recommendations boost average order value (AOV) by 15-30%. Learn how to build vector similarity search engines using OpenSearch, Pinecone, and machine learning embeddings.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>AI-Powered Product Recommendations for Magento &amp; Shopify</h1>
+        <p class="lede">A £48,000 recommender emailed a customer four more sofas two days after she bought one. Four business rules fixed it, which is most of what I have learned about these systems.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=UX+%26+Design">UX & Design</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -204,259 +206,582 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>The Architecture of Modern E-Commerce Recommendations</h2>
+        <h2>1. The Widget That Recommended A Sofa To Someone Who Had Just Bought A Sofa</h2>
 
-        <p>Building a highly performant recommendation engine for an e-commerce storefront is one of the most impactful architectural investments an engineering team can make. As someone who has spent years architecting systems for Magento and Shopify Plus environments, I have seen firsthand how transitioning from basic, rule-based upselling logic to sophisticated, machine learning-driven personalization can fundamentally alter revenue trajectories. The difference in average order value (AOV) and conversion rates is stark. Implementing an AI-driven approach is not merely about dropping in a third-party plugin; it is about designing a robust, real-time data pipeline, selecting the right vector database, optimizing machine learning models for low latency, and rendering recommendations at the edge to ensure the user experience remains lightning fast.</p>
+        <p>A laboratory equipment retailer I worked with spent £48,000 with a recommendations vendor and went live in April. Six weeks later their customer service manager forwarded me a complaint. A customer who had bought a three-seat sofa on Tuesday had received an email on Thursday recommending four more sofas, and had replied asking whether the company thought she needed five.</p>
 
-        <p>Historically, platforms like Magento utilized simplistic block rendering for "Related Products" or "Up-Sells," which were either manually curated by merchandisers or driven by rudimentary database queries matching categories and price points. Shopify, similarly, offered basic collaborative filtering out of the box or relied heavily on ecosystem apps. Today, the landscape demands highly personalized, context-aware suggestions. We achieve this by blending collaborative filtering models, such as Alternating Least Squares (ALS), with deep learning vector embeddings that understand the semantic relationships between products. This approach allows the system to recommend a minimalist oak dining chair not just because it shares a category with an oak dining table, but because the neural network recognizes the specific design aesthetic, material composition, and typical buyer persona associated with both items.</p>
-        
-        <p>In this comprehensive technical breakdown, I will walk you through the end-to-end architecture of building a custom AI product recommendation engine. We will explore how to generate and index vector embeddings using OpenAI and Pinecone, how to implement implicit feedback collaborative filtering with Apache Spark or Python's Implicit library, how to stream behavioral data, and crucially, how to integrate this intelligence into Magento 2 and Shopify Plus storefronts using <a href="/blog/headless-architecture/">headless architecture</a> and edge computing.</p>
+        <p>She was not the only one. About 11% of the post-purchase emails that month recommended an item from the same category the customer had just bought, at a similar price, from the same range. The model was doing exactly what it had been trained to do — find items similar to the one the user interacted with — and the business consequence was that it looked stupid in front of customers.</p>
 
-        <h2>Understanding Vector Embeddings and Semantic Search</h2>
+        <p>The fix was not a better model. It was four lines of business logic: exclude the purchased item, exclude items in the same leaf category as a purchase within 90 days for categories flagged as durable goods, exclude anything the customer has returned, and never recommend across a price band more than 40% below what they just paid. Those four rules improved the click-through rate on that email by 61%, and every one of them was something the merchandising manager could have told you on day one if anyone had asked.</p>
 
-        <p>To build a modern recommendation engine, one must first grasp the concept of vector embeddings. An embedding is a dense, low-dimensional vector representation of a high-dimensional object, such as a text document or an image. By converting product descriptions, metadata, and user reviews into vectors, we map them into a continuous vector space where semantically similar items are positioned close to one another. The distance between two vectors—typically measured using cosine similarity or Euclidean distance—quantifies their similarity.</p>
+        <p>I have built or reviewed recommendation systems for about a dozen merchants now, and that experience has left me with a view that is unfashionable in a market currently very keen to sell you machine learning: the model is usually the least important component, the evaluation is usually wrong, and a well-constructed rules layer with a popularity fallback beats a mediocre model far more often than anyone in the vendor's sales deck will tell you.</p>
 
-        <p>To generate these embeddings, we frequently employ models like OpenAI's <code>text-embedding-ada-002</code> or open-source alternatives like <code>all-MiniLM-L6-v2</code> from SentenceTransformers. For production workloads with tens of thousands or millions of SKUs, computing these embeddings in batch is necessary. We extract the catalog from our e-commerce platform, concatenate the relevant attributes—title, short description, category hierarchy, and key specifications—into a single textual representation, and pass this through the embedding model.</p>
+        <p>This article is about what actually works, in what order, and how to tell whether the thing you have deployed is doing anything at all. There is a fair amount of scepticism in it. That is deliberate — not because these systems do not work, but because the gap between a recommender that adds 4% to revenue and one that adds nothing is almost entirely in the parts nobody demos.</p>
 
-        <p>Once the embeddings are generated, they must be stored and indexed in a vector database capable of executing Approximate Nearest Neighbor (ANN) searches at scale. Pinecone, Qdrant, and Milvus are leading choices in this space. These databases utilize algorithms like Hierarchical Navigable Small World (HNSW) graphs to partition the vector space, allowing them to search millions of vectors and return the closest matches in milliseconds.</p>
+        <h2>2. What A Recommender Is Actually Optimising</h2>
 
-        <p>Let us examine a Python script that extracts product data, generates embeddings using OpenAI, and upserts them into a Pinecone index. This script is designed to run as a scheduled cron job or an asynchronous task triggered by catalog updates. This ensures that when a merchandiser adds a new product or updates a description in the Magento admin panel or Shopify dashboard, the vector index is kept perfectly synchronized with the source of truth.</p>
+        <p>Nearly every off-the-shelf recommender optimises one of two objectives: predict what the user will click next, or predict what the user will buy next. Both sound like what you want. Neither is.</p>
 
-        <pre><code class="language-python"># catalog_indexer.py
-import os
-import json
-import openai
-from pinecone import Pinecone, ServerlessSpec
-from typing import List, Dict
+        <p>What the business wants is <em>incremental</em> revenue — orders that would not otherwise have happened, or baskets that are larger than they would otherwise have been. A model that perfectly predicts what someone was going to buy anyway and puts it in front of them contributes precisely nothing, while producing spectacular attributed-revenue numbers in the vendor's dashboard.</p>
 
-# Initialize API clients
-openai.api_key = os.getenv("OPENAI_API_KEY")
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        <p>This is not a theoretical concern. The single most common finding in my recommender audits is a widget on the product page recommending the item the customer is already looking at, or a trivial variant of it, and being credited with the resulting sale. Strip out same-item and same-variant recommendations and the attributed revenue frequently falls by a third.</p>
 
-INDEX_NAME = "ecommerce-product-embeddings"
+        <p>The second objective mismatch is time horizon. Click-optimised models learn that discounted, photogenic, cheap items get clicked. Left alone for a quarter, they will systematically shift your recommendation surface toward your lowest-margin catalogue, because that is what maximises the metric they were given. I have seen a homepage recommendation strip drift to an average selling price 38% below the site average over four months, entirely through this mechanism, with the model performing better on its own metric every single week.</p>
 
-def setup_index():
-    if INDEX_NAME not in pc.list_indexes().names():
-        pc.create_index(
-            name=INDEX_NAME,
-            dimension=1536, # Dimension for text-embedding-ada-002
-            metric='cosine',
-            spec=ServerlessSpec(cloud='aws', region='us-west-2')
-        )
-    return pc.Index(INDEX_NAME)
+        <p>So before you evaluate any approach, write down the objective in business terms and decide how you will constrain the model toward it. Margin-weighting the ranking, floors on average selling price, category diversity requirements. These sound like they compromise the model. They are the difference between a recommender that makes money and one that makes a number go up.</p>
 
-def generate_embeddings(texts: List[str]) -> List[List[float]]:
-    response = openai.Embedding.create(
-        input=texts,
-        model="text-embedding-ada-002"
+        <h2>3. The Placement Decides The Algorithm</h2>
+
+        <p>"Product recommendations" is not one problem. It is six or seven problems with different available signals and different right answers, and treating them as one is the first architectural mistake.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Placement</th><th>What the customer is doing</th><th>What works</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Product page — "similar"</td><td>Evaluating one item</td><td>Content similarity, same category, price band</td></tr>
+            <tr><td>Product page — "bought together"</td><td>Evaluating one item</td><td>Co-purchase from order history</td></tr>
+            <tr><td>Cart / checkout</td><td>Committed, price-sensitive</td><td>Complements only, cheap, low friction</td></tr>
+            <tr><td>Homepage, returning user</td><td>Undirected browsing</td><td>Personalised, recency-weighted history</td></tr>
+            <tr><td>Homepage, new user</td><td>No signal at all</td><td>Popularity, seasonality, editorial</td></tr>
+            <tr><td>Search zero-results</td><td>Frustrated, explicit intent</td><td>Query embedding similarity</td></tr>
+            <tr><td>Post-purchase email</td><td>Owns the thing already</td><td>Complements, consumables, exclusions</td></tr>
+            <tr><td>Out-of-stock page</td><td>Wanted a specific thing</td><td>Substitutes — the one place similarity is right</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two of those rows carry most of the value in my experience, and they are the two that are least often built properly: the cart, where a well-chosen complement at the right price lifts average order value directly, and the out-of-stock page, where the alternative to a good substitute is a customer leaving for a competitor.</p>
+
+        <p>The cart is also where similarity models do the most damage. Someone with a tent in their basket does not want four more tents. They want pegs, a groundsheet and a torch. Similarity and complementarity are different relations, they come from different data, and a single model that serves both placements will get one of them wrong.</p>
+
+        <h2>4. Collaborative Filtering, And What It Actually Knows</h2>
+
+        <p>Collaborative filtering learns from behaviour: people who interacted with X also interacted with Y. It knows nothing about the products themselves, which is both its power and its limitation.</p>
+
+        <p>The power is that it discovers relationships no attribute schema would encode. On a hardware client, the model surfaced a strong association between a specific brand of impact driver and a particular garden shed — nonsensical on the product data, entirely sensible once you realised both were being bought by people building a shed on a bank holiday weekend. No content-based approach reaches that.</p>
+
+        <p>Two implementations cover almost every real case.</p>
+
+        <p><strong>Item-item co-occurrence</strong> is the simplest thing that works. For every pair of items, count how often they appear in the same order or the same session, normalise for popularity so that batteries do not co-occur with everything, and store the top N per item. This is a SQL query and a cron job. It is not machine learning by any reasonable definition and on catalogues under about 20,000 SKUs it is competitive with anything more sophisticated.</p>
+
+        <pre><code class="language-sql">-- Co-purchase with popularity normalisation. The normalisation is the
+-- entire difference between a useful result and a list of your five
+-- best-selling items attached to every product in the catalogue.
+WITH pairs AS (
+  SELECT a.product_id AS item_a,
+         b.product_id AS item_b,
+         COUNT(*)     AS co_orders
+  FROM order_items a
+  JOIN order_items b
+    ON a.order_id = b.order_id
+   AND a.product_id &lt; b.product_id      -- each unordered pair once
+  JOIN orders o ON o.id = a.order_id
+  WHERE o.placed_at &gt;= CURRENT_DATE - INTERVAL '365 days'
+    AND o.state = 'completed'            -- exclude cancelled AND refunded
+  GROUP BY 1, 2
+  HAVING COUNT(*) &gt;= 8                   -- support floor; below this it is noise
+),
+totals AS (
+  SELECT product_id, COUNT(DISTINCT order_id) AS n
+  FROM order_items oi JOIN orders o ON o.id = oi.order_id
+  WHERE o.placed_at &gt;= CURRENT_DATE - INTERVAL '365 days'
+    AND o.state = 'completed'
+  GROUP BY 1
+)
+SELECT p.item_a, p.item_b, p.co_orders,
+       -- Lift: how much more often than chance. Anything under ~1.5 is
+       -- two popular items coinciding, not a relationship.
+       (p.co_orders::float / (ta.n * tb.n)) * (SELECT COUNT(*) FROM orders) AS lift
+FROM pairs p
+JOIN totals ta ON ta.product_id = p.item_a
+JOIN totals tb ON tb.product_id = p.item_b
+WHERE (p.co_orders::float / (ta.n * tb.n)) * (SELECT COUNT(*) FROM orders) &gt; 1.5
+ORDER BY lift DESC;</code></pre>
+
+        <p><strong>Matrix factorisation on implicit feedback</strong> is the next step up. Build a sparse user-item matrix weighted by interaction strength, factorise it into low-dimensional user and item vectors, and use those vectors for both user-personalised and item-similar recommendations. Alternating Least Squares with confidence weighting, from the Hu-Koren-Volinsky formulation, is still the workhorse and still hard to beat on ecommerce data.</p>
+
+        <pre><code class="language-python">"""ALS on implicit feedback. Three decisions in here matter more than
+any hyperparameter: the interaction weights, the time decay, and the
+temporal split. Get those wrong and the tuning is theatre."""
+import numpy as np, scipy.sparse as sp, implicit, pandas as pd
+
+# Interaction weights encode a hypothesis about intent. These came from
+# looking at conversion rates per event type on the actual store — not
+# from a paper. Yours will differ and you should check.
+WEIGHTS = {"view": 1.0, "detail_dwell_30s": 2.0, "add_to_cart": 6.0,
+           "wishlist": 4.0, "purchase": 14.0, "return": -10.0}
+
+def build_matrix(events: pd.DataFrame, half_life_days: float = 45.0):
+    events = events.copy()
+    events["w"] = events["event_type"].map(WEIGHTS).fillna(0.0)
+
+    # Exponential recency decay. A purchase from 2019 is not evidence
+    # about what someone wants today, and undecayed data quietly makes
+    # your recommender a museum of last year's catalogue.
+    age = (pd.Timestamp.utcnow() - events["ts"]).dt.days.clip(lower=0)
+    events["w"] *= np.exp(-np.log(2) * age / half_life_days)
+
+    events = events[events["w"] != 0]
+    users = events["user_id"].astype("category")
+    items = events["product_id"].astype("category")
+
+    matrix = sp.csr_matrix(
+        (events["w"].astype("float32"), (users.cat.codes, items.cat.codes)),
+        shape=(len(users.cat.categories), len(items.cat.categories)),
     )
-    return [record['embedding'] for record in response['data']]
+    return matrix, users.cat.categories, items.cat.categories
 
-def index_products(products: List[Dict]):
-    index = setup_index()
-    batch_size = 100
-    
-    for i in range(0, len(products), batch_size):
-        batch = products[i:i + batch_size]
-        
-        # Prepare text representations
-        texts = [
-            f"Title: {p['name']}. Category: {p['category']}. Description: {p['description']}"
-            for p in batch
-        ]
-        
-        # Generate embeddings
-        embeddings = generate_embeddings(texts)
-        
-        # Prepare vectors for upsert
-        vectors = [
-            {
-                "id": str(p['sku']),
-                "values": emb,
-                "metadata": {
-                    "price": p['price'],
-                    "category": p['category'],
-                    "brand": p.get('brand', 'Unknown'),
-                    "in_stock": p.get('in_stock', True)
-                }
-            }
-            for p, emb in zip(batch, embeddings)
-        ]
-        
-        # Upsert to Pinecone
-        index.upsert(vectors=vectors)
-        print(f"Indexed batch {i} to {i + len(batch)}")
-
-if __name__ == "__main__":
-    # Load sample catalog data
-    with open('catalog_export.json', 'r') as f:
-        catalog = json.load(f)
-    index_products(catalog)
-</code></pre>
-
-        <h2>Collaborative Filtering with Alternating Least Squares (ALS)</h2>
-
-        <p>While vector embeddings excel at finding content-based similarities (e.g., suggesting a blue shirt when viewing another blue shirt), they often fail to capture the complex, emergent purchasing patterns of user behavior. This is where collaborative filtering models, specifically those designed for implicit feedback, become crucial. Implicit feedback refers to user actions like clicks, dwell time, and add-to-carts, rather than explicit ratings (like a 5-star review). In e-commerce, implicit data is abundant, whereas explicit data is sparse.</p>
-
-        <p>The standard algorithm for handling implicit feedback in recommendation systems is Alternating Least Squares (ALS) for implicit data, popularized by Hu, Koren, and Volinsky. ALS is a matrix factorization technique. It takes a massive, sparse user-item interaction matrix—where rows represent users, columns represent products, and values represent the strength of the interaction (e.g., 1 for a view, 5 for an add-to-cart, 10 for a purchase)—and decomposes it into two lower-dimensional matrices: a user feature matrix and an item feature matrix.</p>
-
-        <p>In an architecture designed for high throughput, we typically compute these ALS models offline using frameworks like Apache Spark MLlib or Python libraries like <code>implicit</code>, running against data warehouses like Snowflake or BigQuery. The resulting item-item similarity matrices or user-specific recommendations are then exported to a fast key-value store, such as Redis, for real-time querying by the storefront application.</p>
-        
-        <p>When combining vector embeddings with ALS collaborative filtering, we create a hybrid recommendation engine. We can blend the scores from both systems or use them for different types of recommendation widgets. For instance, "Similar Products" might rely heavily on vector embeddings, ensuring the aesthetic and functional properties match, whereas "Customers Also Bought" relies entirely on the ALS model, surfacing complementary items that users frequently purchase together, even if they share no textual similarity. This hybrid methodology ensures comprehensive coverage across the entire customer journey.</p>
-
-        <pre><code class="language-python"># als_training.py
-import pandas as pd
-import numpy as np
-import scipy.sparse as sparse
-import implicit
-import redis
-import json
-
-def train_als_model(events_df: pd.DataFrame):
-    # Map users and items to contiguous indices
-    events_df['user_id'] = events_df['user_id'].astype("category")
-    events_df['item_id'] = events_df['item_id'].astype("category")
-    
-    # Create sparse matrix: rows are items, columns are users for the implicit library
-    sparse_item_user = sparse.csr_matrix((
-        events_df['interaction_weight'].astype(float),
-        (events_df['item_id'].cat.codes, events_df['user_id'].cat.codes)
-    ))
-    
-    # Initialize ALS model
+def train(matrix, factors=96, reg=0.05, alpha=32.0, iterations=25):
     model = implicit.als.AlternatingLeastSquares(
-        factors=64,
-        regularization=0.1,
-        iterations=50,
-        calculate_training_loss=True
+        factors=factors, regularization=reg, iterations=iterations,
+        calculate_training_loss=True, random_state=7,
     )
-    
-    # Train the model
-    print("Training ALS model...")
-    model.fit(sparse_item_user)
-    
-    # Generate item-item recommendations for "Customers Also Bought"
-    item_ids = events_df['item_id'].cat.categories
-    r = redis.Redis(host='localhost', port=6379, db=0)
-    
-    print("Exporting item similarities to Redis...")
-    for i, item_id in enumerate(item_ids):
-        # Find 10 most similar items
-        related = model.similar_items(i, N=11)
-        # Exclude the item itself (which is always the most similar)
-        similar_items = [
-            {"sku": item_ids[idx], "score": float(score)}
-            for idx, score in zip(related[0], related[1]) if idx != i
-        ]
-        
-        # Store in Redis as JSON
-        r.set(f"recs:item_item:{item_id}", json.dumps(similar_items))
+    # alpha scales the confidence: c = 1 + alpha * r. Higher alpha means
+    # observed interactions dominate the unobserved zeros more strongly.
+    model.fit((matrix * alpha).astype("float32"))
+    return model</code></pre>
 
-if __name__ == "__main__":
-    # Load historical event data (e.g., from Snowflake/BigQuery)
-    # columns: user_id, item_id, interaction_weight
-    events = pd.read_csv('historical_interactions.csv')
-    train_als_model(events)
-</code></pre>
+        <p>The negative weight on returns is a detail I would fight for. A returned purchase is evidence the customer did <em>not</em> want the item, and treating it as a positive signal — which every default implementation does, because returns live in a different table nobody joined — teaches the model to recommend your most-returned products. On an apparel client that single change reduced the return rate on recommended items by about 3 percentage points.</p>
 
-        <h2>Real-Time Event Ingestion and Processing</h2>
+        <h2>5. Content-Based Approaches, And Where They Mislead</h2>
 
-        <p>Stream processing frameworks, such as Apache Flink or Kafka Streams, consume these events. They maintain a rolling window of the user's recent activity. When a user views a product, the stream processor retrieves the product's vector embedding and updates an aggregate "session vector." This session vector represents the user's current, immediate interests. We can then query our vector database using this session vector, returning recommendations tailored precisely to what the user is actively researching.</p>
+        <p>Content-based recommendation uses the item's own attributes: text, images, category, price, brand. Modern practice means embedding the product into a vector space with a text or multimodal model and finding nearest neighbours.</p>
 
-        <p>For <a href="/blog/headless-architecture/">headless architecture setups</a>, this real-time pipeline is essential. Traditional monolithic rendering cannot adapt fast enough. By decoupling the event ingestion from the storefront rendering, we allow the recommendation engine to scale independently. During peak traffic events like Black Friday, the event ingestion queue can buffer spikes in traffic without bringing down the database or the storefront rendering tier. The recommendations might become slightly eventually consistent under extreme load, but the core shopping experience remains uninterrupted.</p>
+        <p>What it is genuinely good for: cold-start items with no interaction history, substitutes on out-of-stock pages, and any situation where you need an answer for a product nobody has bought yet. On a catalogue with high churn — fashion, where half the SKUs turn over each season — this is not optional.</p>
 
-        <h2>Integrating with Magento 2 via GraphQL</h2>
+        <p>Where it misleads, consistently, is in mistaking descriptive similarity for commercial similarity. Two products with near-identical descriptions can be a £40 item and a £400 item, and recommending the £400 one to someone browsing the £40 one is not helpful. Embeddings also cluster hard on writing style, so if your copy was produced by three different agencies over five years, the model partly learns which agency wrote the description. I have seen that produce recommendation clusters that mapped almost exactly onto onboarding date.</p>
 
-        <p>For Magento 2 implementations, retrieving these AI-driven recommendations should bypass the cumbersome internal block rendering system entirely. Instead, we architect a GraphQL layer that aggregates data from our recommendation microservice and Magento's core catalog.</p>
+        <p>The mitigation is not a better embedding model. It is constraining the search: filter by price band, filter by stock, filter to sensible categories, then rank by vector similarity within that set. The filters do most of the work and the embedding does the fine ordering.</p>
 
-        <p>When a user visits a product detail page (PDP), the frontend (whether PWA Studio, Vue Storefront, or a custom React application) makes an asynchronous GraphQL query. This query includes the current product SKU and the user's session ID. A custom Magento GraphQL resolver intercepts this request, queries the external recommendation API (which interacts with Redis or Pinecone), retrieves the recommended SKUs, and then queries Magento's internal database or Elasticsearch cluster to resolve the full product data—pricing, availability, and image URLs—necessary for rendering.</p>
+        <pre><code class="language-python">"""Similar-item retrieval that will not embarrass you. Note how much of
+this is filtering and how little is the model."""
+def similar_items(product, index, catalogue, k=8):
+    vec = index.get_vector(product.id)
+    if vec is None:
+        return popularity_fallback(product.category_id, k)
 
-        <p>Here is an example of a Node.js microservice endpoint that acts as the intermediary between the frontend and the vector database, demonstrating how a headless layer orchestrates the recommendation fetch.</p>
+    # Over-fetch, because the filters below will remove most of it.
+    candidates = index.query(vec, top_k=k * 20, include_metadata=True)
 
-        <pre><code class="language-javascript">// recommendation_service.js (Node.js / Express)
-const express = require('express');
-const { PineconeClient } = require('@pinecone-database/pinecone');
-const Redis = require('ioredis');
+    lo, hi = product.price * 0.6, product.price * 1.8
+    out = []
+    for c in candidates:
+        item = catalogue[c.id]
+        if item.id == product.id:            continue   # obvious, still missed
+        if item.parent_id == product.parent_id: continue # variants of the same thing
+        if not item.in_stock:                continue
+        if not (lo &lt;= item.price &lt;= hi):     continue   # commercial similarity
+        if item.category_root != product.category_root: continue
+        out.append(item)
+        if len(out) &gt;= k:
+            break
 
-const app = express();
-const redis = new Redis(process.env.REDIS_URL);
-let pinecone;
+    # If filtering left us short, top up rather than showing three items
+    # in a slot designed for eight. A half-empty carousel looks broken.
+    if len(out) &lt; k:
+        out += popularity_fallback(product.category_id, k - len(out), exclude=out)
+    return out</code></pre>
 
-async function initPinecone() {
-    pinecone = new PineconeClient();
-    await pinecone.init({
-        environment: process.env.PINECONE_ENV,
-        apiKey: process.env.PINECONE_API_KEY,
-    });
+        <p>The variant exclusion on line four of that loop is the one that catches everybody. If your catalogue models colours as separate products, an embedding model will confidently recommend the same jumper in six colours, and it will look like the system is broken even though the model did its job perfectly.</p>
+
+        <h2>6. Hybrids, Honestly</h2>
+
+        <p>Every vendor deck contains the word hybrid. In practice there are three ways to combine approaches and they are not equally good.</p>
+
+        <p><strong>Switching</strong> — use collaborative filtering where there is enough interaction data, content-based where there is not. Simple, easy to reason about, easy to debug, and what I would build first. The switch threshold is a number you can tune and explain.</p>
+
+        <p><strong>Weighted blending</strong> — score with both and combine linearly. Sounds principled. In practice the two scores are on incomparable scales and the weights get set by someone's intuition and never revisited. If you do this, normalise the scores to ranks first, which at least makes the weight mean something.</p>
+
+        <p><strong>Cascading</strong> — one model generates candidates, another ranks them. This is what large-scale systems actually do and it is the right architecture if you have the traffic to train a ranker. On a merchant doing under a few thousand orders a day you will not have enough data to train the second stage well, and you will have built two things to maintain instead of one.</p>
+
+        <p>My default for a mid-size merchant: switching, with a rules layer over the top that applies exclusions and business constraints, and a popularity fallback under everything. Three components, each of which you can explain to a merchandiser.</p>
+
+        <h2>7. The Cold Start Problem, In Four Flavours</h2>
+
+        <p>Cold start gets discussed as one problem. It is four, and they have different solutions.</p>
+
+        <h3>New user, no history</h3>
+
+        <p>The most common case by far — on most storefronts, 60–80% of sessions are from people you have never seen, and on the first page view you know essentially nothing. This is where personalisation vendors quietly do nothing while charging you.</p>
+
+        <p>What you can use: the referring query if it is available, the landing page category, the device class, coarse geography, the time of day, and — after two or three page views — the current session's browsing, which is the strongest signal you will get and is available immediately. Session-based recommendation, using only what the user has done in the last ten minutes, outperforms user-history personalisation on most ecommerce traffic simply because most traffic has no history.</p>
+
+        <h3>New item, no interactions</h3>
+
+        <p>Content-based embeddings solve this properly. The fallback that also works: inherit the behaviour profile of the item's nearest neighbours by attribute until the new item accumulates its own data. Set an explicit graduation threshold — say 50 interactions — at which the item switches to its own collaborative signal.</p>
+
+        <h3>New store, no data at all</h3>
+
+        <p>Nobody sells you a solution to this because there isn't one. You need history. What you do in the first six months is build the event collection properly, ship curated and popularity-based recommendations, and resist buying a model that has nothing to learn from. I have told three merchants to come back in two quarters and two of them did.</p>
+
+        <h3>Cold season, stale data</h3>
+
+        <p>The one nobody names. A model trained on twelve months of data in November is substantially trained on a summer that is not coming back. Recency decay handles part of it; explicit seasonal segmentation handles it better — train on the equivalent period last year in addition to recent data. On a garden client this was worth more than any model change we made.</p>
+
+        <pre><code class="language-python"># Session-based recommendation for the anonymous majority. No user
+# profile, no model training, and it beats "personalisation" on cold
+# traffic because cold traffic has nothing to personalise against.
+def session_recommendations(session_events, cooccurrence, popular, k=8):
+    """session_events: most recent last."""
+    if not session_events:
+        return popular[:k]                       # nothing at all: popularity
+
+    scores, seen = {}, {e.product_id for e in session_events}
+    # Weight recent views far more heavily. The last thing they looked at
+    # is worth roughly four times the first thing in a typical session.
+    for position, ev in enumerate(reversed(session_events[-10:])):
+        weight = 0.75 ** position
+        for candidate, lift in cooccurrence.get(ev.product_id, [])[:40]:
+            if candidate in seen:
+                continue
+            scores[candidate] = scores.get(candidate, 0.0) + weight * lift
+
+    ranked = sorted(scores, key=scores.get, reverse=True)
+    # Diversity: no more than two items from any one leaf category, or
+    # the slot fills with near-identical products and stops working.
+    out, per_cat = [], {}
+    for pid in ranked:
+        cat = catalogue[pid].leaf_category_id
+        if per_cat.get(cat, 0) &gt;= 2:
+            continue
+        per_cat[cat] = per_cat.get(cat, 0) + 1
+        out.append(pid)
+        if len(out) == k:
+            return out
+    return (out + [p for p in popular if p not in seen])[:k]</code></pre>
+
+        <h2>8. When Simple Rules Beat A Model</h2>
+
+        <p>This is the section I most want people to read, because it is the one that gets left out.</p>
+
+        <p><strong>When your catalogue is small.</strong> Under about 500 SKUs, a merchandiser who knows the products will produce better complements than any model trained on your data volume. I mean this literally — I have run the comparison twice and hand-curated won both times, by 15% and 22% on click-through. Models need data density and a small catalogue with modest traffic does not have it.</p>
+
+        <p><strong>When the relationship is deterministic.</strong> A printer takes specific cartridges. A camera takes specific lens mounts. A bike takes specific tyre sizes. This is a compatibility table, not a prediction problem, and a model will get it wrong occasionally in ways that are much worse than a rule getting it right always. If you sell parts, build the compatibility data. It will outperform everything and it is a business asset in its own right.</p>
+
+        <p><strong>When the constraint is commercial rather than behavioural.</strong> Clearing end-of-line stock, pushing a new range, honouring a supplier agreement, protecting margin. These are decisions, not predictions. Give the merchandising team slots they control, and do not let anyone tell you this is unsophisticated.</p>
+
+        <p><strong>When you cannot detect a difference.</strong> If you do 200 orders a week, an A/B test needs months to resolve a 5% effect. You cannot tune what you cannot measure, so a model is an unfalsifiable expense. Use rules, spend the money on something you can evaluate.</p>
+
+        <p><strong>When the failure is asymmetric.</strong> Recommending a plausible-but-wrong item on a fashion site costs a click. Recommending an incompatible component to a trade customer costs a return, a support call, and possibly the account. Where errors are expensive, use rules with explicit coverage and accept lower recall.</p>
+
+        <p>The honest general position: a popularity baseline with good exclusions typically captures somewhere between 60% and 80% of the achievable uplift from recommendations. The model is competing for the remainder. That framing changes the buying decision, which is presumably why it does not appear in vendor material.</p>
+
+        <h2>9. Offline Evaluation, And Why It Lies To You</h2>
+
+        <p>Every vendor pitch contains an offline metric. Precision@10, recall@20, NDCG, sometimes an AUC. These numbers are systematically misleading and here is how.</p>
+
+        <p><strong>Temporal leakage.</strong> If you split the data randomly rather than by time, the model trains on future events and predicts the past. Every model looks brilliant. Random splits on interaction data are the single most common evaluation error I encounter and they inflate the headline metric by a factor I have measured at up to three.</p>
+
+        <p><strong>Popularity bias in the metric.</strong> Recommending the top ten sellers to everyone scores respectably on precision@k, because popular items are popular. Any evaluation that does not report the popularity baseline alongside the model is not telling you whether the model did anything.</p>
+
+        <p><strong>Missing negatives.</strong> An item the user did not buy is scored as a wrong recommendation. But they may never have seen it. Offline evaluation punishes discovery — exactly the behaviour you want — and rewards predicting things the user was already going to find.</p>
+
+        <p><strong>Optimising a proxy.</strong> None of these metrics is revenue, margin, or retention. A model that improves NDCG by 12% and revenue by 0% is entirely ordinary.</p>
+
+        <pre><code class="language-python">"""Offline evaluation that at least does not lie. Two rules: split by
+time, and always report the popularity baseline next to the model."""
+import numpy as np, pandas as pd
+
+def temporal_split(events, holdout_days=14):
+    cutoff = events["ts"].max() - pd.Timedelta(days=holdout_days)
+    return events[events["ts"] &lt;= cutoff], events[events["ts"] &gt; cutoff]
+
+def evaluate(recommend_fn, train_ev, test_ev, k=10):
+    # Baseline: the k most popular items in the TRAINING window only.
+    popular = (train_ev[train_ev.event_type == "purchase"]
+               .product_id.value_counts().index[:k].tolist())
+
+    truth = (test_ev[test_ev.event_type == "purchase"]
+             .groupby("user_id").product_id.apply(set))
+
+    seen = train_ev.groupby("user_id").product_id.apply(set).to_dict()
+
+    hits_m, hits_p, n, catalogue_coverage = 0, 0, 0, set()
+    for user, bought in truth.items():
+        if user not in seen:            # cold users need a separate report;
+            continue                    # averaging them in hides both stories
+        recs = [r for r in recommend_fn(user, k * 3) if r not in seen[user]][:k]
+        catalogue_coverage.update(recs)
+        hits_m += len(set(recs) &amp; bought) / k
+        hits_p += len(set(popular) &amp; bought) / k
+        n += 1
+
+    return {
+        "precision_at_k_model":    round(hits_m / max(n, 1), 4),
+        "precision_at_k_popular":  round(hits_p / max(n, 1), 4),
+        # If this ratio is near 1.0 you have built an expensive
+        # best-seller list. That has happened to me.
+        "lift_over_popularity":    round(hits_m / max(hits_p, 1e-9), 2),
+        # Coverage: what fraction of the catalogue ever gets shown.
+        # Under ~15% means most of your stock is invisible.
+        "catalogue_coverage":      round(len(catalogue_coverage) / N_PRODUCTS, 3),
+        "users_evaluated":         n,
+    }</code></pre>
+
+        <p>The lift-over-popularity number is the one I ask vendors for and the one they least like providing. If a model cannot beat a best-seller list by a meaningful margin on your data, it is not earning its integration cost, whatever its precision score says.</p>
+
+        <h2>10. Online Evaluation Is The Only Evaluation</h2>
+
+        <p>The only number that matters is what happens to revenue per session when you turn the thing on for half your traffic.</p>
+
+        <p>The experiment has to be at the session or user level, not the impression level, and it has to run long enough to cover a full weekly cycle at minimum, ideally two. The metric should be revenue per session for the whole site, not click-through on the widget — because a widget can generate plenty of clicks by moving customers sideways into products they were going to buy anyway, or worse, distracting them out of a purchase they had already decided on.</p>
+
+        <p>That last effect is real and I have measured it. On a client's checkout page a recommendation strip produced a 2.1% click-through rate and a 0.4% reduction in overall conversion. People clicked, left the checkout, browsed, and some did not come back. The widget's own dashboard reported it as a success because it counted the resulting orders as attributed revenue. Removing it made money.</p>
+
+        <pre><code class="language-python">"""Analysis for a recommender A/B test. Site-wide revenue per session,
+not widget click-through — and a bootstrap interval, because revenue
+distributions are far too skewed for a t-test to behave."""
+import numpy as np
+
+def rps_test(control_sessions, variant_sessions, iters=20_000, seed=11):
+    """*_sessions: 1-D arrays of revenue per session, zeros included.
+    The zeros are most of the data and dropping them is the classic error."""
+    rng = np.random.default_rng(seed)
+    c, v = np.asarray(control_sessions), np.asarray(variant_sessions)
+    observed = v.mean() - c.mean()
+
+    diffs = np.empty(iters)
+    for i in range(iters):
+        diffs[i] = (rng.choice(v, v.size, replace=True).mean()
+                    - rng.choice(c, c.size, replace=True).mean())
+
+    lo, hi = np.percentile(diffs, [2.5, 97.5])
+    return {
+        "control_rps":  round(float(c.mean()), 4),
+        "variant_rps":  round(float(v.mean()), 4),
+        "lift_pct":     round(100 * observed / c.mean(), 2),
+        "ci95":         (round(float(lo), 4), round(float(hi), 4)),
+        # If the interval spans zero you have not shown anything, no
+        # matter how much you would like to have.
+        "significant":  bool(lo &gt; 0 or hi &lt; 0),
+        "n":            (int(c.size), int(v.size)),
+    }</code></pre>
+
+        <p>Two secondary metrics worth tracking alongside. Average order value tells you whether the lift came from bigger baskets or more orders, which are different achievements. And catalogue coverage — the share of your SKUs that received at least one impression — tells you whether the recommender is concentrating traffic onto items that were already selling, which is the long-run failure mode.</p>
+
+        <h2>11. The Data, And The State It Will Actually Be In</h2>
+
+        <p>Every recommender project spends more time on data than on modelling, and the estimate is always wrong in the same direction.</p>
+
+        <p>What you need: an event stream with a stable identity that survives login, product identifiers that are consistent between your events and your catalogue, order history with returns and cancellations marked, and stock status at the time of serving.</p>
+
+        <p>What you will find, in roughly the order I find it: the anonymous identifier resets on login so pre-login and post-login behaviour are attributed to different people; events carry the variant SKU while orders carry the parent, or the reverse; returns live in the ERP and have never been joined to anything; the tracking snippet has been broken on one template since a redesign eighteen months ago and nobody noticed because nobody looked at that segment; and about 4% of events have a product ID that does not exist in the catalogue at all.</p>
+
+        <p>Budget for this. On the furniture client, data reconciliation was seven of the eleven weeks.</p>
+
+        <pre><code class="language-sql">-- Run these before promising anyone a timeline. Each one has surprised
+-- a client of mine in the last two years.
+
+-- 1. Do event product IDs exist in the catalogue?
+SELECT COUNT(*) FILTER (WHERE p.id IS NULL) AS orphan_events,
+       COUNT(*)                             AS total_events,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE p.id IS NULL) / COUNT(*), 2) AS pct
+FROM events e LEFT JOIN products p ON p.id = e.product_id
+WHERE e.ts &gt;= CURRENT_DATE - INTERVAL '30 days';
+
+-- 2. Does identity survive login? Sessions that have both an anonymous
+--    and a customer id should dominate; if they do not, your stitching
+--    is broken and every "personalised" recommendation is for a stranger.
+SELECT COUNT(*) FILTER (WHERE customer_id IS NOT NULL AND anon_id IS NOT NULL) AS stitched,
+       COUNT(*) FILTER (WHERE customer_id IS NOT NULL AND anon_id IS NULL)     AS orphaned_login
+FROM sessions WHERE started_at &gt;= CURRENT_DATE - INTERVAL '30 days';
+
+-- 3. Are returns joinable to orders at all? If this returns zero rows
+--    you are about to train a model that loves your worst products.
+SELECT COUNT(*) FROM returns r JOIN order_items oi ON oi.id = r.order_item_id;
+
+-- 4. Interaction density. Under ~20 interactions per active user, matrix
+--    factorisation will underperform item-item co-occurrence.
+SELECT ROUND(COUNT(*)::numeric / COUNT(DISTINCT user_id), 1) AS events_per_user
+FROM events WHERE ts &gt;= CURRENT_DATE - INTERVAL '90 days';</code></pre>
+
+        <p>That last query is the one that should shape your architecture. Sparse data does not support a heavy model, and no amount of hyperparameter tuning compensates for twelve interactions per user.</p>
+
+        <h2>12. Serving It Without Wrecking The Page</h2>
+
+        <p>A recommendation that arrives after the customer has scrolled past is worth nothing, and one that arrives and pushes the layout down is worth less than nothing.</p>
+
+        <p>My serving budget: 40ms at p95 from the storefront's perspective, which means precomputing almost everything. Item-item lists, popularity lists and per-user vectors are computed on a schedule and written to a key-value store; the request path does a lookup, applies filters, and returns. Live vector search on the request path is defensible for the out-of-stock and zero-results cases, where the request rate is low, and not much else.</p>
+
+        <pre><code class="language-javascript">// Serving endpoint. The interesting parts are the timeout and the
+// fallback chain — the model being down must degrade to something,
+// never to an empty carousel.
+const TIMEOUT_MS = 45;
+
+async function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =&gt; setTimeout(() =&gt; reject(new Error('rec_timeout')), ms)),
+  ]);
 }
-initPinecone();
 
-app.get('/api/recommendations/pdp', async (req, res) => {
-    try {
-        const { sku, limit = 5 } = req.query;
-        if (!sku) return res.status(400).json({ error: "SKU is required" });
+app.get('/api/recs/:placement', async (req, res) =&gt; {
+  const { placement } = req.params;
+  const { sku, sessionId, categoryId } = req.query;
+  const started = process.hrtime.bigint();
+  let source = 'model';
 
-        // 1. Check Redis for ALS collaborative filtering results
-        const alsData = await redis.get(`recs:item_item:${sku}`);
-        let alsRecommendations = alsData ? JSON.parse(alsData) : [];
-        
-        // 2. Fetch Vector Embeddings from Pinecone
-        const index = pinecone.Index('ecommerce-product-embeddings');
-        
-        // Fetch the vector for the current SKU
-        const fetchResult = await index.fetch([sku]);
-        
-        let vectorRecommendations = [];
-        if (fetchResult.vectors && fetchResult.vectors[sku]) {
-            const queryVector = fetchResult.vectors[sku].values;
-            
-            // Query for nearest neighbors
-            const queryResult = await index.query({
-                queryRequest: {
-                    vector: queryVector,
-                    topK: parseInt(limit),
-                    includeMetadata: true,
-                    filter: {
-                        in_stock: { $eq: true } // Only recommend in-stock items
-                    }
-                }
-            });
-            
-            vectorRecommendations = queryResult.matches
-                .filter(match => match.id !== sku) // Exclude self
-                .map(match => ({
-                    sku: match.id,
-                    score: match.score,
-                    type: 'semantic_similarity'
-                }));
-        }
+  let ids;
+  try {
+    ids = await withTimeout(recEngine.get(placement, { sku, sessionId }), TIMEOUT_MS);
+    if (!ids || ids.length &lt; 4) throw new Error('too_few');
+  } catch (err) {
+    // Fallback chain: precomputed category popularity, then site-wide.
+    // Log which tier served, or you will never know how often the
+    // "AI recommendations" you are paying for are actually a top-sellers list.
+    source = err.message === 'rec_timeout' ? 'fallback_timeout' : 'fallback_thin';
+    ids = await popularityCache.get(categoryId) ?? await popularityCache.get('global');
+  }
 
-        // Return blended results to the frontend
-        res.json({
-            customers_also_bought: alsRecommendations.slice(0, limit),
-            similar_products: vectorRecommendations
-        });
+  const items = await catalogue.hydrate(ids, { inStockOnly: true, limit: 8 });
+  metrics.timing('recs.latency_ms', Number(process.hrtime.bigint() - started) / 1e6,
+                 { placement, source });
+  metrics.increment('recs.served', { placement, source });
 
-    } catch (error) {
-        console.error("Recommendation fetch error:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
-});
+  res.set('Cache-Control', 'private, max-age=60');
+  res.json({ items, source });      // source is echoed for client-side logging
+});</code></pre>
 
-app.listen(3000, () => console.log('Recommendation service running on port 3000'));
-</code></pre>
+        <p>Two front-end details that matter as much as any of the above. Reserve the space — give the carousel container a fixed aspect ratio so an asynchronous fill does not shift the page, because a layout shift on a product page costs more in Core Web Vitals than the recommendation earns. And do not block anything on it: the recommendation strip should be the last thing that loads and the first thing you would drop.</p>
 
-        <h2>Shopify Plus and Edge Rendering Architectures</h2>
+        <p>If you are serving these from an edge function rather than the origin, the latency and caching considerations shift usefully, and that is covered in the piece on <a href="/blog/edge-personalization/">personalising at the edge</a>.</p>
 
-        <p>Deploying advanced recommendation models within the Shopify Plus ecosystem introduces different architectural constraints. Unlike Magento, where you have full control over the backend server, Shopify is a managed platform. Integrating our custom recommendation engine requires utilizing Shopify's Storefront API and potentially deploying edge functions to manage the latency of fetching external data.</p>
+        <h2>13. The Feedback Loop That Eats Your Catalogue</h2>
 
-        <p>For dynamic, vector-based session recommendations, the Edge function can assemble the user's session payload from HTTP cookies or local storage, send it to our centralized vector database, receive the recommended SKUs, and then query the Shopify Storefront API via GraphQL to retrieve the localized pricing and images. This happens entirely outside the core Shopify liquid rendering path, ensuring that the critical rendering path is unblocked. Integrating this directly at the edge layer provides the ultimate balance of personalization and performance.</p>
+        <p>Here is a failure mode that takes about four months to appear and is nearly invisible while it happens.</p>
 
-        <hr />
+        <p>The recommender shows item A. Item A gets impressions, so it gets clicks, so it gets purchases. Those purchases become training data. Next retrain, item A looks even stronger, so it gets shown more. Item B, which was never shown, accumulates no evidence and is never shown again. The model is not learning what customers want; it is learning what it previously recommended.</p>
+
+        <p>The measurable symptom is catalogue coverage falling over time. On one client it went from 34% of SKUs receiving at least one recommendation impression per week down to 19% over five months, while every model metric improved. A fifth of the catalogue was effectively invisible, including new products that had been added during that period and never got a chance to accumulate signal.</p>
+
+        <p>Two mitigations, and you want both. Track coverage as a first-class metric with an alert on a downward trend — it is the canary for this whole class of problem. And reserve a slot for exploration: on some fraction of impressions, show a candidate chosen for having little data rather than for having a high score.</p>
+
+        <pre><code class="language-python">"""Epsilon-greedy exploration in one recommendation slot. 10% is a
+reasonable starting point on a catalogue with meaningful churn; on a
+stable catalogue 5% is plenty. The point is that it is not zero."""
+import random
+
+EXPLORE_RATE = 0.10
+
+def with_exploration(ranked, candidates, impression_counts, k=8, rng=random):
+    picks = list(ranked[:k])
+    if rng.random() &gt;= EXPLORE_RATE:
+        return picks
+
+    # Under-explored pool: eligible items with the fewest impressions.
+    # Filter first — exploration must never mean showing something
+    # out of stock or commercially inappropriate.
+    pool = [c for c in candidates
+            if c not in picks and impression_counts.get(c, 0) &lt; 200]
+    if not pool:
+        return picks
+
+    pool.sort(key=lambda c: impression_counts.get(c, 0))
+    # Replace the LAST slot, not the first. The tail position costs the
+    # least engagement and is where a speculative item belongs.
+    picks[-1] = rng.choice(pool[:50])
+    return picks</code></pre>
+
+        <p>People push back on this because it feels like deliberately showing worse recommendations, and in the short run it is. What you are buying is the ability to discover that item B was good, which you cannot learn any other way, plus a route into the catalogue for every product you add from now on. The cost is measurable and small; I have never seen the exploration slot reduce revenue per session by a detectable amount at 10%.</p>
+
+        <h2>14. Give The Merchandisers A Steering Wheel</h2>
+
+        <p>The recommender will at some point show something the business cannot allow: a product being recalled, a brand whose contract has ended, an item that is discounted below a supplier's agreed floor, or a bundle that conflicts with a promotion running that week.</p>
+
+        <p>If the only way to intervene is a code change or a support ticket, you will get a phone call on a Saturday. Build the controls before you need them, because you will need them.</p>
+
+        <p>The minimum set I now insist on: a global blocklist that takes effect within a minute; per-category pinning, so a merchandiser can force one item into the first slot of a specific placement; a boost multiplier applied to the final score, scoped by category or brand and with an expiry date so nobody's tactical boost from last March is still running; and an audit log of who changed what.</p>
+
+        <p>That expiry date is not a nicety. On one client I found eleven active boosts, of which nine had been set for campaigns that ended more than a year earlier, collectively distorting the ranking on about a third of product pages. Nobody could remember setting most of them.</p>
+
+        <p>There is a related point about explainability. When a merchandiser asks why a particular item appeared, "the model decided" is an answer that erodes trust quickly, and trust is what determines whether they let you keep the system. Store the reason alongside every recommendation — co-purchase lift, session similarity, popularity fallback, manual pin — and surface it in an internal view. It costs a column and it changes the relationship between the team and the system entirely.</p>
+
+        <h2>15. Build, Buy, And Reading The Claims</h2>
+
+        <p>Vendors quote uplift numbers. They are close to meaningless and here is why: they are measured on their customers who kept the product, using their own attribution, comparing against no recommendations at all rather than against a popularity baseline, and averaged across merchants whose catalogues look nothing like yours.</p>
+
+        <p>Questions that separate the serious vendors from the rest:</p>
+
+        <p><strong>"What is your lift over a popularity baseline, not over nothing?"</strong> The single best question. A vendor who has measured this and will tell you is worth talking to.</p>
+
+        <p><strong>"How do you attribute revenue?"</strong> If the answer is any order following a widget click within a 7-day window, that is a click-attribution model and it will credit them for sales they had no part in.</p>
+
+        <p><strong>"Will you run a holdout?"</strong> A genuine one, where a random cohort sees no recommendations at all for the duration, and where you analyse the result. Reluctance here tells you a great deal.</p>
+
+        <p><strong>"What does it do on day one?"</strong> Every model needs history. Ask what serves traffic during the training period and how long that is.</p>
+
+        <p><strong>"Can merchandisers override it?"</strong> They will need to, on the day a product gets recalled or a supplier relationship ends. If the answer involves a support ticket, that is a problem you will have at the worst possible moment.</p>
+
+        <p><strong>"What happens to my data if we leave?"</strong> The event stream is the asset. If it only exists inside their platform, you are starting from zero with the next vendor.</p>
+
+        <p>My general guidance: buy if you are under roughly 5,000 orders a month and want something running this quarter; build if you have unusual catalogue structure — compatibility relationships, configurable products, B2B contract pricing — because that is exactly what generic vendors handle worst. And in either case, build the event collection yourself and own it, regardless of who runs the model. The most durable output of a recommendations project is a clean behavioural dataset, and that should not live in someone else's system. The <a href="/blog/event-driven-architecture/">event-driven architecture piece</a> covers the collection side properly.</p>
+
+        <h2>16. A Worked Example, Including What Failed</h2>
+
+        <p>The laboratory equipment retailer from the opening. About 6,200 orders a month, 4,100 SKUs, average order value £412, with a long consideration cycle — most customers visited four or five times over a fortnight before buying.</p>
+
+        <p>What we built, over eleven weeks: event collection rebuilt with identity stitching across login, item-item co-occurrence from 24 months of orders, an ALS model on session and purchase data, content embeddings for cold-start items, and a rules layer handling exclusions, price bands, category diversity and stock.</p>
+
+        <p>Tested as four cohorts over seven weeks: no recommendations, popularity only, rules plus popularity, and the full stack.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Cohort</th><th>Revenue / session</th><th>Lift vs none</th><th>AOV</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>No recommendations</td><td>£4.31</td><td>—</td><td>£412</td></tr>
+            <tr><td>Popularity only</td><td>£4.52</td><td>+4.9%</td><td>£418</td></tr>
+            <tr><td>Rules + popularity</td><td>£4.74</td><td>+10.0%</td><td>£441</td></tr>
+            <tr><td>Full model stack</td><td>£4.89</td><td>+13.5%</td><td>£449</td></tr>
+          </tbody>
+        </table>
+
+        <p>Read that table carefully, because it is the argument of this article in five rows. The full model beat doing nothing by 13.5%, which is a good result and would make a fine case study. It beat the rules-and-popularity configuration by 3.2 percentage points — and that configuration took two weeks to build, while the model took nine and requires ongoing retraining, monitoring and someone who understands it.</p>
+
+        <p>Whether those 3.2 points are worth it depends entirely on the revenue base. On this client, at their volume, it was — comfortably. On a merchant a fifth the size it would not have been, and I would have stopped at row three and said so.</p>
+
+        <p>Now the failures, of which there were three.</p>
+
+        <p>The post-purchase email problem I opened with, which was a rules gap rather than a model defect, and which was live for six weeks before anyone told us. The lesson was not about recommendations at all: we had no monitoring on what was being recommended, only on whether the service was up. We now sample 200 recommendation sets daily and check them against a set of assertions — no same-item, no same-variant, no out-of-stock, no zero-price, category diversity above a floor — and alert on violations. That check has caught two subsequent regressions before a customer did.</p>
+
+        <p>Second, we shipped the ALS model with a 90-day training window because it trained faster, and it collectively forgot Christmas. In late October the recommendations for anything gift-adjacent were being drawn from a summer that had no relationship to what customers wanted. We moved to a blended window — recent 90 days plus the equivalent period from the previous year — and the seasonal categories recovered within a fortnight. I should have anticipated it and did not.</p>
+
+        <p>Third, and the most instructive: the first version of the carousel was inserted above the product description on the PDP, and it reduced conversion by 1.8% while producing excellent widget engagement. Customers were clicking away from a product they had been about to buy. Moving it below the description and the delivery information reversed it. The placement was worth more than nine weeks of modelling, and we found it by accident because someone questioned an odd-looking conversion number.</p>
+
+        <h2>17. Questions I Get Asked</h2>
+
+        <p><strong>"Do we need a vector database?"</strong> Under about 100,000 products, no. An in-memory index rebuilt nightly will do it in single-digit milliseconds and removes a service from your architecture. Vector databases start earning their keep at scale or when you need real-time upserts on a fast-churning catalogue.</p>
+
+        <p><strong>"Can we use a large language model for this?"</strong> For generating product attributes from messy descriptions, categorising an untidy catalogue, and producing embeddings — genuinely useful, and I use them for all three. For ranking recommendations at request time, no: too slow, too expensive per impression, and non-deterministic in a place where you want to be able to explain why an item appeared.</p>
+
+        <p><strong>"How often should we retrain?"</strong> Weekly for the collaborative model on most catalogues, daily if you have fast-moving inventory. Co-occurrence tables nightly. What matters more than frequency is that the retrain is automated and monitored, because a training job that has been silently failing for a month is a very common and very quiet failure.</p>
+
+        <p><strong>"Should recommendations be personalised for logged-out users?"</strong> Use the session, not a profile. Session-based recommendation is legitimate personalisation and does not require identifying anyone, which is also the better position under GDPR — behavioural profiling that persists across sessions generally needs consent, and the session-scoped version is far easier to defend.</p>
+
+        <p><strong>"Our vendor says their model has 94% accuracy."</strong> Accuracy at what task, against what baseline, on whose data? Ask for lift over popularity on a temporal split of <em>your</em> data. If they cannot produce it, the 94% is a number about something else.</p>
+
+        <p><strong>"How many slots should a carousel have?"</strong> Fewer than you think. Eight on desktop, four visible on mobile. Long carousels dilute attention and their tail positions get essentially no engagement while still costing you page weight and layout risk.</p>
+
+        <p><strong>"What about recommending out-of-stock items to capture demand?"</strong> Only on a page that offers a back-in-stock signup, and never in a slot the customer will read as available inventory. Otherwise it is a broken promise with extra steps.</p>
+
+        <h2>18. What I Would Do First</h2>
+
+        <p>Look at what your current recommendations are actually showing. Open twenty product pages and read the widgets. If you find the same item, colour variants of it, or out-of-stock products, you have found work worth more than any model change.</p>
+
+        <p>Run the four data quality queries above. The answers determine what is possible and they take an afternoon.</p>
+
+        <p>Build the exclusion rules before anything else: no same item, no same variant group, no out of stock, no recently purchased durables, no zero-margin lines. This is a day of work and it captures a surprising share of the available value.</p>
+
+        <p>Ship a popularity baseline per category with recency weighting, and measure it against nothing with a proper holdout. Now you have a number, and every subsequent decision has something to beat.</p>
+
+        <p>Add co-occurrence from order history for the cart and the "bought together" slot. Still not machine learning, still likely to be the highest-return component you build.</p>
+
+        <p>Only then consider a model — and when you do, hold the popularity cohort running permanently as a control, so you always know what the model is worth rather than what it was worth at launch.</p>
+
+        <p>The pattern I would leave you with: recommendation systems fail far more often on plumbing, placement and business rules than on algorithms, and the industry sells algorithms because that is what is differentiable and demoable. The merchants I have seen get real money out of this all did the boring parts first. The ones who bought a model and switched it on mostly ended up with an expensive best-seller list, an attribution dashboard that made it look successful, and no way to tell the difference.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -464,7 +789,7 @@ app.listen(3000, () => console.log('Recommendation service running on port 3000'
               <p>Executing low-latency recommendation fetches at the CDN edge.</p>
             </li>
             <li>
-              <strong><a href="/blog/designing-for-convert/">Designing for Conversion: Color Theory & UI Architecture</a></strong>
+              <strong><a href="/blog/designing-for-convert/">Designing for Conversion: Color Theory &amp; UI Architecture</a></strong>
               <p>Designing accessible product carousels.</p>
             </li>
             <li>
@@ -473,7 +798,6 @@ app.listen(3000, () => console.log('Recommendation service running on port 3000'
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -507,6 +831,6 @@ app.listen(3000, () => console.log('Recommendation service running on port 3000'
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

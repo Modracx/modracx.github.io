@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Zoho Books Inventory & Accounting Synchronization | MODRACX</title>
-  <meta name="description" content="Technical guide on building real-time invoice and inventory accounting synchronization between Zoho Books REST API and Magento 2/Shopify." />
+  <meta name="description" content="Syncing Magento and Shopify with Zoho Books: the document chain, tax mapping, credit notes, gateway clearing accounts and the reconciliation nobody runs." />
   <meta property="og:title" content="Zoho Books Inventory & Accounting Synchronization | MODRACX" />
   <meta property="og:description" content="Technical guide on Zoho Books inventory synchronization by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Zoho Books Inventory & Accounting Synchronization</h1>
-        <p class="lede">Automating sales order generation and tax ledger posting between e-commerce checkouts and Zoho Books eliminates manual financial reconciliation errors.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Zoho Books Inventory &amp; Accounting Synchronization</h1>
+        <p class="lede">A sales ledger and a gateway settlement report disagreed by £18,412. Fourteen months of refunds had never been written back as credit notes.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,29 +205,491 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Zoho Books Sales Order Ingestion Python Script</h2>
+        <h2>1. The Eighteen Thousand Pounds That Did Not Exist</h2>
 
-        <pre><code class="language-python"># Python Zoho Books API Sales Order Ingestion
-import requests
+        <p>In January an accountant emailed me a spreadsheet with two columns. One was the sales total from Zoho Books for the previous quarter. The other was the settlement total from the client's payment gateway. They differed by £18,412.</p>
 
-def create_zoho_sales_order(organization_id, authtoken, order_data):
-    url = f"https://books.zoho.com/api/v3/salesorders?organization_id={organization_id}"
-    headers = {"Authorization": f"Zoho-oauthtoken {authtoken}"}
-    payload = {
-        "customer_id": order_data['customer_id'],
-        "line_items": order_data['items']
-    }
-    return requests.post(url, json=payload, headers=headers).json()</code></pre>
+        <p>The client sold outdoor equipment through a Magento 2 store, about 900 orders a month, and had been running an integration into Zoho Books for fourteen months. Every invoice looked correct. Every order had a matching invoice. The finance team had reconciled at month end four times and found nothing.</p>
 
-        <hr />
+        <p>The difference was refunds. The integration created invoices when orders were placed and did nothing at all when a customer sent something back. Magento recorded the credit memo, the gateway processed the refund, and Zoho Books carried on believing the original sale had happened in full. Fourteen months of returns — a category with a 7% return rate — had accumulated into a sales ledger that overstated revenue by exactly the amount of every refund ever issued.</p>
+
+        <p>Nobody had noticed because both systems were internally consistent. Zoho's numbers added up. Magento's numbers added up. They simply described different worlds, and the only place the divergence surfaced was in a comparison nobody was running.</p>
+
+        <p>That is the specific hazard of accounting integrations, and it is why I treat them differently from every other kind. An ERP sync that drops a message produces a missing order, which somebody notices because a customer phones. An accounting sync that drops a message produces a number that is quietly wrong, sits in a VAT return, and gets discovered by an auditor.</p>
+
+        <h2>2. Accounting Integrations Are Not Like Other Integrations</h2>
+
+        <p>Most system-to-system work is about keeping two representations of the same entity in agreement. You upsert, you reconcile, you repair drift. That model does not transfer to a ledger.</p>
+
+        <p>A financial document is immutable once it is issued. An invoice that has been sent to a customer and included in a tax return cannot be edited to a different value — it must be corrected by issuing a credit note and, if appropriate, a new invoice. Zoho Books enforces some of this and permits more editing than is wise, which is a trap: the API will happily let you update an invoice that has already been reported, and nothing will stop you, and your audit trail will be a fiction.</p>
+
+        <p>So the operating rules are different.</p>
+
+        <p><strong>Append, do not overwrite.</strong> Corrections are new documents, not edits. This is the single largest conceptual adjustment for engineers coming from ordinary CRUD integrations, and it changes the shape of the code — there is no <code>PUT /invoices/{id}</code> in a correct design except for genuinely non-financial metadata.</p>
+
+        <p><strong>Numbering must be gapless and monotonic.</strong> In most jurisdictions invoice numbers may not have unexplained gaps. If your integration creates an invoice, fails, and retries with a new number, you have produced a gap that somebody will eventually have to explain.</p>
+
+        <p><strong>Dates are not the timestamp of the API call.</strong> The invoice date is the date of supply, which is a business fact. An order placed at 23:58 on 31 March that syncs at 00:02 on 1 April belongs in the previous quarter. Getting this wrong moves revenue between VAT periods, and moving revenue between VAT periods is a thing HMRC has opinions about.</p>
+
+        <p><strong>Every discrepancy matters, including the penny ones.</strong> Elsewhere, a rounding difference of a penny is noise. In a ledger it is an unreconciled line that a human has to investigate every month forever.</p>
+
+        <h2>3. What Zoho Books Actually Models</h2>
+
+        <p>Before mapping anything, it helps to know the object graph you are writing into, because it is richer than most storefront developers expect and the pieces have specific relationships.</p>
+
+        <p><strong>Contacts</strong> are customers and vendors. A contact has one or more contact persons, billing and shipping addresses, a currency, payment terms, and — critically for tax — a tax treatment and a place of supply.</p>
+
+        <p><strong>Items</strong> are what you sell. An item has a rate, an account it posts to, a tax preference, and optionally stock tracking. Items in Zoho Books with inventory enabled behave differently from plain service items, and the difference matters when you post a sale.</p>
+
+        <p><strong>Sales Orders</strong> are a non-financial commitment. They do not post to the ledger. They are optional and many integrations skip them.</p>
+
+        <p><strong>Invoices</strong> post to the ledger. This is the document that recognises revenue.</p>
+
+        <p><strong>Payments Received</strong> are applied against invoices. A payment may cover several invoices or part of one.</p>
+
+        <p><strong>Credit Notes</strong> reverse revenue. They may be applied to an invoice or left open as a customer balance, and they may be refunded to a payment method.</p>
+
+        <p><strong>Bills, Purchase Orders and Vendor Credits</strong> are the buying side, which matters if you are syncing supplier invoices or dropship costs.</p>
+
+        <p><strong>Inventory Adjustments</strong> change stock without a sale, and post a corresponding value movement to a chosen account.</p>
+
+        <p>Two things about this graph consistently surprise people. First, deleting an invoice is possible through the API and is almost always wrong; void it instead, which preserves the number and the audit trail. Second, an item's posting account is what determines which revenue line a sale lands in, so a client who wants revenue split by category needs that reflected in the item setup, not in the invoice.</p>
+
+        <h2>4. The Document Chain, and Where Storefronts Break It</h2>
+
+        <p>The chain that keeps a ledger honest looks like this, and every storefront event maps onto exactly one link in it.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Storefront event</th><th>Zoho Books document</th><th>Posts to ledger?</th><th>Common mistake</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Order placed, unpaid</td><td>Sales Order (optional)</td><td>No</td><td>Creating an invoice too early</td></tr>
+            <tr><td>Payment authorised</td><td>Nothing yet</td><td>No</td><td>Treating auth as revenue</td></tr>
+            <tr><td>Order invoiced / shipped</td><td>Invoice</td><td>Yes</td><td>Using sync date as invoice date</td></tr>
+            <tr><td>Payment captured</td><td>Payment Received</td><td>Yes</td><td>Posting to bank instead of clearing</td></tr>
+            <tr><td>Partial shipment</td><td>Invoice for shipped lines</td><td>Yes</td><td>Invoicing the full order</td></tr>
+            <tr><td>Return accepted</td><td>Credit Note</td><td>Yes</td><td>Doing nothing — the £18k bug</td></tr>
+            <tr><td>Refund issued</td><td>Refund against Credit Note</td><td>Yes</td><td>Editing the original invoice</td></tr>
+            <tr><td>Order cancelled before invoice</td><td>Void the Sales Order</td><td>No</td><td>Creating and voiding an invoice</td></tr>
+            <tr><td>Gateway fee deducted</td><td>Expense against settlement</td><td>Yes</td><td>Ignoring it, then failing to reconcile</td></tr>
+          </tbody>
+        </table>
+
+        <p>The row that decides the character of the whole integration is when you create the invoice. Two defensible policies exist.</p>
+
+        <p><strong>Invoice on order.</strong> Simple, one document per order, and it recognises revenue before you have shipped anything. For digital goods or immediate-dispatch retail this is fine and it is what most small integrations do.</p>
+
+        <p><strong>Invoice on shipment.</strong> Correct for anything with a lead time, partial shipments or backorders, and it means one order can produce several invoices. More code, more accurate, and required if your accountant cares about revenue recognition timing.</p>
+
+        <p>My default is invoice on shipment for physical goods with any meaningful fulfilment delay, and invoice on order for everything else. What I will not accept is invoice on order for a business that routinely ships a week later and takes payment on dispatch, because that produces revenue in one month and cash in another with no document linking them.</p>
+
+        <h2>5. The API You Actually Get</h2>
+
+        <p>Zoho's API is a REST API with OAuth 2.0, and it has three characteristics that shape integration design more than the endpoint list does.</p>
+
+        <p><strong>Data centres are separate installations.</strong> Zoho runs on regional domains — <code>.com</code>, <code>.eu</code>, <code>.in</code>, <code>.com.au</code>, <code>.jp</code> and others — and an account provisioned in one is not reachable at another. A refresh token issued by <code>accounts.zoho.eu</code> will not work against <code>www.zohoapis.com</code>. It returns an authentication error that reads like a bad credential, which sends people off to regenerate tokens for an afternoon. The OAuth response includes an API domain; store it and use it rather than hardcoding.</p>
+
+        <p><strong>Rate limits are per organisation and per day as well as per minute.</strong> There is a request-per-minute ceiling and a daily API credit allowance tied to your plan. Batch jobs that seemed fine in testing exhaust the daily allowance at production volume, and the failure arrives late in the day when nobody is watching. Count your calls per order before you build: a naive implementation that looks up the contact, creates the contact if missing, looks up each item, creates missing items, creates the invoice, then creates the payment is seven or more calls per order. At 900 orders a month that is fine. At 900 a day it is not.</p>
+
+        <p><strong>Bulk endpoints exist and are worth using.</strong> Several resources support batch creation, and the search endpoints let you fetch many records at once. Caching contact and item identifiers locally, rather than resolving them per order, is usually the single biggest reduction in call volume available.</p>
+
+        <pre><code class="language-python">import time, requests
+
+class ZohoBooksClient:
+    """Thin client. The interesting parts are token refresh and the
+    domain, not the endpoints."""
+
+    def __init__(self, refresh_token, client_id, client_secret,
+                 accounts_domain, org_id):
+        # accounts_domain is per-DC: accounts.zoho.eu, accounts.zoho.com, ...
+        self.accounts_domain = accounts_domain
+        self.org_id = org_id
+        self._creds = (refresh_token, client_id, client_secret)
+        self._access_token = None
+        self._expires_at = 0
+        self._api_domain = None      # returned by the token endpoint; do not hardcode
+
+    def _token(self):
+        # Refresh 120s early rather than reacting to a 401 mid-invoice-creation.
+        if self._access_token and time.time() &lt; self._expires_at - 120:
+            return self._access_token
+
+        rt, cid, secret = self._creds
+        r = requests.post(f"https://{self.accounts_domain}/oauth/v2/token", data={
+            "refresh_token": rt,
+            "client_id": cid,
+            "client_secret": secret,
+            "grant_type": "refresh_token",
+        }, timeout=15)
+        r.raise_for_status()
+        body = r.json()
+
+        # Zoho refresh tokens do not expire by time, but they are revoked when
+        # the user regenerates them or when you exceed the token limit per client.
+        # A 'invalid_code' here is a human action, not a transient fault: alert, do not retry.
+        if "access_token" not in body:
+            raise ZohoAuthRevoked(body.get("error"))
+
+        self._access_token = body["access_token"]
+        self._expires_at = time.time() + int(body.get("expires_in", 3600))
+        self._api_domain = body.get("api_domain") or self._api_domain
+        return self._access_token
+
+    def post(self, path, payload, idempotency_ref=None):
+        headers = {"Authorization": f"Zoho-oauthtoken {self._token()}"}
+        params = {"organization_id": self.org_id}
+        r = requests.post(f"{self._api_domain}/books/v3/{path}",
+                          headers=headers, params=params, json=payload, timeout=30)
+        if r.status_code == 429:
+            raise RateLimited(retry_after=int(r.headers.get("Retry-After", 60)))
+        return r.json()</code></pre>
+
+        <h2>6. Idempotency, and the Duplicate Invoice Problem</h2>
+
+        <p>Zoho Books has no native idempotency key on document creation. Post the same invoice payload twice and you get two invoices, two revenue postings, and a customer statement that is wrong.</p>
+
+        <p>The general argument for stable keys, bounded retries and dead-letter queues is one I have made at length in the article on <a href="/blog/sap-commerce-cloud-erp-sync/">ERP synchronisation</a>, and all of it applies. What is specific here is that you have to build the deduplication yourself, on both sides of the call.</p>
+
+        <p>The pattern I use: put the storefront's order identifier into a custom field on the Zoho document, and before creating anything, search for a document already carrying that reference. It costs one extra call and it is the difference between a safe retry and a duplicated ledger entry.</p>
+
+        <pre><code class="language-python">def ensure_invoice(client, order, state_store):
+    """Create the invoice at most once, whatever the caller does."""
+    ref = f"MAG-{order.increment_id}"
+
+    # 1. Local state first — cheapest, and correct for the common case.
+    known = state_store.get_invoice_id(ref)
+    if known:
+        return known
+
+    # 2. Ask Zoho. This covers the case where we created it and then crashed
+    #    before recording the id locally, which is the exact window that
+    #    produces duplicates in naive implementations.
+    found = client.get("invoices", params={"reference_number": ref})
+    existing = found.get("invoices") or []
+    if existing:
+        state_store.put_invoice_id(ref, existing[0]["invoice_id"])
+        return existing[0]["invoice_id"]
+
+    # 3. Create, then record. If we crash between these two lines, step 2
+    #    on the next attempt repairs it.
+    created = client.post("invoices", build_invoice_payload(order, ref))
+    invoice_id = created["invoice"]["invoice_id"]
+    state_store.put_invoice_id(ref, invoice_id)
+    return invoice_id</code></pre>
+
+        <p>Note that the reference number must be genuinely unique and derived from the order, not generated per attempt. A UUID minted on each retry defeats the entire mechanism while looking, in code review, completely correct. I have seen that exact bug pass review twice.</p>
+
+        <p>One more thing: search by reference number is not instant. Zoho's search index can lag a second or two behind creation. A very fast retry — an aggressive client that retries after 200ms — can search, find nothing, and create a second document. Back off before retrying, and hold local state as the primary guard rather than the search.</p>
+
+        <h2>7. Tax Is the Part That Will Take Longest</h2>
+
+        <p>If you budget this integration by counting endpoints, you will be wrong by a factor of two, and the reason is tax.</p>
+
+        <p>Zoho Books models tax through tax rates, tax groups, and a per-contact tax treatment that determines how the whole document is handled. A UK business selling to a UK consumer, a UK business selling to an EU consumer under OSS, a UK business selling to an EU VAT-registered business under reverse charge, and a UK business selling outside the EU are four genuinely different postings, and the storefront usually knows which one applies but does not express it in those terms.</p>
+
+        <p>The mapping problem is that Magento or Shopify computes a tax amount, and Zoho Books wants to know which tax rate applies so it can compute the amount itself. If you send a line with a tax rate and Zoho's computation disagrees with the storefront's by a penny, you now have an invoice whose total does not match what the customer paid.</p>
+
+        <p>Two ways out, and I have used both.</p>
+
+        <p><strong>Let Zoho compute.</strong> Send tax rate identifiers per line and let Zoho calculate. Cleanest for reporting, and it requires that your storefront tax configuration and your Zoho tax configuration produce identical results for every combination. That is achievable and it needs testing against a matrix of scenarios, not against one order.</p>
+
+        <p><strong>Send the amounts and reconcile.</strong> Post the storefront's computed tax as an explicit line adjustment. Simpler to get matching totals, and it degrades your VAT reporting because Zoho no longer knows which rate applied to which line. I would only do this as a stopgap.</p>
+
+        <p>My preference is emphatically the first, with a validation step that compares the returned document total against the storefront total and refuses to proceed if they differ.</p>
+
+        <pre><code class="language-python">def assert_totals_match(order, zoho_invoice, tolerance=Decimal("0.00")):
+    """A penny of drift compounds into an unreconcilable ledger.
+    Fail loudly at creation, when it is one order, rather than at
+    year end, when it is four thousand."""
+    ours = Decimal(str(order.grand_total)).quantize(Decimal("0.01"))
+    theirs = Decimal(str(zoho_invoice["total"])).quantize(Decimal("0.01"))
+
+    if abs(ours - theirs) &gt; tolerance:
+        # Void, do not delete: the number is already allocated.
+        client.post(f"invoices/{zoho_invoice['invoice_id']}/status/void", {})
+        raise TotalMismatch(
+            f"order {order.increment_id}: storefront {ours} vs Zoho {theirs}; "
+            f"tax config divergence — check rate mapping for "
+            f"{order.shipping_address.country_id}"
+        )</code></pre>
+
+        <h3>Place of supply and the contact record</h3>
+
+        <p>Zoho derives a great deal from the contact, not the invoice. A contact with the wrong tax treatment produces wrong tax on every invoice ever raised against it, and fixing the contact does not retrospectively fix the invoices. So contact creation deserves as much care as invoice creation, and a guest checkout that creates a fresh contact per order — which is what the lazy implementation does — will scatter incorrect tax treatments across hundreds of records.</p>
+
+        <p>Deduplicate contacts by email, and set the tax treatment explicitly from the order's tax context rather than letting it default.</p>
+
+        <h2>8. Rounding, and Why Your Totals Differ by a Penny</h2>
+
+        <p>Magento computes tax per line and rounds; Shopify computes differently again; Zoho Books has its own rounding configuration including a document-level rounding adjustment. Three systems, three rounding strategies, and totals that agree only by luck.</p>
+
+        <p>The specific hazard is tax-inclusive pricing, which is standard in the UK and most of the EU. A £19.99 item at 20% VAT contains £3.3316666… of VAT. Round per line, sum, and compare against rounding the sum, and you will get different answers as soon as you have several lines.</p>
+
+        <p>What actually resolves it: pick one system as the arithmetic authority — the storefront, because that is what the customer paid and what the gateway captured — and configure Zoho to match its strategy. Then validate every document, as above. Where a residual difference genuinely cannot be eliminated, Zoho's rounding adjustment field lets you post the difference explicitly, which is far better than an invoice that silently disagrees with the payment.</p>
+
+        <p>I would not build a general rounding-repair layer. I have tried, and it becomes a place where errors hide. An explicit failure on mismatch, investigated per case, converges on a correct configuration within a couple of weeks. A repair layer converges on nothing and runs forever.</p>
+
+        <h2>9. Refunds and Credit Notes, Properly This Time</h2>
+
+        <p>Back to the £18,412. The fix has three parts and each one is a decision, not just code.</p>
+
+        <p><strong>What triggers a credit note.</strong> In Magento the natural trigger is the credit memo, which is created when a refund is processed. In Shopify it is the refund object. Either way, the event carries the lines and amounts, and it is the only reliable source — do not attempt to derive returns from order status changes.</p>
+
+        <p><strong>Whether the credit note is applied or refunded.</strong> A credit note applied to the original invoice reduces the amount owed. A credit note refunded returns money. If the customer has already paid and you have already refunded them through the gateway, the correct sequence is: create the credit note against the invoice, then record a refund against the credit note to the same clearing account the payment went to. Skipping the second step leaves an open credit balance on a customer who has already had their money back.</p>
+
+        <p><strong>What happens to tax.</strong> A credit note reverses the tax as well as the net, at the rate that applied on the original invoice — not at today's rate. If a VAT rate changed between sale and return, this matters, and it is a genuine reason to copy the rate identifiers from the original invoice lines rather than recomputing them.</p>
+
+        <pre><code class="language-python">def sync_credit_memo(client, memo, invoice_id, invoice_lines):
+    """Mirror a Magento credit memo into Zoho Books as a credit note,
+    then refund it against the same account the payment landed in."""
+
+    # Copy tax rate ids from the ORIGINAL invoice lines. Recomputing them
+    # from today's config silently misstates the reversal if a rate changed.
+    rate_by_sku = {l["sku"]: l.get("tax_id") for l in invoice_lines}
+
+    lines = [{
+        "item_id":  resolve_item_id(item.sku),
+        "quantity": item.qty_refunded,
+        "rate":     str(item.price_incl_tax_ex_discount),
+        "tax_id":   rate_by_sku.get(item.sku),
+    } for item in memo.items if item.qty_refunded &gt; 0]
+
+    # Shipping refunded and adjustment fees are separate lines, not folded
+    # into the item lines — folding them in makes the reversal untraceable.
+    if memo.shipping_amount_refunded:
+        lines.append(shipping_line(memo.shipping_amount_refunded))
+
+    cn = client.post("creditnotes", {
+        "customer_id":      resolve_contact_id(memo.order),
+        "reference_number": f"MAG-CM-{memo.increment_id}",   # the idempotency handle
+        "date":             memo.created_at.date().isoformat(),  # refund date, not sync date
+        "line_items":       lines,
+        "invoice_id":       invoice_id,
+    })
+    cn_id = cn["creditnote"]["creditnote_id"]
+
+    # Money actually left the business: record it, against the clearing
+    # account the original receipt went to, not the bank account.
+    if memo.refunded_online_amount &gt; 0:
+        client.post(f"creditnotes/{cn_id}/refunds", {
+            "date":       memo.created_at.date().isoformat(),
+            "amount":     str(memo.refunded_online_amount),
+            "account_id": GATEWAY_CLEARING_ACCOUNT_ID,
+        })
+    return cn_id</code></pre>
+
+        <h2>10. Payments, Gateway Fees, and the Clearing Account</h2>
+
+        <p>The single most common structural mistake I see in storefront-to-Books integrations is posting customer payments directly to the bank account. It seems obvious — the customer paid, the money is in the bank — and it makes bank reconciliation impossible.</p>
+
+        <p>Here is why. A customer pays £120 by card on Monday. The gateway settles on Wednesday, batching eleven orders into one deposit of £1,340.18, having deducted its fees. The bank statement shows one line of £1,340.18. Your ledger shows eleven separate receipts totalling £1,367.90. Nothing matches, and someone spends every Friday afternoon matching it by hand.</p>
+
+        <p>The correct structure uses a clearing account per gateway.</p>
+
+        <p>Customer payments post to the clearing account, not the bank. When the gateway settles, you post a transfer from clearing to bank for the settlement amount, and an expense for the fees. The clearing account balance at any moment is money captured but not yet settled, which is a number that ought to exist and that most small merchants cannot produce.</p>
+
+        <pre><code class="language-python"># Settlement import: one deposit, many receipts, one fee expense.
+# The clearing account should return to (approximately) zero after each
+# settlement cycle. A clearing balance that only grows means receipts are
+# being recorded that never settle — usually duplicate payments.
+def post_settlement(client, batch):
+    total_captured = sum(t.gross for t in batch.transactions)
+    fees           = sum(t.fee   for t in batch.transactions)
+    net            = batch.deposit_amount
+
+    assert abs((total_captured - fees) - net) &lt; Decimal("0.02"), (
+        f"settlement {batch.id} does not balance: gross {total_captured} "
+        f"less fees {fees} != deposit {net}"
+    )
+
+    client.post("banktransactions", {
+        "transaction_type": "transfer_fund",
+        "from_account_id":  GATEWAY_CLEARING_ACCOUNT_ID,
+        "to_account_id":    BANK_ACCOUNT_ID,
+        "amount":           str(net),
+        "date":             batch.settlement_date.isoformat(),
+        "reference_number": f"SETTLE-{batch.id}",
+    })
+    client.post("banktransactions", {
+        "transaction_type": "expense",
+        "account_id":       GATEWAY_FEES_EXPENSE_ID,
+        "paid_through_account_id": GATEWAY_CLEARING_ACCOUNT_ID,
+        "amount":           str(fees),
+        "date":             batch.settlement_date.isoformat(),
+        "reference_number": f"SETTLE-FEE-{batch.id}",
+    })</code></pre>
+
+        <p>That assertion is worth more than it looks. A settlement that does not balance means either a transaction is missing from your capture records or a fee model has changed, and both are things you want to know on the day rather than at year end.</p>
+
+        <p>Gateway fees, incidentally, are the number most small merchants underestimate. Posting them as an explicit expense category rather than netting them off revenue gives you a figure you can negotiate with. One client discovered they were paying 2.4% blended against a headline rate of 1.4%, entirely because of international card surcharges nobody had ever totalled.</p>
+
+        <h2>11. Inventory: Deciding Which System Is Telling the Truth</h2>
+
+        <p>Zoho Books tracks inventory for items with stock tracking enabled, and Zoho Inventory extends that with warehouses, transfers and more sophisticated fulfilment. Your storefront also tracks stock. Both cannot be authoritative.</p>
+
+        <p>The choice depends on where goods physically move and who touches the system.</p>
+
+        <p><strong>Zoho as the system of record</strong> makes sense when purchasing, goods-in and stock counts happen in Zoho — when the warehouse team lives there. The storefront then receives quantity updates and displays them. This is the right shape for most small and mid-size merchants running Zoho Inventory properly.</p>
+
+        <p><strong>The storefront as the system of record</strong> makes sense when the storefront is the only sales channel and Zoho is used purely for accounting. Then Zoho items should generally have stock tracking off, and cost of goods handled through periodic journal entries rather than per-sale movements.</p>
+
+        <p>What does not work is both. I inherited a setup where Magento decremented stock on order and Zoho decremented stock on invoice, and because invoicing happened on shipment, every in-flight order was counted twice against available stock. The storefront showed zero for products with a dozen on the shelf, and the client had been manually adjusting Zoho every morning for months to compensate — which of course made the divergence permanent.</p>
+
+        <p>If you do make Zoho authoritative, push quantity changes to the storefront on an event rather than polling, and treat the pushed number as advisory with the reservation at order placement being authoritative. The full argument for banded availability and reservation-over-display is in the piece on <a href="/blog/enterprise-erp-systems-ecommerce/">ERP integration for high-volume commerce</a>, and it holds regardless of which system owns the number.</p>
+
+        <h3>Composite items and bundles</h3>
+
+        <p>If you sell bundles, decide whether Zoho sees the bundle or the components. Zoho supports composite items which consume component stock when sold. Magento bundles and Shopify's various bundle apps model this differently, and the mapping is rarely one to one. Get this wrong and stock movements post against the wrong items, which corrupts both your availability and your cost of sales.</p>
+
+        <h2>12. Webhooks From Zoho, and Why I Mostly Do Not Trust Them</h2>
+
+        <p>Zoho Books can call your endpoint when documents change. This is useful and it is not a foundation you should build on alone.</p>
+
+        <p>Webhooks are best-effort. They can be delivered twice, delivered late, delivered out of order, or not delivered at all if your endpoint was down during the attempt window. If the only way your system learns that an invoice was marked paid is a webhook, then any hour of downtime on your side is a permanent hole in your data.</p>
+
+        <p>What I build instead is webhooks for latency plus polling for completeness. The webhook makes the common case fast. A scheduled reconciliation sweep — every fifteen minutes for recent documents, nightly for a wider window — catches everything the webhook missed. The sweep is cheap because you are querying by last-modified time, and it converts a fragile mechanism into a reliable one.</p>
+
+        <pre><code class="language-python"># Sweep: authoritative, idempotent, and cheap because it filters server-side.
+# Run every 15 minutes with a deliberate overlap on the window — reprocessing
+# a document you already have costs nothing if your handlers are idempotent,
+# and missing one costs a manual correction.
+def sweep_modified_invoices(client, since, state):
+    overlap = timedelta(minutes=5)
+    cursor  = since - overlap
+    page    = 1
+
+    while True:
+        res = client.get("invoices", params={
+            "last_modified_time": cursor.isoformat(),
+            "page": page,
+            "per_page": 200,
+            "sort_column": "last_modified_time",
+        })
+        for inv in res.get("invoices", []):
+            handle_invoice_state(inv, state)   # must be safe to call repeatedly
+
+        if not res.get("page_context", {}).get("has_more_page"):
+            break
+        page += 1
+
+    return datetime.now(timezone.utc)</code></pre>
+
+        <p>The overlap window is deliberate. Clock skew between your worker and Zoho's servers is small but not zero, and a sweep with an exact boundary will eventually miss a document that was written in the same second the previous sweep ended.</p>
+
+        <h2>13. Multi-Currency and the Exchange Rate Date</h2>
+
+        <p>If you sell in more than one currency, there is a decision hiding in every invoice: which day's exchange rate applies.</p>
+
+        <p>Zoho Books stores an exchange rate on the document and converts to the organisation's base currency for reporting. If you let it default, it uses the rate on the date the document is created, which is the date your integration ran, which may not be the date of supply. For a sync running nightly this puts a whole day's sales on the wrong rate, and the resulting foreign exchange gain or loss is fictional.</p>
+
+        <p>Send the exchange rate explicitly, taken from the same source and the same date the storefront used to price the order. If the storefront charged the customer at a rate captured at checkout, that is the rate that belongs on the invoice, because that is the transaction that occurred.</p>
+
+        <p>The associated trap is that a refund months later will convert at a different rate, producing a genuine and correct exchange difference. That difference is real and should post to a foreign exchange account, not be forced to zero. I have watched a well-meaning developer add a fudge line to make the credit note exactly reverse the invoice, which destroyed the one piece of information the ledger was trying to record.</p>
+
+        <h2>14. Backfilling History Without Corrupting the Ledger</h2>
+
+        <p>Every one of these projects reaches the question of historical data, usually two days before go-live, and the honest answer is almost always: do not.</p>
+
+        <p>Backfilling twelve months of invoices into Zoho Books does several unhelpful things. It allocates invoice numbers retrospectively, which conflicts with numbers already issued from whatever the business used before. It creates revenue postings in periods that have already been reported, which changes filed figures. And it takes a great deal of API budget.</p>
+
+        <p>What works instead: pick a cutover date, take an opening trial balance from the previous system as a journal entry, and start clean. History stays queryable in the old system, which is what history is for.</p>
+
+        <p>Where a backfill is genuinely required — usually because there is no previous system, only spreadsheets — do it into a separate numbering series, in a period that is still open, with the accountant in the room. And rate-limit it hard; a backfill running flat out will exhaust the daily API allowance and take your live sync down with it. I run backfills at a deliberate 20% of the daily budget, overnight, over as many nights as it takes.</p>
+
+        <h2>15. The Reconciliation Report That Should Have Existed</h2>
+
+        <p>The £18,412 was discoverable at any point in fourteen months by one query. It was never run because nobody had written it.</p>
+
+        <p>Three comparisons are worth automating, in this order of value.</p>
+
+        <p><strong>Order-level completeness.</strong> Every storefront order in a period, with its expected documents, and a flag for anything missing. An order with no invoice after the expected lag. A credit memo with no credit note. An invoice with no payment where the order was paid. Run daily, alert on any row.</p>
+
+        <p><strong>Period totals across three sources.</strong> Storefront revenue, Zoho revenue, and gateway settlements for the same period, net of refunds and fees. These should agree within a defined tolerance. This is the comparison that would have caught the refund bug in month one.</p>
+
+        <p><strong>Clearing account balance trend.</strong> The gateway clearing account should oscillate around zero as settlements land. A balance that only grows means receipts are being recorded that never settle, which is the signature of duplicate payments.</p>
+
+        <pre><code class="language-sql">-- Storefront side of the daily completeness check.
+-- Anything returned here is either in flight or lost, and after the
+-- expected lag those are the same thing until someone looks.
+SELECT
+    o.increment_id,
+    o.created_at,
+    o.grand_total,
+    o.status,
+    o.zoho_invoice_id,
+    cm.increment_id  AS credit_memo,
+    cm.zoho_creditnote_id
+FROM sales_order o
+LEFT JOIN sales_creditmemo cm ON cm.order_id = o.entity_id
+WHERE o.created_at &gt;= NOW() - INTERVAL 14 DAY
+  AND o.status NOT IN ('canceled', 'holded')
+  AND (
+        -- invoiced on the storefront but never reached Zoho
+        (o.total_invoiced &gt; 0 AND o.zoho_invoice_id IS NULL)
+        -- refunded on the storefront but no credit note exists
+     OR (cm.entity_id IS NOT NULL AND cm.zoho_creditnote_id IS NULL)
+      )
+ORDER BY o.created_at;</code></pre>
+
+        <p>Publish the results somewhere visible even when they are clean. A report that shows zero divergence every morning builds the habit of looking, so the morning it shows four rows, somebody notices. A report that only emails on failure gets filtered into a folder within a month.</p>
+
+        <h2>16. A Rollout, With Numbers, and the Month-End That Went Badly</h2>
+
+        <p>The tiles and stone retailer from the opening, after we rebuilt the integration. Magento 2.4, Zoho Books on the EU data centre, one gateway, roughly 900 orders a month rising to 2,600 in December, single currency, UK VAT only.</p>
+
+        <p><strong>What we changed.</strong> Invoice on shipment rather than on order, which mattered because their average dispatch lag was three days and December pushed it to nine. Credit notes triggered from credit memos with tax rates copied from the original invoice. A gateway clearing account with automated settlement import. Contact deduplication by email, which collapsed 4,100 duplicate contacts created by guest checkout into 2,300 real ones. And the three reconciliation reports, built in week two rather than at the end.</p>
+
+        <p><strong>Call volume.</strong> The original integration made an average of 9.2 Zoho API calls per order because it resolved every contact and item by search. Caching item identifiers locally and deduplicating contacts brought it to 3.1. That mattered in December, where the old figure would have exceeded the daily allowance on the three busiest days.</p>
+
+        <p><strong>What went wrong.</strong> The first month-end after cutover was a mess, and it was our fault. We had migrated the historical contact records but not their tax treatments, so around 200 contacts defaulted to a treatment that produced no VAT on their invoices. Forty-one invoices went out with zero VAT before anyone spotted it. Correcting them meant forty-one credit notes and forty-one replacement invoices, an apologetic email, and a conversation with the client's accountant that I did not enjoy.</p>
+
+        <p>The root cause was that our validation compared the invoice total against the order total, and for those contacts both systems agreed on a total — the storefront had also computed zero VAT for them because the migrated customer group was wrong on both sides. Two systems agreeing does not mean either is right. We added a rule that any UK-addressed invoice with zero VAT on standard-rated items is held for review, which is crude and has never produced a false positive.</p>
+
+        <p><strong>Where it landed.</strong> Quarter-end reconciliation went from two days of manual work to about forty minutes of reviewing exceptions. The three-source comparison has run daily for nineteen months and has flagged genuine problems eleven times, of which two were integration faults and nine were human error in Zoho — someone editing an invoice by hand, mostly. That ratio is normal and it is a good argument for the report existing.</p>
+
+        <p><strong>What I would do differently.</strong> Validate the tax configuration against a matrix of scenarios before cutover, not the order totals. Ten test orders covering standard rate, zero rate, mixed basket, shipping-only tax, business customer, and non-UK destination would have caught it in an afternoon.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"Can we just use the official Zoho connector?"</strong> For a simple Shopify store selling one tax rate domestically, quite possibly, and you should try it before building anything. It falls down on partial shipments, unusual tax treatments, multi-warehouse inventory, and anything requiring a clearing account structure. Evaluate it against your actual return rate and tax matrix rather than against the feature list.</p>
+
+        <p><strong>"Should sales orders be synced at all?"</strong> Usually not. They do not post to the ledger, they double your document volume, and their main value is when Zoho is also driving fulfilment. If Zoho Inventory is running your warehouse, sync them. If Zoho is purely the accounting system, skip them.</p>
+
+        <p><strong>"How do we handle an order that is partly shipped and partly cancelled?"</strong> Invoice the shipped lines only. Do not invoice and then credit the cancelled lines — that inflates both revenue and refunds in your reporting and makes your return rate look worse than it is.</p>
+
+        <p><strong>"What about marketplaces?"</strong> Amazon and eBay sales usually arrive net of commission with their own settlement cycle, which means their own clearing account and their own fee expense. Do not merge them into the storefront's flow; the settlement mechanics are different enough that a shared code path becomes a mass of conditionals. The same separation logic applies to any additional channel, as with the marketplace synchronisation patterns in the piece on <a href="/blog/depop-omnichannel-marketplace-sync/">omnichannel marketplace sync</a>.</p>
+
+        <p><strong>"Do we need Zoho Inventory as well as Books?"</strong> Only if you need warehouses, transfers, or serial and batch tracking. Books alone tracks stock adequately for a single-location merchant. Adding Inventory adds a second set of documents to keep in step, and I would not take that on without a specific requirement.</p>
+
+        <p><strong>"How do we test without polluting the books?"</strong> Zoho gives you a separate organisation, and you should have a test organisation that mirrors the production chart of accounts and tax configuration. Keep it in step deliberately — a test org whose tax rates drifted six months ago will pass tests that production fails.</p>
+
+        <p><strong>"What happens when someone edits an invoice by hand?"</strong> They will. The sweep will see a modified document, and your handler needs a policy: either overwrite from the storefront, or detect the divergence and flag it. I flag it. Overwriting a human's correction is how you get a finance team that stops trusting the integration.</p>
+
+        <h2>18. What I Would Do First</h2>
+
+        <p>Starting one of these on Monday, in this order.</p>
+
+        <p><strong>One.</strong> Sit with the accountant, not the developer, and draw the document chain for this specific business. When is revenue recognised. What triggers a credit note. Which currencies. Which tax treatments. That conversation is two hours and it determines everything else.</p>
+
+        <p><strong>Two.</strong> Set up the chart of accounts before writing code, including a clearing account per payment channel and an explicit expense account for gateway fees. Retrofitting the clearing structure after six months of postings is genuinely painful.</p>
+
+        <p><strong>Three.</strong> Build contact and item resolution with local caching and deduplication. This is unglamorous, it is where your API budget goes, and doing it late means cleaning up thousands of duplicate contacts later.</p>
+
+        <p><strong>Four.</strong> Build invoice creation with a derived reference number, a search-before-create guard, and a hard total validation that voids and raises on mismatch. Do not soften that validation to get through go-live; the pennies are telling you something.</p>
+
+        <p><strong>Five.</strong> Build credit notes in the same sprint as invoices. Not the next one. The refund path is the one that gets deferred and it is the one that produced an £18,000 discrepancy in the case that opens this article.</p>
+
+        <p><strong>Six.</strong> Write the three reconciliation reports and put them somewhere a human sees daily. Twenty lines of SQL and a scheduled email, and they are the entire difference between an integration you can trust and one that is quietly wrong for fourteen months.</p>
+
+        <p>The pattern underneath all of it is that accounting integrations fail silently by default. There is no customer to phone up and complain that their revenue was overstated. The only thing standing between a correct ledger and a fictional one is a comparison somebody bothered to automate, and the cheapest hour you will ever spend on one of these projects is the hour spent writing that query on day one.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 & Shopify Plus</a></strong>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
               <p>Syncing customer leads and order histories.</p>
             </li>
             <li>
@@ -234,7 +698,6 @@ def create_zoho_sales_order(organization_id, authtoken, order_data):
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -268,6 +731,6 @@ def create_zoho_sales_order(organization_id, authtoken, order_data):
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

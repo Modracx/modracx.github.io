@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Salesforce Commerce Cloud (SFCC) Integration Architecture | MODRACX</title>
-  <meta name="description" content="Technical guide on integrating Salesforce Commerce Cloud OCAPI and Commerce API with custom headless storefronts and ERP backends." />
+  <meta name="description" content="SFCC integration in practice: SLAS session design, OCAPI vs SCAPI, quota limits, catalog imports, order export idempotency and what breaks in production." />
   <meta property="og:title" content="Salesforce Commerce Cloud (SFCC) Integration Architecture | MODRACX" />
   <meta property="og:description" content="Technical guide on SFCC integration by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Salesforce Commerce Cloud (SFCC) Integration Architecture</h1>
-        <p class="lede">Salesforce Open Commerce API (OCAPI) and B2C Commerce API provide RESTful endpoints for custom headless storefronts and order management systems.</p>
+        <p class="lede">OCAPI tokens expire after thirty minutes. A headless storefront that does not refresh them quietly empties baskets, and nothing in your monitoring will tell you.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 26 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,24 +205,528 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>SFCC OCAPI Product Fetch Request</h2>
+        <h2>1. The Basket That Kept Forgetting Who It Owned</h2>
 
-        <pre><code class="language-javascript">// JavaScript SFCC OCAPI Product Details Request
-const axios = require('axios');
+        <p>A welding supplies retailer called me in March about a conversion drop on their new headless storefront. Not a large one — about 4% of sessions that reached the basket never reached payment, up from 1.6% on the old Site Genesis storefront they had just replaced. Marketing blamed the checkout redesign. The design was fine.</p>
 
-async function getSFCCProduct(productId, jwtToken) {
-  const url = `https://production.demandware.net/s/Sites-SiteGenesis-Site/dw/shop/v23_1/products/${productId}`;
-  const response = await axios.get(url, {
-    headers: { 'Authorization': `Bearer ${jwtToken}` }
-  });
-  return response.data;
+        <p>What was happening was that OCAPI JWTs expire after thirty minutes, and the storefront was not refreshing them. A shopper who logged in, browsed for half an hour, and then went to their basket got a fresh guest token silently issued by the client library, which meant a brand new empty basket. The old one still existed on the server, attached to the registered customer, but the browser had no way back to it. From the customer's side, the basket emptied itself.</p>
+
+        <p>The reason it took three weeks to find is that it never happened to us. Developers work in short bursts. QA scripts run in ninety seconds. Nobody adds a product, has lunch, and comes back — except real customers, constantly.</p>
+
+        <p>That is the shape of most Salesforce Commerce Cloud integration bugs I have chased. Not architectural failures. Small, boring properties of the platform — token lifetimes, quota limits, replication timing, the difference between what a sandbox does and what production does — that behave exactly as documented and catch you anyway because nobody read that paragraph.</p>
+
+        <p>This article is about integrating SFCC with the things around it: an ERP, a PIM, an OMS, a headless front end, a search provider. It assumes B2C Commerce, which is what almost everyone means when they say SFCC. Where the concern is genuinely the same as any other commerce-to-backend integration — idempotency, reconciliation, who owns which field — I have written it up at length in the piece on <a href="/blog/sap-commerce-cloud-erp-sync/">SAP Commerce Cloud and ERP synchronisation</a> and will point there rather than repeat it.</p>
+
+        <h2>2. The Shape of the Platform You Are Integrating With</h2>
+
+        <p>SFCC is a multi-tenant SaaS platform, and the constraint that follows from that governs nearly every design decision: you do not own the machine, you cannot install anything on it, and your code runs inside a quota system that will cut you off.</p>
+
+        <p>A realm is your tenancy. Inside it you get a Primary Instance Group — Development, Staging, Production — plus on-demand sandboxes. The three PIG instances are not equivalent. Staging is the only one where you can edit business-manager data and replicate it forward; Production is read-mostly for configuration, and data flows into it by replication from Staging, not by editing it directly. New developers get this wrong constantly and then wonder why their price book change vanished at the next replication.</p>
+
+        <p>Replication is the mechanism that makes this coherent, and it is worth understanding before you design anything that writes configuration. Data replication moves catalogs, price books, content, and custom object definitions from Staging to Production on a schedule or on demand. Code replication moves code versions. They are separate operations with separate failure modes, and the classic go-live incident is a code version that expects a custom attribute which has not been data-replicated yet.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Instance</th><th>Editable in Business Manager</th><th>Source of data</th><th>What it is for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Sandbox (ODS)</td><td>Yes</td><td>Manual import or sandbox refresh</td><td>Development, throwaway</td></tr>
+            <tr><td>Development (PIG)</td><td>Yes</td><td>Import jobs, integrations</td><td>Integration testing with real feeds</td></tr>
+            <tr><td>Staging</td><td>Yes — this is the authoring instance</td><td>Merchandising, imports</td><td>Content authoring, UAT, replication source</td></tr>
+            <tr><td>Production</td><td>Technically, but don't</td><td>Replication from Staging</td><td>Serving customers</td></tr>
+          </tbody>
+        </table>
+
+        <p>The practical rule I give teams on day one: if a change can be made on Staging and replicated, it must be. Anything edited directly on Production is a change that will be silently reverted, at an unpredictable moment, by someone else's replication. I have watched a merchandiser fix a broken promotion on Production at 9am and watched it break again at 2pm when the scheduled replication ran. That is not a bug.</p>
+
+        <h2>3. OCAPI, SCAPI, and Which One You Should Actually Call</h2>
+
+        <p>There are two generations of API and both are alive. This is the single most common source of confusion on new projects, and the honest answer in 2026 is still "it depends, and you will probably use both".</p>
+
+        <p>OCAPI — the Open Commerce API — is the older one, split into Shop, Data, and Meta APIs. Shop is customer-facing: baskets, products, orders as a shopper sees them. Data is administrative: it can write catalogs, customers, inventory, site preferences. Meta describes the schema.</p>
+
+        <p>SCAPI — Salesforce Commerce API — is the newer, resource-oriented family, versioned per API, hosted on a different host pattern, and authenticated through SLAS for shopper contexts. It is where new capability lands. Omnichannel Inventory, Einstein, and the newer shopper APIs are SCAPI-first.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Concern</th><th>OCAPI</th><th>SCAPI</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Shopper auth</td><td>JWT via /customers/auth</td><td>SLAS (OAuth 2.1, PKCE)</td></tr>
+            <tr><td>Admin auth</td><td>Account Manager OAuth (client credentials)</td><td>Account Manager OAuth, per-API scopes</td></tr>
+            <tr><td>Permission model</td><td>Single JSON document per instance</td><td>Per-API scopes in Account Manager</td></tr>
+            <tr><td>Custom endpoints</td><td>Not supported</td><td>Custom APIs (server-side scripts)</td></tr>
+            <tr><td>Hooks</td><td>Yes, ocapi hooks</td><td>Yes, plus custom API hooks</td></tr>
+            <tr><td>Bulk data import</td><td>Data API, or WebDAV + job</td><td>Partial; WebDAV + job still the workhorse</td></tr>
+            <tr><td>Where I'd start today</td><td>Bulk admin work, legacy integrations</td><td>Anything shopper-facing and new</td></tr>
+          </tbody>
+        </table>
+
+        <p>My position: build shopper-facing traffic on SCAPI with SLAS, because that is where the platform is going and because the auth story is materially better. Keep back-office and bulk work on OCAPI Data or on the job framework, because SCAPI does not cover all of it and pretending otherwise leads to some very awkward workarounds.</p>
+
+        <p>What I would not do is build an abstraction layer that hides which one you are calling. I have seen two attempts at a unified client and both leaked — the error shapes differ, the pagination differs, the rate limit behaviour differs. A thin, honest client per API family is easier to debug at 11pm than a clever wrapper that swallows the distinction.</p>
+
+        <h2>4. SLAS, and Designing the Session Properly</h2>
+
+        <p>Back to the basket that emptied itself. SLAS — Shopper Login and API Access Service — issues a short-lived access token and a longer-lived refresh token. Access tokens are good for thirty minutes. Refresh tokens are good for thirty days for registered shoppers and nine days for guests, at the defaults.</p>
+
+        <p>The mistake the welding supplies retailer made was treating the access token as the session. It is not. The refresh token is the session, and the access token is a thirty-minute lease on it.</p>
+
+        <pre><code class="language-javascript">// A refresh that runs ahead of expiry, not after a 401.
+// Reacting to 401 means at least one customer-facing request already failed;
+// on a checkout POST that failure can cost you the order.
+const SKEW_MS = 120_000; // refresh two minutes early
+
+class ShopperSession {
+  constructor(store) {
+    this.store = store;      // persists refresh token + expiry, not the access token
+    this.inflight = null;    // dedupes concurrent refreshes
+  }
+
+  async accessToken() {
+    const t = this.store.get();
+    if (t &amp;&amp; t.expiresAt - Date.now() &gt; SKEW_MS) return t.accessToken;
+
+    // Multiple components mounting at once must not each fire a refresh.
+    // Without this dedupe you get token rotation races and random 401s.
+    if (!this.inflight) {
+      this.inflight = this.refresh().finally(() =&gt; { this.inflight = null; });
+    }
+    return this.inflight;
+  }
+
+  async refresh() {
+    const { refreshToken } = this.store.get() || {};
+    if (!refreshToken) return this.guest();
+
+    const res = await fetch(`${SLAS}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: CLIENT_ID
+      })
+    });
+
+    // A 400 here means the refresh token is dead — expired, rotated, or revoked.
+    // Falling back to guest is correct, but you MUST also merge the basket,
+    // or you have rebuilt the bug this article opened with.
+    if (!res.ok) return this.guestAndMergeBasket();
+
+    const body = await res.json();
+    this.store.set({
+      accessToken: body.access_token,
+      refreshToken: body.refresh_token,   // SLAS rotates it; storing the old one breaks the next refresh
+      expiresAt: Date.now() + body.expires_in * 1000
+    });
+    return body.access_token;
+  }
 }</code></pre>
 
-        <hr />
+        <p>Three things in there are load-bearing and each was learned the expensive way.</p>
+
+        <p>Refresh ahead of expiry rather than on 401. If you wait for the failure, the first request after thirty minutes fails, and there is no guarantee it is a harmless product fetch — it might be the POST that places the order.</p>
+
+        <p>Deduplicate concurrent refreshes. A React storefront hydrating five components simultaneously will fire five refreshes, SLAS will rotate the token five times, and four of those clients will hold a token that has already been superseded. The symptom is intermittent 401s that never reproduce locally.</p>
+
+        <p>Store the rotated refresh token. SLAS returns a new refresh token on each refresh. Keeping the original works for exactly one cycle and then stops, which produces a bug that appears thirty minutes into a session and never earlier.</p>
+
+        <h3>Guest to registered, and the basket merge</h3>
+
+        <p>When a guest logs in, SLAS gives you a registered-shopper token and the guest basket does not automatically follow. There is a basket merge behaviour available, and you should be explicit about invoking it rather than assuming. The policy question — what happens when the guest basket has three items and the saved registered basket has two — needs an answer before you write the code. For most retailers the right answer is merge with quantities summed and a visible notice; for anything with configured or personalised products, merge is dangerous and replace-with-confirmation is safer.</p>
+
+        <h2>5. Rate Limits Are Not an Edge Case, They Are the Design</h2>
+
+        <p>SFCC applies quotas at several layers, and the ones that bite are rarely the ones in the marketing material. There is an API-level rate limit per client, there is the quota framework governing script API usage, and there is a per-request limit on things like the number of objects a script may query.</p>
+
+        <p>The behaviour to design for: a 429 with a <code>Retry-After</code> header, which you must honour rather than immediately retrying. And the thing that catches integration teams is that the limit is shared across everything using that client ID. Your nightly catalog job, your OMS status updates, and your storefront's server-side rendering all draw from the same bucket if they share credentials.</p>
+
+        <p>The first structural fix is separate client IDs per workload. Storefront traffic, batch integration, and back-office tooling should each have their own, so a runaway batch job cannot starve customer-facing requests. This costs nothing and prevents an entire category of incident.</p>
+
+        <pre><code class="language-javascript">// Honour Retry-After. Randomised backoff without it will either hammer
+// the platform or wait far longer than necessary.
+async function callWithBackoff(fn, { maxAttempts = 5 } = {}) {
+  let attempt = 0;
+  for (;;) {
+    const res = await fn();
+    if (res.status !== 429) return res;
+
+    attempt += 1;
+    if (attempt &gt;= maxAttempts) throw new RateLimited(res);
+
+    // Retry-After is seconds. When absent, back off exponentially with jitter
+    // so a fleet of workers does not resynchronise into a thundering herd.
+    const header = res.headers.get('Retry-After');
+    const waitMs = header
+      ? Number(header) * 1000
+      : Math.min(30_000, 2 ** attempt * 250) + Math.random() * 250;
+
+    metrics.increment('sfcc.rate_limited', { attempt });
+    await sleep(waitMs);
+  }
+}</code></pre>
+
+        <p>The second fix is to stop making so many calls. Most quota problems I have investigated were an N+1 in disguise: an integration fetching a list of orders and then fetching each customer individually, or a product feed reading price book entries one SKU at a time. SFCC's APIs support expansion and batching in most places, and using them turns a job that trips the quota into one that finishes in a tenth of the time.</p>
+
+        <p>And a specific warning about the script quota framework: it runs in warning mode for some quotas and enforcement mode for others, and the warnings are written to a log nobody reads. Before a peak trading period, go and read the quota status page in Business Manager. A quota that has been quietly warning for six months is a quota that will become an error when volume doubles.</p>
+
+        <h2>6. Where Configuration Should Live</h2>
+
+        <p>Every SFCC project accumulates configuration, and there are four places to put it. Choosing badly makes routine changes require a code release.</p>
+
+        <p><strong>Site preferences.</strong> Custom preferences, defined in metadata, edited in Business Manager, replicated Staging to Production. This is the right home for anything a business user or a support engineer might reasonably change: feature flags, endpoint URLs per environment, timeouts, thresholds. They are the SFCC equivalent of environment variables and they are underused.</p>
+
+        <p><strong>Custom objects.</strong> Arbitrary structured data with a defined type. Good for mapping tables, integration state, and anything list-shaped. Be careful: custom objects are replicated and count against storage, and a custom object type used as a log table will grow until someone notices. Give every custom object type a retention story on the day you create it.</p>
+
+        <p><strong>Services framework.</strong> Credentials, endpoints, timeouts and circuit breaker configuration for outbound calls belong here, not in code. The framework gives you per-service timeout, retry, and a rudimentary circuit breaker for free, plus a service log you can enable per service when debugging.</p>
+
+        <p><strong>Code.</strong> Everything else. If it needs a code release to change, it should be in code and it should be reviewed.</p>
+
+        <pre><code class="language-javascript">// dw.svc: define once, use everywhere. The point is that the endpoint,
+// credentials and timeout are configuration, not literals in your cartridge.
+var LocalServiceRegistry = require('dw/svc/LocalServiceRegistry');
+
+var oms = LocalServiceRegistry.createService('int.oms.orderstatus', {
+  createRequest: function (svc, payload) {
+    svc.setRequestMethod('POST');
+    svc.addHeader('Content-Type', 'application/json');
+    // Credentials come from the service profile in Business Manager.
+    svc.addHeader('Authorization', 'Bearer ' + svc.getConfiguration()
+                                                  .getCredential().getPassword());
+    return JSON.stringify(payload);
+  },
+  parseResponse: function (svc, response) {
+    return JSON.parse(response.text);
+  },
+  // Without this, a payload containing PII lands in the service log in plain text.
+  filterLogMessage: function (msg) {
+    return msg.replace(/"email":"[^"]*"/g, '"email":"[redacted]"');
+  }
+});</code></pre>
+
+        <p>That <code>filterLogMessage</code> is not optional in any jurisdiction I have worked in. Service logs are readable by anyone with Business Manager access and are downloadable over WebDAV. An unfiltered order payload puts customer names, addresses and emails into a file that persists for weeks.</p>
+
+        <h2>7. Hooks, and Extending Without Forking</h2>
+
+        <p>SFCC's extension model is hooks: named extension points that let you run script before or after a platform operation. OCAPI hooks cover the Shop and Data APIs, SCAPI has its own set, and there are hooks for order lifecycle events, basket calculation, and payment.</p>
+
+        <p>The rule I hold to is that hooks may enrich and validate; they may not become the integration. A hook that makes a synchronous outbound HTTP call on every basket calculation has just tied your add-to-cart latency to a third party's uptime. I have inherited a site where the <code>dw.ocapi.shop.basket.calculate</code> hook called a tax service with a five-second timeout, and the p95 add-to-cart was four seconds during that provider's bad days.</p>
+
+        <pre><code class="language-javascript">// A hook that enriches without becoming a dependency.
+// Registered in hooks.json against dw.ocapi.shop.order.afterPOST
+exports.afterPOST = function (order, orderResponse) {
+  try {
+    // Stamp the idempotency key at creation, once, from the order number.
+    // Deriving it per attempt is the classic error — see the ERP article.
+    order.custom.integrationKey = 'WEB-' + order.getOrderNo();
+
+    // Queue, do not call. The customer's confirmation must not wait for
+    // a downstream system that may be in a batch window.
+    require('*/cartridge/scripts/queue/exportQueue').enqueue({
+      type: 'ORDER_EXPORT',
+      orderNo: order.getOrderNo(),
+      key: order.custom.integrationKey
+    });
+  } catch (e) {
+    // A hook that throws can fail the order. Never let enrichment
+    // take down the transaction it is decorating.
+    require('dw/system/Logger').getLogger('integration')
+      .error('afterPOST enrichment failed for {0}: {1}', order.getOrderNo(), e.message);
+  }
+  return new (require('dw/system/Status'))(require('dw/system/Status').OK);
+};</code></pre>
+
+        <p>Note the try/catch wrapping everything. An unhandled exception in an order hook can abort order creation. The customer has been charged by the payment provider at that point, and you now have an authorisation with no order. Hooks that decorate must never be able to fail the thing they decorate.</p>
+
+        <h2>8. Getting the Catalog In</h2>
+
+        <p>Almost every SFCC project imports product data from somewhere else — a PIM, an ERP, or a spreadsheet that a merchandiser swears is temporary and will still be there in four years.</p>
+
+        <p>The platform's native path is XML import: write a catalog XML file to WebDAV, then run a job that imports it. It is unglamorous and it is by far the most reliable way to move volume. The Data API can write products too, and for a handful of updates it is fine, but for fifty thousand SKUs it will spend your entire quota and take hours.</p>
+
+        <pre><code class="language-xml">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;catalog xmlns="http://www.demandware.com/xml/impex/catalog/2006-10-31"
+         catalog-id="master-catalog"&gt;
+  &lt;product product-id="HW-4410-GRY"&gt;
+    &lt;display-name xml:lang="en-GB"&gt;Stoneware Dinner Plate, Grey&lt;/display-name&gt;
+    &lt;online-flag&gt;true&lt;/online-flag&gt;
+    &lt;!-- searchable and online are separate flags; setting one and not the
+         other is the most common cause of "the product exists but nobody
+         can find it" tickets --&gt;
+    &lt;searchable-flag&gt;true&lt;/searchable-flag&gt;
+    &lt;custom-attributes&gt;
+      &lt;custom-attribute attribute-id="erpMaterialNumber"&gt;000000000004410&lt;/custom-attribute&gt;
+      &lt;custom-attribute attribute-id="dispatchLeadDays"&gt;2&lt;/custom-attribute&gt;
+    &lt;/custom-attributes&gt;
+  &lt;/product&gt;
+&lt;/catalog&gt;</code></pre>
+
+        <p>Three decisions to make deliberately before writing the exporter.</p>
+
+        <p><strong>Delta or full.</strong> Full imports are self-healing and simple; they stop being viable somewhere north of a hundred thousand SKUs, or sooner if your import window is short. Deltas are efficient and accumulate drift. What I run on most projects is hourly deltas plus a weekly full import, which gets the efficiency and repairs whatever the deltas dropped.</p>
+
+        <p><strong>Import mode.</strong> The XML import supports MERGE, REPLACE, UPDATE and DELETE at various levels. REPLACE on a product means attributes absent from the file are cleared. A delta feed run in REPLACE mode will strip every attribute the delta did not include, which is how a client of mine wiped the marketing copy off eleven thousand products in a single overnight job. Use MERGE for deltas. Always.</p>
+
+        <p><strong>Who owns which field.</strong> The ERP owns the material number, the base unit, and the dimensions. Merchandising owns the display name, the copy and the imagery. These must be separate attributes, never the same one written by both sides, or you get a field that flips depending on which job ran last. This is the same ownership discipline that governs any commerce-to-backend integration, and the ownership table in the <a href="/blog/sap-commerce-cloud-erp-sync/">ERP sync article</a> transfers directly.</p>
+
+        <h3>Index rebuild is a separate thing from import</h3>
+
+        <p>An imported product is not a findable product until the search index catches up. SFCC's search index rebuild for a large catalog runs in tens of minutes to hours; incremental indexing is much faster but does not cover every kind of change. Attribute definition changes, sorting rule changes, and searchable-flag changes generally need a full rebuild.</p>
+
+        <p>Chain your jobs so the import completes before the index runs, and alert if the index step is skipped. The bug this prevents is the one where a price updates in the database, the storefront's product detail page shows the new price, and the category listing shows the old one because listings render from the index. That looks like a sync failure and is actually an indexing lag, and it will cost you an afternoon the first time.</p>
+
+        <h2>9. Inventory, and the Number You Are Allowed to Show</h2>
+
+        <p>SFCC has two inventory stories: the classic inventory lists, and Omnichannel Inventory, the newer service that models availability across locations and groups.</p>
+
+        <p>Classic inventory lists are a flat allocation per SKU per list, imported by XML or updated through the Data API. They are simple, fast, and have no concept of where the stock physically is. If you sell from one warehouse and do not need store fulfilment, they are entirely adequate and I would not move off them without a reason.</p>
+
+        <p>Omnichannel Inventory is what you need when availability depends on location — buy online pick up in store, ship from store, multiple warehouses with different lead times. It introduces location graphs, reservations, and an availability model that is genuinely more correct and materially more complex.</p>
+
+        <p>The design principle is the same either way, and it is the one I will defend against any amount of merchandising pressure: the displayed quantity is advisory, the reservation is authoritative. Show banded availability — in stock, low stock, made to order — rather than exact counts wherever you can get away with it. A customer who is told "3 left" and finds there are 2 has been mildly misled. A customer who completes checkout for something that does not exist has been refunded, apologised to, and lost.</p>
+
+        <pre><code class="language-javascript">// Banding removes a whole class of complaint, and it makes the
+// acceptable staleness of your inventory feed much wider.
+function availabilityBand(ats, product) {
+  if (ats &lt;= 0) {
+    return product.custom.backorderable ? 'MADE_TO_ORDER' : 'OUT_OF_STOCK';
+  }
+  // Threshold per product, not global: 5 units of a sofa is a lot,
+  // 5 units of a teaspoon is nothing.
+  var low = product.custom.lowStockThreshold || 5;
+  return ats &lt;= low ? 'LOW_STOCK' : 'IN_STOCK';
+}</code></pre>
+
+        <p>Do not call an external inventory system on a product listing page. A category rendering 48 tiles must serve availability from data SFCC already holds. I have seen a listing page make one call per tile through a well-intentioned wrapper, and the resulting page took eleven seconds on the first uncached load. The customer-facing critical path deserves the same scrutiny you would give any other latency budget; the reasoning in the piece on <a href="/blog/core-web-vitals/">Core Web Vitals</a> applies directly to server-side integration calls, not just to front-end assets.</p>
+
+        <h2>10. Orders Out, and the Handoff to Whatever Comes Next</h2>
+
+        <p>Order export is where correctness stops being negotiable. Every order must reach the downstream system exactly once, and any network call can fail after the work was done but before the acknowledgement arrived.</p>
+
+        <p>I have written the full argument for idempotency keys, bounded retries and dead-letter queues in the <a href="/blog/sap-commerce-cloud-erp-sync/">ERP synchronisation article</a>, and it is not platform-specific. What is SFCC-specific is where the mechanism lives.</p>
+
+        <p>The pattern that works: the order hook stamps a key derived from the order number and enqueues, a scheduled job drains the queue, and the job records the downstream document number back onto the order as a custom attribute. That last part is what makes support self-sufficient — a customer service agent can open the order in Business Manager and see whether it reached the OMS, without asking an engineer to read a log.</p>
+
+        <pre><code class="language-javascript">// Job step: drain the export queue. Runs every two minutes.
+// The custom object acts as the queue; status transitions are the state machine.
+function drainExportQueue(params) {
+  var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+  var Transaction = require('dw/system/Transaction');
+  var OrderMgr = require('dw/order/OrderMgr');
+
+  // Oldest first, and only PENDING — a RETRY row waits for its nextAttemptAt.
+  var q = CustomObjectMgr.queryCustomObjects(
+    'ExportQueue',
+    'custom.status = {0} AND custom.nextAttemptAt &lt;= {1}',
+    'custom.createdAt asc',
+    'PENDING', new Date()
+  );
+
+  var processed = 0;
+  while (q.hasNext() &amp;&amp; processed &lt; (params.batchSize || 200)) {
+    var row = q.next();
+    var order = OrderMgr.getOrder(row.custom.orderNo);
+    var result = omsService.call({
+      idempotencyKey: row.custom.key,   // stable across every attempt
+      order: buildPayload(order)
+    });
+
+    Transaction.wrap(function () {
+      if (result.ok) {
+        row.custom.status = 'DONE';
+        // Written back onto the order so support can answer "where is it"
+        order.custom.omsDocumentNo = result.object.documentNumber;
+      } else if (row.custom.attempts &gt;= 6) {
+        row.custom.status = 'DEAD';       // alerted on, not silently parked
+      } else {
+        row.custom.attempts += 1;
+        row.custom.status = 'PENDING';
+        // Exponential backoff with a ceiling, expressed as a timestamp
+        // so a job restart does not reset the schedule.
+        row.custom.nextAttemptAt = new Date(
+          Date.now() + Math.min(3600, Math.pow(2, row.custom.attempts) * 30) * 1000
+        );
+      }
+    });
+    processed++;
+  }
+  q.close();
+  return processed;
+}</code></pre>
+
+        <p>Two details that are easy to skip and expensive to omit. The <code>nextAttemptAt</code> is stored rather than held in memory, so a job that is killed mid-run does not restart the backoff clock and hammer a struggling downstream system. And the DEAD status exists as a distinct state rather than as "PENDING with lots of attempts", because you can alert on a count of DEAD rows and you cannot easily alert on "PENDING rows whose attempt count is high".</p>
+
+        <h2>11. Pricing, Promotions, and the Temptation to Recompute</h2>
+
+        <p>SFCC's pricing model is price books with an inheritance chain, plus the promotion engine, plus — for B2B-flavoured deployments — customer-group-specific books. It is capable and it is also the place where integrations most often go wrong, because the upstream system has its own pricing logic and someone always suggests reimplementing it.</p>
+
+        <p>Do not reimplement ERP pricing logic in SFCC. Every attempt I have seen has drifted within a year, usually because a pricing condition was added upstream that nobody thought to mirror. The two honest options are to export computed prices into price books on a schedule, or to call the upstream system live at a decision point and cache aggressively per customer and SKU.</p>
+
+        <p>Which one depends on cardinality. If prices are customer-group-shaped — trade tier, retail tier, loyalty tier — export them as price books, because the number of distinct prices is manageable. If prices are per-customer-per-SKU contract prices, the export is combinatorial and you should call live at basket level with a short cache and a defined fallback to list price.</p>
+
+        <p>Whichever you pick, mark the fallback. A price that was served from list because the pricing call timed out must be flagged on the line item, so support can explain it and so you can measure how often it happens. That metric — percentage of baskets containing a fallback price — is the honest health indicator for the integration, and it belongs on a dashboard.</p>
+
+        <h3>Promotions interact with everything</h3>
+
+        <p>The promotion engine recalculates on every basket change, and it does so inside the request. Every hook you add to basket calculation runs on every recalculation, which is more often than developers expect: add to cart, quantity change, shipping method change, coupon entry, address change. Profile that path specifically. A 200ms enrichment that seemed harmless becomes 200ms times seven interactions across a checkout.</p>
+
+        <h2>12. Customers, Identity, and the Deletion Problem</h2>
+
+        <p>Customer records in SFCC live in a customer list, which is scoped to the realm and may be shared across sites. That sharing is a decision with consequences: shared lists mean one login works across brands, and also mean one deletion request removes the customer from all of them.</p>
+
+        <p>The integration question is which system owns the customer. If you have a CRM, the honest answer is usually that the CRM owns the person and SFCC owns the shopper — the login, the saved addresses, the wishlists. Trying to make SFCC authoritative for customer data when a CRM exists produces the loop where each overwrites the other, which is exactly the failure mode described in the piece on <a href="/blog/zoho-crm-magento-shopify-integration/">CRM-to-storefront synchronisation</a>.</p>
+
+        <p>Deletion deserves specific attention because it is a legal obligation with a technical trap. A right-to-erasure request must remove personal data from SFCC, from your integration queues, from your service logs, and from any downstream system you exported to. That last clause is the one teams forget: an order export queue holding a payload with a customer's address is personal data, and a custom object used as a queue with no retention policy is a compliance liability that grows daily.</p>
+
+        <pre><code class="language-javascript">// Retention job: queue rows are transient by design. Anything DONE
+// older than the audit window loses its payload, keeping only the
+// non-personal fields needed for reconciliation.
+function pruneExportQueue() {
+  var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+  var Transaction = require('dw/system/Transaction');
+  var cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+
+  var q = CustomObjectMgr.queryCustomObjects('ExportQueue',
+    'custom.status = {0} AND custom.createdAt &lt; {1}', null, 'DONE', cutoff);
+
+  while (q.hasNext()) {
+    var row = q.next();
+    Transaction.wrap(function () {
+      row.custom.payload = null;        // the PII
+      row.custom.pruned = true;         // keep key + status for reconciliation
+    });
+  }
+  q.close();
+}</code></pre>
+
+        <h2>13. Headless: PWA Kit, Managed Runtime, and Whether to Bother</h2>
+
+        <p>Salesforce's own headless story is PWA Kit — a React storefront — deployed on Managed Runtime, their hosting layer. You can also build your own front end on your own infrastructure and talk to SCAPI, which is what a meaningful number of larger clients do.</p>
+
+        <p>My view, and it is contested: PWA Kit on Managed Runtime is a reasonable default for teams without a strong front-end platform capability, and a constraint you will resent if you have one. Managed Runtime gives you edge caching, deployment and monitoring without operating anything, at the cost of limited control over the runtime, the build, and the caching rules. If your team already runs Next.js on infrastructure they understand, building your own front end against SCAPI is usually faster and definitely more flexible.</p>
+
+        <p>What decides it is rarely technical. It is whether you have the people. A bespoke headless front end is a permanent engineering commitment: dependency upgrades, security patches, performance regressions, someone on call. Teams that were sold headless as a way to move faster and did not staff for it end up with a storefront nobody can safely change, which is slower than the templated storefront they replaced. The trade-offs are the same ones I set out in the piece on <a href="/blog/headless-commerce-seo-performance/">headless commerce and performance</a>, and they have not changed.</p>
+
+        <p>If you do go headless, two SFCC-specific things need designing rather than inheriting. Server-side rendering must not make one SCAPI call per component — it will, unless someone actively prevents it, and you will find out at the quota limit. And caching needs a deliberate policy per resource type, because product data can cache for minutes while basket data must never cache at all, and a single blanket rule will get one of those wrong.</p>
+
+        <h2>14. Jobs, Code Versions, and the Realities of Deployment</h2>
+
+        <p>SFCC's job framework is the scheduler for everything batch: imports, exports, index rebuilds, cleanup. Jobs are defined in XML, run on a schedule or a trigger, and consist of steps that may run on one instance or across many.</p>
+
+        <p>Things that reliably cause incidents.</p>
+
+        <p><strong>Jobs and deployments collide.</strong> A code version activation while a job is running produces failures that look intermittent and are entirely scheduled. Map your job calendar against your deployment window once, and you will explain several recurring mysteries. If you deploy during business hours, disable the heavy jobs first as an explicit deployment step.</p>
+
+        <p><strong>Job steps have timeouts and quotas of their own.</strong> A step that processes a growing collection will pass for two years and then fail on a busy Monday. Write batch steps with an explicit batch size and a continuation, not a "process everything" loop.</p>
+
+        <p><strong>Overlapping runs.</strong> A job scheduled every five minutes that sometimes takes seven produces two concurrent runs over the same data. The framework will not always protect you. Take an explicit lock — a custom object row with a timestamp is enough — and exit cleanly if another run holds it.</p>
+
+        <pre><code class="language-javascript">// Cheap mutual exclusion for a frequently-scheduled job.
+// The TTL matters: without it, one crashed run locks the job forever.
+function acquireLock(name, ttlSeconds) {
+  var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+  var Transaction = require('dw/system/Transaction');
+  var lock = CustomObjectMgr.getCustomObject('JobLock', name);
+  var now = Date.now();
+
+  if (lock &amp;&amp; lock.custom.expiresAt &amp;&amp; lock.custom.expiresAt.getTime() &gt; now) {
+    return false; // someone else holds it and has not expired
+  }
+  Transaction.wrap(function () {
+    if (!lock) lock = CustomObjectMgr.createCustomObject('JobLock', name);
+    lock.custom.expiresAt = new Date(now + ttlSeconds * 1000);
+    lock.custom.holder = require('dw/system/System').getInstanceHostname();
+  });
+  return true;
+}</code></pre>
+
+        <p><strong>Code versions accumulate.</strong> There is a limit on how many you can hold, and hitting it during a release is a bad time to discover it. Prune as part of the deployment pipeline rather than manually.</p>
+
+        <h2>15. Observability When You Do Not Own the Box</h2>
+
+        <p>You cannot install an agent. You cannot tail a file. What you get is the Log Center, custom log files over WebDAV, and whatever you export yourself.</p>
+
+        <p>Build the export. Pulling SFCC logs into whatever you already use for the rest of your stack — an ELK cluster, Datadog, CloudWatch, anything — is a day of work and it is the difference between investigating an incident and guessing at one. WebDAV gives you the files; a scheduled fetch and ship is straightforward.</p>
+
+        <p>What to log, given that verbosity has a cost on a platform where log storage is finite:</p>
+
+        <p><strong>A correlation identifier on every integration call.</strong> One value that follows a request from the storefront through the service call to the downstream document number. Without it, answering "what happened to order 4471023" means grepping three systems by timestamp and hoping.</p>
+
+        <p><strong>Volume against a baseline, not just errors.</strong> The worst integration failures produce no errors at all — they produce silence. Orders exported per hour, compared to the same hour last week, catches more real incidents than error alerting does. This single alert would have caught most of the integration outages I have been called about.</p>
+
+        <p><strong>Queue age, not queue depth.</strong> A queue can be shallow and completely stuck. The age of the oldest unprocessed item is the honest metric.</p>
+
+        <p><strong>Quota warnings.</strong> Scrape the quota status and alert when anything crosses 70% of its limit, rather than discovering it at 100% during a sale.</p>
+
+        <h2>16. Testing Against Something That Resembles Production</h2>
+
+        <p>The gap between a sandbox and production is where a surprising proportion of go-live incidents live. Sandboxes have less data, no realistic traffic, different quota behaviour, and often a catalog that was imported once eight months ago.</p>
+
+        <p>What is worth investing in.</p>
+
+        <p><strong>A representative data set, refreshed.</strong> Not a full production copy — that is a data protection problem — but a pseudonymised extract with the awkward products in it. The bundle, the product with forty variants, the one with a nonstandard unit of measure, the one whose description contains an ampersand and an em dash. Bugs live in those, not in the clean examples.</p>
+
+        <p><strong>Contract tests against the integration schema.</strong> If you have a middleware layer between SFCC and the ERP, test both sides against the contract rather than against each other. That is what lets either side change without a coordinated release.</p>
+
+        <p><strong>A rehearsed failure.</strong> Once, in a controlled window, break the downstream connection deliberately. Confirm that orders queue, that the customer still sees a normal confirmation, that alerts fire, and that the backlog drains without duplicates when it comes back. This drill takes an afternoon and finds more than any quantity of unit testing. Then do it again after any significant change.</p>
+
+        <p><strong>Load testing against Staging, with permission.</strong> Salesforce wants notice before you run load tests, and running them without notice is a good way to have your traffic treated as an attack. Plan it into the schedule rather than discovering the process a week before peak.</p>
+
+        <h2>17. A Replatform That Went Sideways, and What It Cost</h2>
+
+        <p>A UK homeware retailer, about 14,000 SKUs, moving from a Site Genesis storefront to a headless PWA Kit front end on SCAPI, with a NetSuite ERP behind it and an OMS in the middle. Roughly six months of work, four engineers.</p>
+
+        <p><strong>What went well.</strong> The ownership table was written before any code, in two workshops with commercial stakeholders rather than engineers. The argument about who owns the product description — merchandising or the ERP — happened in week one instead of during UAT, and was resolved by splitting the field. Order export was asynchronous with derived idempotency keys and a fifteen-minute reconciliation query, and that query caught two genuine incidents in the first year, both within twenty minutes.</p>
+
+        <p><strong>What went wrong, in order of cost.</strong></p>
+
+        <p>The token refresh bug that opens this article cost roughly three weeks of investigation and an estimated £40,000 in lost baskets over the six weeks it was live. It was not detected by monitoring because nothing errored — the storefront behaved exactly as designed. It was found by a support agent who noticed that several complaints mentioned "about half an hour".</p>
+
+        <p>The initial catalog import ran in REPLACE mode on a delta feed for one night and cleared custom attributes on 11,400 products. Recovery took nine hours from the previous night's export. Nobody lost data permanently, and we lost a day, and I have run every delta import in MERGE mode since without exception.</p>
+
+        <p>Quota exhaustion during the first sale. The storefront's server-side rendering and the OMS status poller shared a client ID. The poller, which ran every minute and had been fine for months, tipped the shared bucket over during a traffic spike and the storefront started serving errors. The fix was fifteen minutes of configuration — separate client IDs — and it should have been done at the start.</p>
+
+        <p><strong>The numbers that mattered afterwards.</strong> Post-fix, basket abandonment between basket and payment returned to 1.7%. Order export p95 latency from placement to OMS document was 41 seconds, against a 5-minute alert threshold. The fallback-price rate — baskets containing at least one price served from list because the live call timed out — settled at 0.3%, which the client accepted. Full catalog import dropped from 4h10m to 52 minutes after we cut the exported attribute set from 96 fields to 44, having asked the honest question of which ones any template actually rendered.</p>
+
+        <p><strong>What I would do differently.</strong> Build the reconciliation queries and the session-lifetime test in week one, not month four. And I would have insisted on a synthetic monitor that logs in, waits forty minutes, and completes a purchase. That test costs almost nothing and it is the only thing that would have caught the token bug before customers did.</p>
+
+        <h2>18. Questions That Come Up</h2>
+
+        <p><strong>"Should we use OCAPI or SCAPI?"</strong> SCAPI with SLAS for anything shopper-facing and new. OCAPI Data or the job framework for bulk administrative work, because SCAPI does not fully cover it. Expect to run both for years and do not build a wrapper that pretends otherwise.</p>
+
+        <p><strong>"Can we call the ERP directly from a hook?"</strong> Technically yes. You should not, on any customer-facing path. A hook that makes a synchronous outbound call has bound your add-to-cart latency and your checkout availability to a system that has batch windows. Queue it, and make an exception only where a wrong answer changes the customer's decision — credit limits and contract pricing, essentially.</p>
+
+        <p><strong>"How do we handle a Salesforce platform release?"</strong> Test on a sandbox against the release candidate, which Salesforce makes available ahead of the general rollout. The changes that break integrations are usually API deprecations and quota tightening rather than dramatic behaviour changes. Read the release notes for the quota section specifically; almost nobody does.</p>
+
+        <p><strong>"Is Managed Runtime worth it?"</strong> If you do not have a front-end platform team, yes. If you do, you will spend a year working around its constraints and then build your own anyway. Decide by looking at your staffing, not at the feature comparison.</p>
+
+        <p><strong>"How much does a sandbox cost us in practice?"</strong> On-demand sandboxes are billed by uptime, and the recurring surprise is a sandbox left running over a holiday. Automate shutdown outside working hours. It is a small script and it pays for itself in the first month.</p>
+
+        <p><strong>"What about search — do we keep the built-in engine?"</strong> The built-in search is adequate for modest catalogs with clean data and unimpressive for anything requiring sophisticated relevance tuning. Swapping in an external search provider is common and well-trodden, and it adds an integration that must be kept in step with the catalog import. Budget for the reindex orchestration, not just the connector.</p>
+
+        <p><strong>"How do we migrate customer passwords?"</strong> You generally do not, because hashes are not portable between platforms. Plan a forced reset with a well-written email, or a transparent rehash on first login if the old platform's hashing can be verified inside SFCC. Decide early, because the communications plan takes longer than the code.</p>
+
+        <h2>19. What I Would Do First</h2>
+
+        <p>If I were starting an SFCC integration on Monday, in this order.</p>
+
+        <p><strong>One.</strong> Write the ownership table. Every field, one system of record, agreed by the commercial side and not just engineering. It takes two workshops and it prevents the arguments that otherwise surface during UAT.</p>
+
+        <p><strong>Two.</strong> Split the client IDs. Storefront, batch integration, and back-office tooling each get their own credentials, so no batch job can starve customer traffic. Fifteen minutes of configuration, and it removes an entire class of incident.</p>
+
+        <p><strong>Three.</strong> Build the session properly before anything else on the front end. Refresh ahead of expiry, deduplicate concurrent refreshes, store the rotated refresh token, and write an explicit basket merge policy. Then add a synthetic monitor that logs in, waits forty minutes, and buys something.</p>
+
+        <p><strong>Four.</strong> Make order export asynchronous with a derived idempotency key, a bounded retry, and a distinct dead state that alerts. Write the downstream document number back onto the order so support never needs an engineer.</p>
+
+        <p><strong>Five.</strong> Write the reconciliation query — orders placed with no downstream document, older than the expected latency — and schedule it every fifteen minutes. It is twenty lines and it is the difference between finding a problem in a quarter of an hour and finding it in five days.</p>
+
+        <p><strong>Six.</strong> Ship the logs somewhere you already look, and add the volume-against-baseline alert. Errors are the easy failures. Silence is the expensive one.</p>
+
+        <p>None of that is sophisticated. It is the ordinary discipline of running two systems that have to agree, on a platform whose specific constraints — token lifetimes, quotas, replication, the sandbox gap — are all documented and all routinely ignored until they cause an incident. The welding supplies retailer's baskets were not lost to a hard problem. They were lost to a thirty-minute timer working exactly as specified, in a codebase where nobody had asked what happens when a customer takes their time.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -228,12 +734,11 @@ async function getSFCCProduct(productId, jwtToken) {
               <p>NetSuite and Dynamics 365 ERP connectors.</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>Decoupled front-end API performance.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -267,6 +772,6 @@ async function getSFCCProduct(productId, jwtToken) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

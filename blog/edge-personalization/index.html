@@ -57,9 +57,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Leveraging Edge Computing for Real-Time Personalization | MODRACX</title>
-  <meta name="description" content="Explore how edge computing enables ultra-low latency, context-aware personalization for Magento 2 and Shopify Plus storefronts using Vercel Edge Middleware and Cloudflare Workers." />
+  <meta name="description" content="Geo and segment personalisation at the edge without destroying cacheability: cache keys instead of Vary, segment cardinality, A/B assignment, and consent." />
   <meta property="og:title" content="Leveraging Edge Computing for Real-Time Personalization | MODRACX" />
   <meta property="og:description" content="Explore how edge computing enables real-time personalization by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -166,17 +168,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Leveraging Edge Computing for Real-Time Personalization</h1>
-        <p class="lede">Traditional personalization scripts execute client-side, causing layout shifts and slow load times. Executing geo-targeting and A/B test routing via Vercel Edge Middleware eliminates latency entirely.</p>
+        <p class="lede">They shipped edge personalisation on a Tuesday. By Thursday their HTML cache hit ratio had fallen from 91% to 12% and TTFB was up thirteenfold, all from one honest, standards-compliant Vary header.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 26 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -201,253 +203,515 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-<p>Modern e-commerce architecture relies on speed and context. Delivering a tailored experience requires parsing user identity, geography, and historical interactions. Historically, calculating and rendering these personalizations fell upon the client. Browsers were tasked with executing hefty JavaScript payloads supplied by third-party testing engines. This approach introduces an unavoidable race condition: the client must download the document, execute the framework, evaluate the personalization rules, and re-render the DOM. The result is a degraded experience characterized by layout shifts and degraded Core Web Vitals.</p>
+        <h2>1. The Day Our Cache Hit Ratio Fell From 91% to 12%</h2>
 
-<p>Executing personalization logic at the network edge fundamentally restructures this flow. By intercepting requests at CDN nodes physically proximate to the user, we inject conditional logic and rewrite HTML payloads before a single byte of markup arrives at the client's browser. Architecting a headless storefront on platforms like <a href="/blog/headless-architecture/">Magento 2 or Shopify Plus</a> gains massive operational benefits when paired with edge computing. Instead of shipping processing logic to the client, we shift it to distributed global networks utilizing Vercel Edge Middleware or Cloudflare Workers.</p>
+        <p>A garden machinery retailer launched edge personalisation on a Tuesday. The feature was modest: show a returning customer their nearest store's stock, and swap the hero banner for the category they had browsed most in the last thirty days. Two small changes on the homepage and the category pages.</p>
 
-<h2>The Client-Side Performance Deficit</h2>
+        <p>By Thursday their CDN hit ratio on HTML had gone from 91% to 12%. Time to first byte at the 75th percentile went from 62ms to 840ms. Origin request volume increased by roughly a factor of eight and their commerce API started shedding requests during the evening peak. Conversion for the week was down 4%, which is the number that got me a phone call.</p>
 
-<p>Implementing personalization strictly within the browser environment degrades performance directly proportional to the complexity of the rules. A typical scenario involves loading a script from an optimization vendor. The client parses this script, blocking the main thread. If the personalization modifies a hero banner based on user segmentation, the browser must first paint the default state, wait for the script to ascertain the segment, and then redraw the node. This forces the browser to discard its initial layout calculations, initiating a costly reflow sequence.</p>
+        <p>The cause was one line. To make the personalisation work, someone had added <code>Vary: Cookie</code> to the HTML response. That is the textbook-correct HTTP answer — the response does vary by cookie, and telling caches so is honest. It is also catastrophic, because their cookie header contained a session id, a consent string, three analytics identifiers and a cart token. Every visitor had a unique cookie header, so every visitor had a unique cache entry, so the cache stored one copy per person and served it to nobody twice.</p>
 
-<p>From an architectural standpoint, this represents an inefficient allocation of compute resources. Browsers are optimized for rendering state, not computing routing logic. When operating a high-volume storefront, shifting computations to the edge ensures the server delivers exactly what the client needs to paint, requiring zero retroactive DOM mutations.</p>
+        <p>They had not built a personalisation system. They had built an extremely expensive way to disable caching.</p>
 
-<p>Client-side personalization mechanisms are also increasingly fragile in the face of modern browser privacy controls. Intelligent Tracking Prevention (ITP) in Safari and Enhanced Tracking Protection (ETP) in Firefox aggressively restrict third-party cookies. Migrating this logic to the edge ensures it operates securely within a first-party context. The edge node interacts directly with the origin and trusted data stores, insulating the personalization pipeline from client-side tracking mitigations.</p>
+        <p>This is the central difficulty of personalisation at the edge, and it is not a difficulty about edge runtimes or isolates or latency — I have written about those in <a href="/blog/edge-computing-ecommerce/">the edge computing fundamentals piece</a>, and about the platform mechanics in <a href="/blog/vercel-nextjs-edge-rendering-ecommerce/">the Vercel and Next.js article</a>. The difficulty is that caching and personalisation are opposites. A cache is valuable in proportion to how many people share a response. Personalisation is valuable in proportion to how much responses differ per person. Every design decision in this space is a negotiation between those two, and the entire craft is in keeping the number of distinct responses small while making each visitor feel the page was assembled for them.</p>
 
-<h2>Architecting Edge Middleware for Geolocation Routing</h2>
+        <h2>2. Cardinality Is the Only Number That Matters</h2>
 
-<p>A primary use case for edge computing is geographical personalization. Presenting the correct currency, shipping estimates, or regional product catalogs is paramount for international e-commerce. Conventional architectures handle this via application-layer routing—the request travels to the origin server in, for example, Virginia, which determines the user is in London, and redirects them to the `/uk/` path. This incurs hundreds of milliseconds of round-trip latency.</p>
+        <p>Before any implementation question, work out how many distinct versions of the page you are about to create. Multiply out every dimension you vary on.</p>
 
-<p>Vercel's Edge Middleware intercepts requests prior to hitting the origin server, allowing us to inspect headers injected by the CDN containing the user's country, region, and city data. We can evaluate this data at a Vercel edge node situated directly in London, routing it instantly without contacting the origin database.</p>
+        <p>Four countries times three currencies times two device classes times a logged-in flag times four browse-affinity segments times two A/B variants is 384 versions of every page. If your product catalogue is 40,000 SKUs, that is 15.36 million cache entries. Your CDN will happily store some of them, evict most, and serve almost every visitor a miss. The 91-to-12 collapse above was the same arithmetic with an effectively infinite denominator.</p>
 
-<p>Consider a Next.js application powering a global Shopify Plus storefront. A user accessing the site from the United Kingdom requires British Pounds (£) and a distinct promotional banner. Using Vercel Edge Middleware, we can transparently route this user to a localized variant without triggering client-side redirects.</p>
+        <p>I now write this multiplication down on the first call, before anyone has drawn an architecture. It settles arguments quickly, because a marketing team asking for eight segments will usually take four when they see the number that eight produces.</p>
 
-<pre><code class="language-typescript">// Next.js Vercel Edge Middleware Geo-Personalization
+        <table class="data-table">
+          <thead>
+            <tr><th>Variants per page</th><th>Effective hit ratio (typical)</th><th>What it feels like</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>90–97%</td><td>Fast everywhere, nothing personalised</td></tr>
+            <tr><td>2–4</td><td>85–93%</td><td>Barely distinguishable from no variants</td></tr>
+            <tr><td>8–16</td><td>60–80%</td><td>Noticeably slower long tail, higher origin load</td></tr>
+            <tr><td>32–64</td><td>25–50%</td><td>Cache is doing little; origin is the bottleneck</td></tr>
+            <tr><td>Unbounded (per-user)</td><td>&lt;15%</td><td>You have disabled your CDN and are paying for it</td></tr>
+          </tbody>
+        </table>
+
+        <p>Those percentages are approximate and depend heavily on your traffic distribution — a site where 80% of traffic hits 200 URLs tolerates more variants than one with a flat long tail. But the shape holds. My working rule is that a page should have at most eight variants, and I have never regretted arguing for four.</p>
+
+        <p>There is a second cost that is easy to miss: each variant regenerates independently. If your revalidation window is five minutes and you have sixteen variants, the page is regenerated sixteen times per window rather than once. On a headless build that is sixteen times the API calls, and rate limits on commerce APIs are the thing that actually breaks first.</p>
+
+        <h2>3. Why Vary Is the Wrong Tool</h2>
+
+        <p><code>Vary</code> is the standards-compliant mechanism and it is almost never what you want on HTML at a CDN. Three reasons.</p>
+
+        <p><strong>It operates on whole headers.</strong> <code>Vary: Cookie</code> keys on the entire cookie header, not on the one cookie you care about. There is no standard way to say "vary on the value of the <code>seg</code> cookie". Since a real storefront sets a dozen cookies with high-entropy values, varying on cookie is varying on visitor identity.</p>
+
+        <p><strong>Browsers and CDNs disagree about it.</strong> Shared caches you do not control — corporate proxies, ISP caches, some mobile carriers — implement <code>Vary</code> with varying enthusiasm. A cache that ignores <code>Vary</code> will serve one visitor's personalised page to another, which on a page containing a name or an address is a data incident rather than a bug.</p>
+
+        <p><strong>It is invisible in your own metrics.</strong> Your CDN reports a hit ratio, and a <code>Vary</code>-fragmented cache reports a lot of misses without telling you why. The retailer above spent two days looking at origin performance before anyone looked at the response headers.</p>
+
+        <p><code>Vary: Accept-Encoding</code> is fine and necessary. <code>Vary: Accept-Language</code> is defensible for a small language set, though I would rather encode language in the URL. <code>Vary: Cookie</code> on an HTML document is, in my experience, always a mistake.</p>
+
+        <p>Some CDNs have proprietary alternatives that solve the granularity problem properly. Netlify's <code>Netlify-Vary</code> can key on a named cookie, a named query parameter, a language, or a country. Cloudflare Enterprise offers custom cache keys that can include a specific cookie. These are genuinely better than <code>Vary</code> and they are also vendor lock-in, so know what you are choosing.</p>
+
+        <pre><code class="language-http">Netlify-Vary: cookie=seg,country=GB|DE|NL|IE,header=x-experiment</code></pre>
+
+        <h2>4. The Cache Key Is the Real Control Surface</h2>
+
+        <p>The portable technique, and the one I reach for first, is to normalise the visitor into a short segment token at the edge and put that token into the cache key rather than into a <code>Vary</code> header. There are two ways to do it and both are fine.</p>
+
+        <p><strong>Rewrite the path.</strong> The segment becomes part of the URL the cache sees, while the customer's address bar is unchanged. This works on every platform, needs no proprietary features, and has the enormous debugging advantage that you can request a variant directly with curl.</p>
+
+        <pre><code class="language-javascript">// Vercel middleware: derive a small segment token, rewrite to a variant path.
 import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+
+const COUNTRIES = new Set(['GB', 'IE', 'DE', 'NL']);
+
+export function middleware(request) {
+  const url = request.nextUrl;
+
+  // Country from the edge, clamped to markets we actually serve.
+  const raw = request.headers.get('x-vercel-ip-country') ?? 'GB';
+  const country = COUNTRIES.has(raw) ? raw : 'GB';
+
+  // Affinity segment, already bucketed to one of four values by the job
+  // that writes the cookie. Never trust it — clamp on read.
+  const seg = ['new', 'browse', 'lapsed', 'loyal']
+    .includes(request.cookies.get('seg')?.value)
+      ? request.cookies.get('seg').value : 'new';
+
+  // Two dimensions, four values each: sixteen variants, not sixteen million.
+  url.pathname = `/_v/${country}/${seg}${url.pathname}`;
+  return NextResponse.rewrite(url);
+}
 
 export const config = {
-  matcher: [
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
-  ],
-};
+  matcher: ['/', '/category/:path*', '/product/:path*']
+};</code></pre>
 
-export function middleware(request: NextRequest) {
-  const { nextUrl: url, geo } = request;
-  const country = geo?.country || 'US';
-  const city = geo?.city || 'Unknown';
-  
-  const response = NextResponse.next();
+        <p><strong>Modify the cache key directly.</strong> On Cloudflare Enterprise, Fastly, or Akamai you can compute a key that includes a normalised token without changing the path. Cleaner, and unavailable on lower tiers.</p>
 
-  if (country === 'GB') {
-    url.pathname = `/uk${url.pathname}`;
-    url.searchParams.set('city', city);
-    return NextResponse.rewrite(url);
-  }
-
-  if (['FR', 'DE', 'IT', 'ES', 'NL'].includes(country)) {
-    url.pathname = `/eu${url.pathname}`;
-    return NextResponse.rewrite(url);
-  }
-
-  response.cookies.set({
-    name: 'x-user-region',
-    value: country,
-    path: '/',
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 7
-  });
-
-  return response;
-}</code></pre>
-
-<p>This implementation ensures the browser requests the root path `/` but receives the HTML generated for `/uk/`. The origin server responds with the localized document. The client remains completely oblivious to the routing logic, resulting in a seamless localization experience. Furthermore, integrating <a href="/blog/cdn-speed-seo/">CDN optimization strategies</a> ensures localized routes are aggressively cached at the edge. By rewriting the request at the edge instead of issuing a 301 or 302 redirect, we eliminate a complete HTTP request lifecycle from the critical path.</p>
-
-<h2>HTML Rewriting at the Edge</h2>
-
-<p>While routing handles macro-level personalization, micro-level personalization requires manipulating specific DOM nodes. Cloudflare Workers provide the <code>HTMLRewriter</code> API, a stream-based parser capable of modifying HTML payloads as they pass through the edge node.</p>
-
-<p>The <code>HTMLRewriter</code> parses the response stream from the origin and applies transformations based on CSS selectors. Because it operates on streams, it does not buffer the entire document in memory. It scans the byte stream for matching selector patterns and injects or replaces chunks of HTML on the fly. This ensures the Time to First Byte (TTFB) remains minimal while delivering a highly customized document, bypassing client-side hydration for these elements.</p>
-
-<pre><code class="language-javascript">// Cloudflare Worker with HTMLRewriter for DOM Manipulation
+        <pre><code class="language-javascript">// Cloudflare Worker: explicit cache key, not the request URL.
 export default {
   async fetch(request, env, ctx) {
-    const response = await fetch(request);
-    
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('text/html')) {
-      return response;
-    }
+    const country = request.headers.get('cf-ipcountry') ?? 'GB';
+    const seg = normaliseSegment(request);
 
-    const cookieHeader = request.headers.get('Cookie') || '';
-    const isVipUser = cookieHeader.includes('loyalty_tier=gold');
+    // The key is a synthetic URL. Nothing else about the request
+    // participates, so tracking parameters cannot fragment the cache.
+    const url = new URL(request.url);
+    url.search = '';                        // drop utm_*, gclid, fbclid, all of it
+    const key = new Request(
+      `${url.origin}${url.pathname}?__v=${country}.${seg}`,
+      { method: 'GET', headers: { accept: request.headers.get('accept') ?? '' } }
+    );
 
-    class BannerHandler {
-      constructor(isVip) {
-        this.isVip = isVip;
-      }
+    const cache = caches.default;
+    let res = await cache.match(key);
+    if (res) return res;
 
-      element(element) {
-        if (this.isVip) {
-          let currentClass = element.getAttribute('class') || '';
-          element.setAttribute('class', currentClass + ' banner-gold-tier');
-          
-          element.setInnerContent(
-            '<strong>Welcome back, VIP!</strong> Enjoy an exclusive 20% off your entire order today.',
-            { html: true }
-          );
-        } else {
-           element.setInnerContent('Sign up for our rewards program to receive 10% off your next purchase.');
-        }
-      }
-    }
-
-    const rewriter = new HTMLRewriter()
-      .on('#promo-banner', new BannerHandler(isVipUser));
-
-    return rewriter.transform(response);
+    res = await fetch(request);
+    res = new Response(res.body, res);
+    res.headers.set('cache-control', 'public, max-age=300, stale-while-revalidate=86400');
+    ctx.waitUntil(cache.put(key, res.clone()));
+    return res;
   }
 };</code></pre>
 
-<p>This implementation eliminates the need for client-side JavaScript to determine the banner state. The HTML arrives at the browser pre-configured for the user's specific context. The browser parser encounters the `#promo-banner` node with the correct text and CSS classes already applied, painting it perfectly on the first pass. It offloads complexity from the frontend framework, allowing developers to focus on interactive application state.</p>
+        <p>Note the <code>url.search = ''</code> line. Query-string fragmentation is a bigger cache killer than personalisation on most storefronts. A campaign that appends five tracking parameters in varying orders produces a distinct cache entry per permutation, and the pages are byte-identical. Stripping and sorting query parameters before the key is computed routinely doubles hit rate on its own, before you personalise anything.</p>
 
-<h2>Managing State at the Edge with Serverless Redis</h2>
+        <h2>5. Segments, Not Individuals</h2>
 
-<p>Personalization frequently requires querying dynamic user profiles, recommendation models, or active cart states. Executing these queries against a traditional relational database from an edge function introduces significant architectural challenges. Edge functions execute globally, while traditional databases are typically localized to a specific region. Querying a database in Virginia from an edge node in Tokyo will incur hundreds of milliseconds of latency.</p>
+        <p>The design move that makes all of this tractable is to stop thinking about the visitor and start thinking about the bucket. The edge should never know who someone is. It should know which of a handful of buckets they fall into.</p>
 
-<p>Furthermore, edge environments operate under strict connection limitations. They do not typically support long-lived Node.js TCP connections, requiring databases accessible via HTTP APIs. To inject dynamic state into our edge logic without sacrificing latency, we require a globally distributed, HTTP-accessible, in-memory datastore. Upstash provides a serverless Redis architecture perfectly suited for this requirement, offering global replication and a native REST interface.</p>
+        <p>The bucket assignment happens somewhere with more time and more data — a nightly job over your order history, a CDP, or a simple rule in your commerce backend — and the result is written into a cookie as a single short value. The edge reads that value, validates it against a hard-coded allowlist, and uses it. That is the entire contract.</p>
 
-<p>By synchronizing <a href="/blog/ai-product-recommendations/">AI-generated product recommendations</a> to Upstash, our edge functions can query this data with single-digit millisecond latency. Let's build a Next.js Edge Middleware module that fetches a user's specific product recommendations from Redis based on their session ID, and injects this data into the request headers for the downstream server components.</p>
+        <pre><code class="language-javascript">// The whole cookie. One character of segment, one of experiment variant,
+// and a version so we can invalidate everyone's assignment on demand.
+// Set with SameSite=Lax; not HttpOnly if the client needs to read it.
+// Deliberately no user id: the edge has no business knowing one.
+document.cookie = 'p=v2.loyal.b; Path=/; Max-Age=2592000; SameSite=Lax; Secure';</code></pre>
 
-<pre><code class="language-typescript">// Next.js Edge Middleware with Upstash Redis Integration
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+        <p>Two properties of this that matter more than they look.</p>
 
-const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL;
-const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+        <p>It is validated on read. An attacker or a curious customer editing the cookie to <code>p=v2.'; DROP</code> should hit an allowlist check and fall back to the default bucket. Anything derived from a client-controlled value and used to build a cache key is an opportunity for cache poisoning, and a cache-poisoned page is served to every subsequent visitor. This is the highest-severity failure mode in this whole area and it gets almost no attention.</p>
 
-async function getRecommendationsFromRedis(sessionId: string): Promise<string | null> {
-  if (!UPSTASH_REDIS_REST_URL || !UPSTASH_REDIS_REST_TOKEN) {
-    return null;
+        <pre><code class="language-javascript">const SEGMENTS = ['new', 'browse', 'lapsed', 'loyal'];
+const VARIANTS = ['a', 'b'];
+
+function parseCookie(value) {
+  const [version, seg, variant] = (value ?? '').split('.');
+  return {
+    seg:     SEGMENTS.includes(seg) ? seg : 'new',
+    variant: VARIANTS.includes(variant) ? variant : 'a',
+    stale:   version !== 'v2'          // reassign on the next response
+  };
+}</code></pre>
+
+        <p>And it is versioned. When the segmentation model changes, bumping the version prefix means every cookie is treated as stale and reassigned, without needing to expire anything. It also gives you a clean way to purge: a new version prefix means new cache keys, so the old variants age out naturally rather than needing a mass invalidation.</p>
+
+        <p>One more discipline: keep the number of segments in the cache key smaller than the number of segments in your marketing model. Not every distinction the business cares about needs to change the cached document. A segment can drive a client-side module without ever touching the cache key, and most of them should.</p>
+
+        <h2>6. Three Shapes of Personalisation, and How to Choose</h2>
+
+        <p>Every implementation is one of three patterns or a mixture. Choosing deliberately is most of the work.</p>
+
+        <p><strong>Variant documents.</strong> N complete cached copies of the page, one per segment. Fast for everyone, indexable, no client-side flash. Costs you cache cardinality and regeneration multiples. Right when the differences are structural — a different currency, a different language, a genuinely different layout for a market.</p>
+
+        <p><strong>Hole punching.</strong> One cached document with placeholders that are filled at the edge or on the client. Cardinality of one. The classic implementation is Edge Side Includes on Fastly or Akamai, where the edge assembles fragments with different TTLs; the modern equivalent is a streamed placeholder that a small client fetch resolves. Right when the personalised part is a small, non-critical region of the page.</p>
+
+        <p><strong>Client-side hydration.</strong> The page is fully static and JavaScript rewrites the personalised bits after load. Cardinality of one, zero edge complexity, and a visible flash of the default content if you are not careful. Right for recommendations, recently viewed, and anything below the fold.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Pattern</th><th>Cache cardinality</th><th>Indexed?</th><th>Flash risk</th><th>Best for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Variant documents</td><td>N per page</td><td>Yes, all variants</td><td>None</td><td>Currency, language, market</td></tr>
+            <tr><td>Edge hole punching (ESI)</td><td>1 shell + N fragments</td><td>Shell only</td><td>None</td><td>Store stock, greeting, basket count</td></tr>
+            <tr><td>Streamed placeholder</td><td>1</td><td>Shell only</td><td>Low</td><td>Recommendations, reviews</td></tr>
+            <tr><td>Client-side hydration</td><td>1</td><td>No</td><td>High if above fold</td><td>Recently viewed, below-fold modules</td></tr>
+          </tbody>
+        </table>
+
+        <p>My default allocation on a storefront: currency and language as variant documents because they must be correct in the HTML; basket count, greeting and store stock as hole-punched fragments; everything the recommendation engine produces as client-side hydration, because it is below the fold and nobody has ever left a site because a "you might also like" strip arrived 300ms late.</p>
+
+        <p>The flash question deserves its own note, because it is where the client-side option goes wrong. Rendering a default price and then replacing it 400ms later is not a cosmetic problem on a furniture site — customers read it as a price change and complain. Reserve the space, render a skeleton rather than a wrong value, and if the value is one a customer would notice changing, it belongs in the document rather than in a client fetch.</p>
+
+        <h2>7. What the Edge Actually Knows About Location</h2>
+
+        <p>Geo headers are the most commonly used personalisation input and the most commonly over-trusted. Every major platform gives you country, most give region and city, some give timezone, latitude and longitude.</p>
+
+        <pre><code class="language-javascript">// Cloudflare
+const geo = {
+  country: request.headers.get('cf-ipcountry'),
+  city:    request.cf?.city,
+  region:  request.cf?.region,
+  tz:      request.cf?.timezone
+};
+
+// Vercel
+const geo2 = {
+  country: request.headers.get('x-vercel-ip-country'),
+  region:  request.headers.get('x-vercel-ip-country-region'),
+  city:    decodeURIComponent(request.headers.get('x-vercel-ip-city') ?? '')
+};</code></pre>
+
+        <p>Country is reliable enough to act on — typically 97–99% accurate. City is not. IP geolocation puts a meaningful fraction of UK mobile traffic in whichever city hosts the carrier's gateway, which is why a customer in Newcastle gets told their nearest store is in Leeds. VPN use, corporate networks and IPv6 allocations all degrade it further.</p>
+
+        <p>The rules I apply:</p>
+
+        <p><strong>Use country for currency, tax display, shipping messaging and legal requirements.</strong> These are country-level concerns anyway and the accuracy is adequate.</p>
+
+        <p><strong>Never use city for anything the customer would notice being wrong.</strong> Nearest-store logic should be a prompt, not a decision: "Showing stock for Leeds — change store" with the change control visible and one click away.</p>
+
+        <p><strong>Never redirect on geography alone.</strong> This is the mistake I see most and it damages more than user experience. Googlebot crawls predominantly from US addresses, so a hard geo-redirect sends the crawler to a US store view and your UK category pages quietly leave the index. Redirect only when there is no explicit locale in the path and no locale cookie, and exclude known crawler user agents entirely. Offer a banner rather than a bounce.</p>
+
+        <pre><code class="language-javascript">const CRAWLER = /googlebot|bingbot|applebot|duckduckbot|yandex|baiduspider|petalbot/i;
+
+function shouldRedirect(request, pathname) {
+  if (CRAWLER.test(request.headers.get('user-agent') ?? '')) return false;
+  if (/^\/(gb|ie|de|nl)\//.test(pathname)) return false;   // explicit choice in URL
+  if (request.cookies.has('locale')) return false;          // remembered choice
+  return true;
+}</code></pre>
+
+        <p><strong>Let the customer override, and remember it forever.</strong> An explicit choice beats an inference every time, and the cookie that records it should outlive the session.</p>
+
+        <h2>8. Currency and Price: The Case That Is Genuinely Hard</h2>
+
+        <p>Price display is where personalisation stops being a nice-to-have and becomes a correctness problem, and it is the one I get asked about most.</p>
+
+        <p>The temptation is to render prices client-side from a rate table, keeping cardinality at one. Three things go wrong. The flash, discussed above. The structured data, which either shows the base currency (inconsistent with the visible price) or has to be rewritten by JavaScript (unreliable for indexing). And VAT-inclusive versus VAT-exclusive display, which is a legal requirement that differs by market and cannot be a client-side approximation.</p>
+
+        <p>So currency is a variant document. It is one of the few dimensions I am happy to spend cache cardinality on, because getting it wrong is a compliance issue rather than a conversion issue.</p>
+
+        <pre><code class="language-javascript">// Currency belongs in the HTML, in the structured data, and in the cache key.
+const schema = {
+  '@context': 'https://schema.org',
+  '@type': 'Product',
+  name: product.name,
+  offers: {
+    '@type': 'Offer',
+    // Must match the price the visitor sees on the page. Google flags
+    // mismatches between markup and visible price as a structured data error.
+    price: variantPrice.amount,
+    priceCurrency: variantPrice.currency,
+    priceValidUntil: product.priceValidUntil,
+    availability: product.inStock
+      ? 'https://schema.org/InStock'
+      : 'https://schema.org/OutOfStock'
   }
+};</code></pre>
 
-  try {
-    const response = await fetch(`${UPSTASH_REDIS_REST_URL}/get/recs:${sessionId}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`,
-      },
-      signal: AbortSignal.timeout(150) 
+        <p>Keep the number of currencies in the cache key to the ones you actually transact in. I have seen a site key on eleven currencies because the rate table had eleven rows, while 96% of orders were in three. Three variants plus a client-side approximate conversion for everyone else, with a clear "you will be charged in GBP" note, is the right trade.</p>
+
+        <p>The related trap is B2B contract pricing. If different customers see different prices for the same SKU, the page is not cacheable at all for logged-in visitors, and no amount of segmentation fixes that — contract pricing is per-account by definition. The answer is to cache the anonymous page, serve it to everyone, and fetch contract prices client-side after authentication. Anonymous traffic is the traffic that gets indexed and the traffic that is most latency-sensitive, and it is where the cache value is.</p>
+
+        <h2>9. A/B Assignment at the Edge</h2>
+
+        <p>Experiment assignment is a natural fit for the edge: it needs no origin data, it must happen before the page renders to avoid a flash, and it must be sticky.</p>
+
+        <p>The mechanism is a hash. Take a stable visitor identifier, concatenate an experiment-specific salt, hash it, take the result modulo 100, and compare against the allocation. Same input, same bucket, forever, with no storage and no coordination between PoPs.</p>
+
+        <pre><code class="language-javascript">// FNV-1a: fast, synchronous, no crypto needed. This is bucketing,
+// not security, so a non-cryptographic hash is the correct choice.
+function hash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i &lt; str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) &gt;&gt;&gt; 0;
+  }
+  return h;
+}
+
+function assign(visitorId, experiment) {
+  // The salt is per-experiment. Without it, a visitor lands in the same
+  // relative position in every test and your experiments correlate.
+  const bucket = hash(`${visitorId}:${experiment.salt}`) % 100;
+  let cursor = 0;
+  for (const arm of experiment.arms) {
+    cursor += arm.weight;
+    if (bucket &lt; cursor) return arm.id;
+  }
+  return experiment.arms[0].id;
+}</code></pre>
+
+        <p>The per-experiment salt is the detail people skip and it invalidates results when they do. Without it, the visitor who landed in the top decile of one hash lands in the top decile of every hash, so the population in variant B of test one is the same population as variant B of test two. Your tests are no longer independent and you will not notice until two experiments disagree with each other in a way that makes no sense.</p>
+
+        <p>The visitor identifier should be a first-party cookie you set yourself. Do not hash the IP address — it is unstable for mobile users, shared behind corporate NAT, and in several jurisdictions it is personal data, so hashing it for behavioural bucketing is a consent question you did not mean to open.</p>
+
+        <p>Then the important part: the assignment has to reach the cache key, or every visitor gets whichever variant happened to be cached first.</p>
+
+        <pre><code class="language-javascript">export function middleware(request) {
+  let vid = request.cookies.get('vid')?.value;
+  const isNew = !vid;
+  if (isNew) vid = crypto.randomUUID();
+
+  const arm = assign(vid, EXPERIMENTS.pdpLayout);
+
+  const url = request.nextUrl;
+  url.pathname = `/_ab/${arm}${url.pathname}`;      // variant in the cache key
+  const res = NextResponse.rewrite(url);
+
+  if (isNew) {
+    res.cookies.set('vid', vid, {
+      path: '/', maxAge: 31_536_000, sameSite: 'lax', secure: true
     });
-
-    if (!response.ok) return null;
-    
-    const data = await response.json();
-    return data.result;
-  } catch (error) {
-    return null; 
   }
-}
-
-export async function middleware(request: NextRequest) {
-  const response = NextResponse.next();
-  const sessionId = request.cookies.get('modracx_session')?.value;
-
-  if (sessionId) {
-    const recommendationData = await getRecommendationsFromRedis(sessionId);
-    
-    if (recommendationData) {
-      response.headers.set('x-user-recommendations', recommendationData);
-    }
-  }
-
-  return response;
+  // Exposure logging, off the critical path. Never await this.
+  res.headers.set('x-ab', `${EXPERIMENTS.pdpLayout.id}:${arm}`);
+  return res;
 }</code></pre>
 
-<p>This pattern bridges the gap between static edge delivery and highly dynamic user states. The request is intercepted, the Redis cache is queried, and the resulting payload is appended to the request headers. The downstream application logic receives the request fully enriched with the necessary context. This completely eliminates the need for client-side data fetching for these recommendations.</p>
+        <p>Some further points that separate an experiment that produces a usable result from one that does not.</p>
 
-<h2>Executing Zero-Latency A/B Testing</h2>
+        <p><strong>Log exposure, not assignment.</strong> Record that a visitor <em>saw</em> a variant, from the client, not that the edge computed one. Assignment happens on prefetches, bot requests, and pages that never render. Analysing on assignment inflates your denominator with traffic that never saw anything.</p>
 
-<p>A/B testing is notorious for destroying web performance. Traditional testing suites inject synchronous blocking scripts that hijack the DOM and manipulate elements on the fly. This produces the dreaded "flicker," forcing developers to utilize anti-flicker snippets. Edge computing allows us to perform the bucketing and routing before the request ever reaches the origin, ensuring the test variants are delivered as standard HTML documents.</p>
+        <p><strong>Check for sample ratio mismatch before reading the result.</strong> A 50/50 split that arrives at 52/48 with a large sample is not noise, it is a bug — usually a cache serving one variant to visitors assigned the other, or a bot filter that correlates with the variant. If the ratio is off, the result is void regardless of how good it looks.</p>
 
-<p>To implement edge-side A/B testing, the middleware must handle three critical responsibilities: deterministically bucketing users into variants, persisting that assignment via cookies to ensure sticky sessions, and routing the request transparently to the correct variant path on the origin.</p>
+        <p><strong>Exclude crawlers from experiments entirely.</strong> Serve the control arm to any known crawler. It keeps the index stable and keeps bot traffic out of your numbers.</p>
 
-<pre><code class="language-typescript">// Edge Middleware for Deterministic A/B Testing Routing
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+        <p><strong>Have a kill switch that is a config read, not a deploy.</strong> An experiment that tanks conversion needs to be off in seconds. A KV or Edge Config value checked at the top of the handler does that; a redeploy does not.</p>
 
-const EXPERIMENT_NAME = 'checkout_flow_optimization';
-const VARIANTS = ['control', 'variant_a', 'variant_b'];
+        <h2>10. Personalisation and the Index</h2>
 
-function getVariantForSession(sessionId: string): string {
-  let hash = 0;
-  for (let i = 0; i < sessionId.length; i++) {
-    hash = (hash << 5) - hash + sessionId.charCodeAt(i);
-    hash |= 0;
+        <p>Personalising cached pages has search consequences that are easy to trip over and easy to avoid once you know them.</p>
+
+        <p><strong>Crawlers see one variant, and it should be the default one.</strong> Whatever your edge logic does, a request identifying itself as Googlebot should get the plain, canonical version: control arm, base market, no segment. Not because personalisation is forbidden, but because a stable index is worth more than a personalised crawl.</p>
+
+        <p><strong>The line on cloaking is about intent and materiality.</strong> Serving a German visitor German content is normal and expected. Serving a crawler substantively different content from what a user in identical circumstances would get is the problem. Vary on explicit signals — a path prefix, a stored preference — and you stay comfortably clear of it.</p>
+
+        <p><strong>Market variants need real URLs and hreflang.</strong> If the UK and German versions of a page are genuinely different content, they should be <code>/gb/</code> and <code>/de/</code> with reciprocal <code>hreflang</code> annotations and self-referencing canonicals, not one URL that changes by IP. The internal variant paths from a middleware rewrite are a different thing entirely — they are invisible to the customer and must never be linked, must never appear in a sitemap, and should carry <code>noindex</code> if there is any chance of them being requested directly.</p>
+
+        <pre><code class="language-javascript">// Internal variant namespace: unreachable by design, and belt-and-braces.
+export function middleware(request) {
+  // A direct request to the internal path is either a bug or a probe.
+  if (request.nextUrl.pathname.startsWith('/_v/')) {
+    return new NextResponse('Not Found', {
+      status: 404,
+      headers: { 'x-robots-tag': 'noindex, nofollow' }
+    });
   }
-  const index = Math.abs(hash) % VARIANTS.length;
-  return VARIANTS[index];
-}
-
-export function middleware(request: NextRequest) {
-  const url = request.nextUrl.clone();
-  
-  if (!url.pathname.startsWith('/checkout')) {
-    return NextResponse.next();
-  }
-
-  let bucket = request.cookies.get(EXPERIMENT_NAME)?.value;
-
-  if (!bucket || !VARIANTS.includes(bucket)) {
-    const newSessionId = crypto.randomUUID();
-    bucket = getVariantForSession(newSessionId);
-  }
-
-  url.pathname = `/checkout/${bucket}`;
-  const response = NextResponse.rewrite(url);
-
-  response.cookies.set({
-    name: EXPERIMENT_NAME,
-    value: bucket,
-    path: '/',
-    maxAge: 60 * 60 * 24 * 30,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-  });
-
-  return response;
+  return route(request);
 }</code></pre>
 
-<p>When implementing this architecture, analytics integration requires careful consideration. Because the client-side testing script is removed, the variant assignment must be explicitly passed to your analytics provider. This is typically achieved by rendering a lightweight script block containing the active variants directly into the HTML payload from the server, allowing the client-side analytics initialization to read the state immediately.</p>
+        <p><strong>Edge-injected content is in the HTML and therefore indexable.</strong> This is the flip side of the advantage. A personalised greeting rendered at the edge can be indexed; a client-side one generally is not. If you are injecting anything visitor-specific into the document, make sure the crawler path does not.</p>
 
-<h2>Performance and Hybrid Caching Strategies</h2>
+        <h2>11. Consent Is a Constraint, Not a Footnote</h2>
 
-<p>Personalization inherently conflicts with aggressive caching. A purely static document is trivial to cache on a CDN, but a document customized for a specific user requires complex invalidation logic. Executing personalization at the edge necessitates a hybrid caching strategy.</p>
+        <p>Under GDPR and the ePrivacy directive, storing or reading information on a user's device for personalisation requires consent, with a narrow exemption for what is strictly necessary to deliver a service the user requested. A cookie that records the market a visitor selected is comfortably necessary. A cookie that records their inferred browse affinity for merchandising is not.</p>
 
-<p>For geolocation and macro-level routing, varying the cache based on headers is an established technique. By utilizing the `Vary` header (e.g., `Vary: x-user-region`), the CDN is instructed to maintain separate cache entries for different regions. However, this approach scales poorly when dealing with highly granular data, such as individual user IDs or complex A/B test combinations, as it leads to severe cache fragmentation.</p>
+        <p>What this means practically for an edge design:</p>
 
-<p>The optimal pattern combines Edge Middleware routing with Stale-While-Revalidate (SWR) caching directives at the origin. The Edge Middleware determines the context, routes the request to a specific path, and the CDN caches that specific route globally. This ensures that the personalized variations themselves benefit from full CDN caching, isolating the dynamic computation entirely to the fast edge execution layer.</p>
+        <p><strong>Behaviour-derived segments must be gated on consent.</strong> If the visitor has not consented, the segment cookie should not be written and the edge should serve the default variant. Build this in from the start; retrofitting it means auditing every place a cookie is set.</p>
 
-<h2>Security and Compliance Implications</h2>
+        <p><strong>Geo from IP is a grey area worth being careful about.</strong> Reading the IP to determine country for currency and shipping is generally defensible as necessary. Storing a geo-derived profile is not.</p>
 
-<p>Shifting logic to the edge introduces new vectors for security and compliance, particularly concerning Personally Identifiable Information (PII) and GDPR/CCPA regulations. Edge nodes operate in various global jurisdictions, and processing user data within these nodes requires stringent architectural oversight.</p>
+        <p><strong>Design so that no consent means fewer variants, not a broken page.</strong> The non-consenting visitor gets the default cached page, which is the fast one. That is a pleasant property: your privacy-respecting path is also your performance path.</p>
 
-<p>When utilizing Upstash Redis or querying external APIs from an edge function, it is critical to restrict the scope of the data accessed. Rather than storing complete user profiles in the edge cache, store only the non-sensitive identifiers required for routing and presentation logic. Never transmit raw PII, plaintext emails, or financial data through Edge Middleware logs.</p>
+        <pre><code class="language-javascript">function segmentFor(request) {
+  // Consent Mode / TCF string, however you store it. No consent, no segment.
+  const consent = request.cookies.get('consent')?.value ?? '';
+  if (!consent.includes('personalisation')) return 'default';
+  return parseCookie(request.cookies.get('p')?.value).seg;
+}</code></pre>
 
-<p>Furthermore, consent management must be integrated directly into the edge routing logic. If a user has not consented to tracking or personalization cookies, the edge middleware must detect this state and default to a fallback variant. This can be achieved by inspecting the consent cookie directly within the request headers before executing any conditional logic, ensuring compliance at the infrastructure level before application code executes.</p>
+        <p>I have had this conversation go badly exactly once, on a project where the segmentation had shipped before anyone consulted the client's DPO, and unwinding it took longer than building it had. Have the conversation in week one; it constrains the design, and a constraint you know about is cheap.</p>
 
-<h2>Future State of Composable Personalization</h2>
+        <h2>12. When the Cookie Is Not Enough: Looking Segments Up at the Edge</h2>
 
-<p>The trajectory of e-commerce architecture points toward increasingly decentralized execution. As edge runtimes become more sophisticated, the capacity to run complex machine learning models directly at the edge will become standard practice. This will allow for real-time, algorithmic personalization without relying on network calls to centralized recommendation engines.</p>
+        <p>Everything above assumes the segment arrives in a cookie the visitor already has. Sometimes it does not. A customer logs in on their phone having been segmented on desktop; a CDP updates someone's tier overnight and the cookie is a month old; a first-time visitor arrives from an email campaign carrying a hashed identifier in the URL. In those cases the edge has an identity and needs to turn it into a segment, which means a lookup.</p>
 
-<p>By adopting edge middleware and workers today, engineering teams establish a highly scalable, resilient foundation. Eliminating client-side processing bottlenecks directly improves core web vitals, enhances conversion rates, and creates a robust technical ecosystem. The transition from client-side execution to edge-side computation is a fundamental architectural requirement for delivering high-performance digital commerce experiences.</p>
+        <p>This is where personalisation projects quietly acquire the latency they were supposed to avoid. A lookup against a store in a single region costs you a round trip from the PoP, and I went through the arithmetic of why that usually loses in <a href="/blog/edge-computing-ecommerce/">the fundamentals article</a>. The constraint here is specific: you are doing this lookup on the request path of a page that was meant to be a cache hit.</p>
 
-        <hr />
+        <p>Three rules I hold to.</p>
+
+        <p><strong>Only look up when you have to, and write the result to a cookie immediately.</strong> The lookup should happen once per visitor per month, not once per request. If you find yourself doing it on every page view, the cookie write is broken.</p>
+
+        <p><strong>Use an eventually-consistent edge store, and accept the staleness.</strong> Cloudflare KV or Vercel Edge Config replicate globally and read locally. A segment that is a minute out of date is fine — segments describe months of behaviour. Do not reach for a strongly-consistent store here; you do not need the consistency and you will pay for it in distance.</p>
+
+        <p><strong>Budget the lookup and fail open.</strong> Give it a hard timeout, and if it does not answer, serve the default variant. A personalisation lookup must never be able to make the page slow, let alone break it.</p>
+
+        <pre><code class="language-javascript">async function resolveSegment(request, env) {
+  const cookie = request.cookies.get('p')?.value;
+  if (cookie) return parseCookie(cookie).seg;      // the 99% path: no I/O at all
+
+  const uid = request.nextUrl.searchParams.get('cid');
+  if (!uid) return 'new';
+
+  // 60ms budget. Past that, the default variant is better than a slow page.
+  const timeout = new Promise(r =&gt; setTimeout(() =&gt; r(null), 60));
+  const lookup = env.SEGMENTS.get(`u:${uid}`, { cacheTtl: 300 })
+    .catch(() =&gt; null);
+
+  const found = await Promise.race([lookup, timeout]);
+  return SEGMENTS.includes(found) ? found : 'new';
+}</code></pre>
+
+        <p>One thing I got wrong on an early build: I put the lookup before the cache check, so even returning visitors with a valid cookie paid for a KV read because the code was written top to bottom rather than by cost. Order your handler so the cheapest path exits first. It reads worse and runs better.</p>
+
+        <h2>13. Doing This on Magento and Shopify</h2>
+
+        <p>Most storefronts I work on are not a clean Next.js build, and the platform underneath changes what is available.</p>
+
+        <p><strong>Shopify.</strong> You do not control the CDN or the cache, and Liquid rendering happens on Shopify's infrastructure. Markets handles currency and country properly and you should use it rather than reinventing it at the edge. What is left for an edge layer in front is limited — mostly redirects and bot control — because Shopify is already doing the caching and doing it well. Where the edge becomes relevant is a headless Hydrogen or Next.js storefront, at which point everything in this article applies to your layer and Shopify becomes the data source whose rate limits you must respect. Segment-driven variants multiply your Storefront API calls by the variant count during regeneration, and that is the constraint that bites first.</p>
+
+        <p><strong>Magento 2.</strong> Full page cache with hole punching is already the native model — private content blocks are punched out of the cached page and filled by a customer-data endpoint on the client. That is precisely the pattern this article recommends, arrived at years earlier for the same reasons. The mistake I see is teams adding edge personalisation on top without noticing that the private-content mechanism exists, ending up with two systems punching holes in the same page and a customer-data call that fires on every navigation. Before you put anything at the edge on Magento, look at what <code>sections.xml</code> is already invalidating; the answer is usually "more than it needs to", and fixing that is worth more than the edge layer.</p>
+
+        <p>In both cases the honest advice is the same. The platform's existing caching model is the thing to understand first, and an edge layer that fights it will lose. The edge is where you put decisions the platform cannot make early enough — country, experiment arm, bot policy — not a second rendering system.</p>
+
+        <h2>14. Measuring Whether Any of It Worked</h2>
+
+        <p>Personalisation projects are unusually prone to being declared a success on the basis of nothing. Three measurements make that harder.</p>
+
+        <p><strong>Cache hit ratio for HTML, broken down by variant.</strong> Not the combined figure, which is dominated by images and flatters everything. A variant with a hit ratio far below the others is one whose population is too small to keep it warm, and it should be merged into another.</p>
+
+        <pre><code class="language-bash"># Which variants exist, and how often each is a hit. From CDN logs.
+zcat cdn-*.log.gz \
+  | awk '$7 ~ /^\/_v\// {split($7,a,"/"); print a[3]"/"a[4], $NF}' \
+  | sort | uniq -c | sort -rn | head -20
+# Any bucket with under ~2% of traffic is not earning its cache entry.</code></pre>
+
+        <p><strong>Time to first byte at p75, split by variant and by whether the visitor was personalised.</strong> If personalised visitors are materially slower, personalisation is costing you the thing it was meant to win.</p>
+
+        <p><strong>A guardrail metric alongside the success metric.</strong> A banner personalisation that lifts click-through on the banner while reducing overall conversion is a loss, and the banner metric will not tell you. Pick the guardrail before the test runs.</p>
+
+        <p>And instrument the edge decision itself, so a support ticket can be diagnosed. Emitting the variant and the PoP as response headers costs nothing and turns "the site showed me the wrong price" from a two-day investigation into a two-minute one.</p>
+
+        <pre><code class="language-javascript">res.headers.set('x-variant', `${country}.${seg}.${arm}`);
+res.headers.set('x-edge-colo', request.cf?.colo ?? 'n/a');
+res.headers.set('x-cache-key-hint', cacheKeyPath);</code></pre>
+
+        <h2>15. Worked Example: Sportswear, Four Markets, Two Segments</h2>
+
+        <p>Back to the retailer from the opening, because the rebuild is the useful part.</p>
+
+        <p><strong>Where they started.</strong> <code>Vary: Cookie</code> on all HTML. 12% hit ratio. p75 TTFB 840ms. Personalisation consisted of a hero banner keyed to browse affinity across eleven categories, plus nearest-store stock on the product page.</p>
+
+        <p><strong>First decision: cut the segments from eleven to three.</strong> The eleven came from their category taxonomy, which is a merchandising artefact rather than a behavioural one. Looking at the actual data, browse behaviour clustered into roughly three groups — running, gym and lifestyle — and the eleven-way split was mostly noise. Nobody in marketing objected once they saw that seven of the eleven segments had under 3% of traffic each.</p>
+
+        <p><strong>Second decision: country in, city out.</strong> Four markets, in the cache key. Nearest-store logic moved to a client-side call against a store-locator endpoint, with the store name rendered into a reserved slot so there was no layout shift. This also fixed a standing complaint from customers in Manchester being shown a Liverpool store.</p>
+
+        <p><strong>Third decision: hero banner as a variant document, product recommendations client-side.</strong> The banner is above the fold and a flash there is unacceptable, so it justifies cache cardinality. Recommendations are below the fold and do not.</p>
+
+        <p>Final cardinality: four countries times three segments equals twelve variants for the homepage and category pages. Product pages vary on country only — four — because the affinity segment did not change anything on a product page, which nobody had questioned before we counted.</p>
+
+        <p><strong>Implementation.</strong> Middleware normalises country and segment, validates both against allowlists, and rewrites to <code>/_v/{country}/{seg}/…</code>. Query strings are stripped of tracking parameters and the remainder sorted before the key is computed. The segment cookie is written by a nightly job into their CDP and synced to a first-party cookie on login, gated on consent.</p>
+
+        <p><strong>Results after five weeks.</strong> HTML hit ratio 88% — slightly below the 91% they had before personalisation, which is the honest cost of twelve variants and was accepted knowingly. p75 TTFB 71ms. Origin request volume returned to roughly its pre-launch level. The banner personalisation itself produced a 2.3% lift in category page click-through and, on the guardrail metric, no detectable change in overall conversion, which is a much less exciting result than the original launch had claimed and is the one I believe.</p>
+
+        <p><strong>What went wrong.</strong> Two things.</p>
+
+        <p>We initially put the consent state into the cache key as a fourth dimension, doubling cardinality to twenty-four. It seemed correct: consented and non-consented visitors see different pages. It was unnecessary — a non-consenting visitor gets the default segment, which is already a variant, so the consent state was fully determined by the segment value. Removing it took cardinality back to twelve and the hit ratio up about four points. Look for dimensions that are functions of other dimensions; there is usually one.</p>
+
+        <p>The second was worse. For about nine days, the query-parameter stripping was applied before a check for pagination, so <code>/category/running?page=3</code> and <code>/category/running</code> shared a cache key. Visitors clicking to page three got page one, intermittently, depending on which had been cached at that PoP. It was intermittent, which is why it took nine days — it never reproduced for the team, whose PoP had the right entry cached. The lesson I took: an allowlist of parameters that participate in the key is safer than a denylist of ones that do not, because the failure mode of forgetting an entry is a stale extra cache entry rather than serving the wrong content.</p>
+
+        <pre><code class="language-javascript">// Allowlist, not denylist. Forgetting to allow a parameter costs a
+// duplicate cache entry. Forgetting to deny one serves wrong content.
+const KEY_PARAMS = ['page', 'sort', 'colour', 'size'];
+
+function normaliseUrl(url) {
+  const kept = new URLSearchParams();
+  for (const p of KEY_PARAMS) {
+    const v = url.searchParams.get(p);
+    if (v) kept.set(p, v);
+  }
+  kept.sort();                       // ?size=9&amp;colour=black === ?colour=black&amp;size=9
+  const s = kept.toString();
+  return url.pathname + (s ? `?${s}` : '');
+}</code></pre>
+
+        <h2>16. Where Personalisation Earns Its Keep, and Where It Does Not</h2>
+
+        <p>An opinionated list, from projects where we measured rather than assumed.</p>
+
+        <p><strong>Worth it, reliably.</strong> Market, currency and language. Returning-visitor continuity — the basket, recently viewed, the store they last chose. Logged-in state in the header. These are not really personalisation so much as not being forgetful, and customers notice their absence far more than they notice their presence.</p>
+
+        <p><strong>Worth it, sometimes.</strong> Homepage hero by broad affinity, if you have three segments rather than eleven and enough traffic to keep them warm. Geo-targeted delivery messaging, which is cheap and genuinely useful. Post-purchase cross-sell, which has real signal behind it.</p>
+
+        <p><strong>Rarely worth it.</strong> Personalised category ordering, which fragments the cache heavily for a lift that in my experience does not survive a guardrail metric. Individually personalised product recommendations above the fold, where the latency cost usually exceeds the relevance gain. Anything requiring a per-user cache entry.</p>
+
+        <p><strong>Actively harmful.</strong> Personalised pricing for anonymous visitors, which is a trust catastrophe when discovered and it is always discovered. Hard geo-redirects. Anything that changes on every visit, because customers navigate by memory of where things were and moving them reads as a broken site rather than a helpful one.</p>
+
+        <p>The general finding across these projects is that the ceiling on personalisation lift is lower than vendors suggest and the floor on the performance cost is higher. A 2–3% lift on a secondary metric is a realistic good outcome. If that lift comes with 200ms of added TTFB, you have very likely lost more than you gained, because the relationship between latency and conversion is one of the better-established things in this field.</p>
+
+        <h2>17. Questions I Get Asked</h2>
+
+        <p><strong>"Can I personalise without hurting cache hit ratio at all?"</strong> Only with hole punching or client-side hydration, where the cached document is identical for everyone. Any variant-document approach costs cardinality; the goal is to spend it deliberately on the few dimensions that must be correct in the HTML.</p>
+
+        <p><strong>"How many segments is too many?"</strong> More than eight variants per page and I want a specific argument. Above sixteen I would want to see the traffic distribution demonstrating each bucket gets enough volume to stay cached. A segment with 2% of traffic is a segment whose pages are always cold.</p>
+
+        <p><strong>"Is <code>Vary: Cookie</code> ever acceptable?"</strong> On an API response with a small, controlled cookie set, occasionally. On HTML at a public CDN, no. If you need cookie-based variation, normalise the cookie into a token and put the token in the cache key.</p>
+
+        <p><strong>"Should logged-in customers get cached pages?"</strong> The document, yes, in most cases. The parts that are theirs specifically — name, basket, contract prices, order history — should be hole-punched or fetched client-side. A logged-in customer on a product page is looking at the same product as everyone else.</p>
+
+        <p><strong>"What about ESI, is it still relevant?"</strong> On Fastly and Akamai it works well and is a legitimate choice, particularly if you are already on VCL. It is a mature answer to the hole-punching problem with independent TTLs per fragment. Cloudflare has no ESI equivalent, so on Workers you are doing streaming assembly yourself. I would not introduce ESI to a stack that does not have it, but I would not rip it out either.</p>
+
+        <p><strong>"How do I stop the personalisation flashing in?"</strong> Reserve the space so there is no layout shift, render a skeleton rather than a default value, and if the value is one the customer would notice changing — a price, above all — put it in the document instead of fetching it. The flash is a symptom of having chosen the wrong pattern for that element.</p>
+
+        <p><strong>"Does personalisation hurt Core Web Vitals?"</strong> It can, through two mechanisms: lower cache hit ratio pushing TTFB up, and late-arriving content causing layout shift. Both are avoidable. Neither is avoided by default.</p>
+
+        <p><strong>"Our vendor says their tag handles all this."</strong> A client-side personalisation tag that rewrites the DOM after load will cost you LCP and CLS, and the rewrite is not indexed. It is the fastest thing to deploy and the most expensive to live with. If it is already installed, measure the CLS contribution before defending it.</p>
+
+        <h2>18. Where I Would Start</h2>
+
+        <p>In order, and the first two are non-negotiable.</p>
+
+        <p>Measure your current HTML cache hit ratio, separately from assets. If it is already poor before you personalise anything, find out why first — it is usually query-string fragmentation or an accidental <code>no-store</code> that somebody set during a debugging session in 2019 and never reverted. I have found that exact thing twice.</p>
+
+        <p>Write down the multiplication. Every dimension you intend to vary on, multiplied out. If the number is above eight, cut dimensions until it is not, and be specific about what each surviving dimension buys. This conversation is uncomfortable and it is the single most valuable hour in the project.</p>
+
+        <p>Then pick the pattern per element rather than for the page. Currency in the document. Basket count hole-punched. Recommendations client-side. Most bad personalisation architectures come from choosing one mechanism and applying it to everything.</p>
+
+        <p>Normalise before you key. Strip tracking parameters, sort the survivors, clamp the segment to an allowlist, and validate every client-controlled value. Do this before you build any personalisation logic, because it is the thing that makes the cache work at all and it improves your numbers even with zero variants.</p>
+
+        <p>Then ship one dimension, on one page template, and measure for two weeks. Country on the homepage is a good first move: low cardinality, obvious value, easy to reverse. Resist the pressure to launch six segments across the whole site simultaneously, because when the hit ratio moves you will not know which decision caused it.</p>
+
+        <p>The thing I would leave you with is the framing that took me too long to arrive at. Personalisation is not a feature you add to a page. It is a decision about how many distinct pages you are willing to have, and every stakeholder request translates into a multiplication that somebody has to pay for in cache misses, origin load and latency. Make that multiplication visible early and the design mostly writes itself. Hide it, and you find out on a Thursday when the hit ratio has fallen to 12%.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -459,12 +723,11 @@ export function middleware(request: NextRequest) {
               <p>Designing performant decoupled frontends for Magento and Shopify Plus.</p>
             </li>
             <li>
-              <strong><a href="/blog/ai-product-recommendations/">AI-Powered Product Recommendations for Magento & Shopify</a></strong>
+              <strong><a href="/blog/ai-product-recommendations/">AI-Powered Product Recommendations for Magento &amp; Shopify</a></strong>
               <p>Vector similarity embeddings for product discovery.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -498,6 +761,6 @@ export function middleware(request: NextRequest) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Brotli vs Gzip Compression for E-Commerce | MODRACX</title>
-  <meta name="description" content="Technical guide on configuring Brotli compression level 5 for dynamic text assets and level 11 for static build outputs on Nginx and Cloudflare." />
+  <meta name="description" content="Brotli vs gzip for ecommerce: measured compression levels, dynamic vs build-time precompression, Nginx and CDN wiring, what compresses badly, and the real latency effect." />
   <meta property="og:title" content="Brotli vs Gzip Compression for E-Commerce | MODRACX" />
   <meta property="og:description" content="Technical guide on Brotli compression by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -169,17 +171,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Brotli vs Gzip Compression for E-Commerce</h1>
-        <p class="lede">Brotli compression algorithm delivers up to 25% smaller file sizes for JS and CSS files compared to Gzip, decreasing total byte transfer overhead.</p>
+        <p class="lede">A distributor set brotli_comp_level 11 on dynamic responses and their TTFB got worse. Here is where the eleven levels actually sit, why precompression at build time is the real win, and how small the latency saving is.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -204,146 +206,600 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        <h2>The Architecture of Byte Delivery</h2>
-        <p>Modern e-commerce infrastructure demands extreme scrutiny of every byte traveling across the wire. When analyzing the critical rendering path for a Magento or Shopify storefront, network payload size directly correlates with First Contentful Paint (FCP) and Largest Contentful Paint (LCP) metrics. The era of simply deploying Gzip and considering the compression layer fully optimized has decisively passed. E-commerce systems, characterized by heavy JavaScript bundles, dense CSS architectures, and massive JSON API payloads, require a compression algorithm specifically tuned for web text formats. This brings us to Brotli.</p>
-        <p>Brotli, originally developed by engineers at Google, represents a fundamental architectural shift in how we approach HTTP compression. Unlike Gzip, which is based on the legacy DEFLATE algorithm combining LZ77 and Huffman coding, Brotli introduces a second-order context modeling approach, a drastically larger sliding window (up to 16MB compared to Gzip's restrictive 32KB limit), and most crucially, a static dictionary of common web terminology.</p>
-        <p>This static dictionary is highly relevant for e-commerce developers. The Brotli specification includes a pre-defined dictionary of over 13,000 common words, phrases, and HTML/CSS/JS tokens embedded directly into the algorithm. When the encoder encounters strings like <code>&lt;script type="text/javascript"&gt;</code>, <code>function()</code>, or <code>border-bottom-color</code>, it replaces them with highly compact references rather than analyzing them dynamically. For storefronts transmitting megabytes of framework JavaScript and utility CSS, this dictionary alone yields substantial payload reductions before traditional LZ77 back-referencing even begins.</p>
-        <p>The mathematical reality of this approach is striking. Extensive benchmarking across production e-commerce environments reveals that Brotli consistently outperforms Gzip by 15% to 25% on CSS, HTML, and JavaScript assets. When transmitting a 1.2MB uncompressed React or Vue application bundle, Gzip might achieve a compressed size of 350KB. Brotli, depending on the compression level, can reduce that same bundle to approximately 270KB. In mobile networks constrained by latency and bandwidth, eliminating 80KB of data from the critical path directly accelerates time-to-interactive (TTI) and reduces CPU parsing time on lower-tier mobile hardware.</p>
-        <p>However, the implementation of Brotli introduces specific architectural complexities. The primary challenge lies in the asymmetrical nature of compression algorithms. Decompression is almost universally fast—browsers can decode Brotli streams rapidly, often faster than Gzip streams. Compression, conversely, requires substantial CPU resources. The higher the compression ratio, the more CPU cycles the server must expend. This CPU cost necessitates a strict bifurcation in compression strategy: dynamic compression for on-the-fly responses, and static pre-compression for build-time assets.</p>
+        <h2>1. The Change That Made The Site Slower</h2>
 
-        <h2>The Asymmetry of Compression: Dynamic vs. Static Delivery</h2>
-        <p>To architect a highly available e-commerce platform, the HTTP response pipeline must distinguish between assets generated dynamically per request (such as HTML pages, GraphQL JSON responses, and personalized API payloads) and static assets generated during the CI/CD build process (such as Webpack/Vite bundles, CSS stylesheets, and SVG sprites).</p>
+        <p>A distributor I work with turned Brotli on across their Magento stack in October and their TTFB got worse. Not dramatically — p75 went from 340ms to 410ms — but consistently, and on the one metric they had spent the previous quarter improving.</p>
 
-        <h3>Dynamic Compression Strategies and Trade-offs</h3>
-        <p>Dynamic compression occurs on the fly. When a client requests a dynamic HTML document or a JSON payload from a headless commerce API, the web server (or edge node) must compress the response body before transmitting it over the wire. This operation blocking the response stream means the compression algorithm must be fast enough that the time spent compressing the data does not exceed the time saved in network transmission.</p>
-        <p>Brotli provides 11 compression levels, ranging from 1 (fastest, lowest compression) to 11 (slowest, maximum compression). For dynamic compression, selecting the correct level is critical. If a server dynamically compresses a 500KB JSON response at Brotli level 11, the CPU will block for hundreds of milliseconds, completely negating any network transfer benefits and severely degrading the Time to First Byte (TTFB). The CPU overhead of level 11 is exponential compared to lower levels.</p>
-        <p>Extensive load testing across Nginx upstream blocks indicates that <strong>Brotli level 4 or 5 is the optimal threshold for dynamic compression</strong>. At level 5, Brotli achieves superior compression ratios compared to Gzip level 6 (the industry standard for dynamic Gzip), while maintaining comparable CPU utilization and compression speed. Level 5 strikes the necessary balance: it compresses the payload effectively without bottlenecking the application server's CPU threads during traffic spikes.</p>
+        <p>The change was a single line. Someone had read that Brotli beats gzip, found the Nginx directive, and set <code>brotli_comp_level 11</code> because eleven is the best number. Every dynamically-generated HTML response and every GraphQL payload was now being compressed at the highest setting the algorithm offers, in the request path, on servers that were already at 60% CPU during business hours.</p>
 
-        <h3>Static Pre-Compression Architecture</h3>
-        <p>Static assets, conversely, are immutable until the next deployment. There is no architectural justification for compressing the same `main.a4b3c2.js` file dynamically thousands of times per second. For static assets, compression must be shifted left to the build process.</p>
-        <p>During the CI/CD pipeline, after Webpack or Vite emits the final asset bundles, a secondary process must compress these files at <strong>Brotli level 11</strong>. Because this compression occurs asynchronously during the build, the CPU time required is irrelevant to the end-user request latency. The server simply reads the pre-compressed `.br` file from disk and streams it directly to the socket, utilizing zero CPU cycles for compression.</p>
-        <p>This static pre-compression strategy yields the absolute maximum byte reduction possible. A JavaScript bundle compressed at Brotli level 11 is often 10-15% smaller than the same bundle compressed at Brotli level 5. Over hundreds of millions of requests in a high-volume e-commerce environment, this delta translates to terabytes of saved bandwidth egress and measurable improvements in frontend performance percentiles.</p>
-        <p>When implementing static compression pipelines, the build sequence assumes a pivotal role. The generation of sourcemaps, minification of JavaScript, and purging of unused CSS must fully complete prior to the execution of the Brotli compression binaries. If compression is executed prematurely, the algorithm will waste CPU cycles analyzing development-tier code rather than the highly optimized production outputs, significantly degrading the final compression ratio.</p>
+        <p>They were saving about 9KB per page against gzip. They were spending 70 to 180 milliseconds of server CPU to do it, per request, on responses that were then travelling over connections fast enough that 9KB took 12 milliseconds.</p>
 
-        <h2>Implementing Brotli at the Nginx Layer</h2>
-        <p>To implement this bifurcated strategy, the Nginx web server must be configured to handle both dynamic compression and static file serving simultaneously. Modern Nginx distributions often require compiling the <code>ngx_brotli</code> module from source, as it is not always included in default package managers provided by common Linux distributions.</p>
-        <p>The configuration requires careful specification of MIME types, buffer sizes, and the critical distinction between the <code>brotli</code> and <code>brotli_static</code> directives. The <code>brotli on;</code> directive enables dynamic compression for the specified MIME types, while <code>brotli_static on;</code> instructs Nginx to look for a pre-compressed file with a <code>.br</code> extension before attempting to serve or dynamically compress the uncompressed file.</p>
-        <p>Below is a production-ready Nginx configuration block specifically tuned for e-commerce platforms. This configuration explicitly targets text-heavy payloads typical of modern Single Page Applications (SPAs) and headless commerce architectures.</p>
+        <p>Dropping to level 5 gave back the TTFB and kept most of the byte saving. Precompressing the static bundles at level 11 during the build gave back the rest of it and more. The whole fix took two hours and it was the second half — the build-time part — that mattered.</p>
 
-<pre><code class="language-nginx"># /etc/nginx/conf.d/brotli.conf
+        <p>This is an article about that trade. Brotli is genuinely better than gzip, the improvement is real and worth having, and the way most people enable it costs them more than it saves. What follows is how the algorithm differs, where the levels actually sit, how to precompress properly, what does not compress at all, and how to measure whether any of it moved a number a customer can feel.</p>
 
-# ---------------------------------------------------------
-# Dynamic Brotli Compression Configuration
-# ---------------------------------------------------------
-# Enable dynamic Brotli compression for on-the-fly responses
-brotli on;
+        <h2>2. What Brotli Actually Does Differently</h2>
 
-# Set dynamic compression level to 5 (optimal balance of CPU and size)
-brotli_comp_level 5;
+        <p>Gzip is DEFLATE, which is LZ77 plus Huffman coding, and it was standardised in 1996. It is remarkable that it is still competitive. Brotli, published by Google in 2013 and standardised as RFC 7932 in 2016, is the same family of ideas with three substantial changes.</p>
 
-# Define minimum file size for dynamic compression
-# Compressing very small files can increase payload size due to dictionary overhead
-brotli_min_length 512;
+        <p><strong>A much larger window.</strong> LZ77 works by replacing a repeated sequence with a back-reference: "the next 40 bytes are the same as the 900 bytes ago". The window is how far back it can look. Gzip's is 32KB, fixed. Brotli's is configurable up to 16MB, and defaults to something in the low megabytes depending on the level.</p>
 
-# Define specific MIME types for dynamic compression
-# Excludes binary formats (images, videos, archives) which are already compressed
-brotli_types 
-    application/atom+xml
-    application/javascript
-    application/json
-    application/vnd.api+json
-    application/x-javascript
-    application/xml
-    application/xml+rss
-    image/svg+xml
-    image/vnd.microsoft.icon
-    image/x-icon
-    text/css
-    text/javascript
-    text/plain
-    text/xml;
+        <p>For a 40KB stylesheet this is irrelevant — the whole file fits in gzip's window anyway. For a 1.2MB JavaScript bundle it is enormous, because the bundle repeats itself constantly. Webpack helpers, framework internals, the same option-object shape appearing in two hundred call sites. Gzip cannot see past 32KB and so it re-encodes those repetitions again and again. Brotli references them once.</p>
 
-# ---------------------------------------------------------
-# Static Brotli Delivery Configuration
-# ---------------------------------------------------------
-# Instruct Nginx to search for pre-compressed .br files on disk
-# If style.css.br exists, Nginx serves it instead of style.css
-brotli_static on;
+        <p>This is why the advertised "15–25% better than gzip" figure is so variable in practice. On small files it is closer to 8%. On large bundles I have measured 27%.</p>
 
-# ---------------------------------------------------------
-# Buffer and Window Size Configuration
-# ---------------------------------------------------------
-# Configure the sliding window size. 16MB is optimal for web assets
-brotli_window 16m;
-brotli_buffers 16 8k;</code></pre>
+        <p><strong>Context modelling.</strong> Brotli picks its Huffman tables based on the preceding bytes, so it can use different statistics for the middle of a string literal than for a run of syntax characters. Gzip uses one set of statistics for the whole block. This is where most of the remaining gain on text comes from and it is also a large part of why Brotli is slower to encode.</p>
 
-        <p>When an incoming HTTP request contains the <code>Accept-Encoding: gzip, deflate, br</code> header, Nginx intercepts the request. If the requested URI maps to a static file (e.g., <code>/assets/app.js</code>), the <code>brotli_static on;</code> directive commands the Nginx worker process to check the filesystem for <code>/assets/app.js.br</code>. If the file exists, Nginx streams it immediately with the <code>Content-Encoding: br</code> response header. If the <code>.br</code> file does not exist, but the MIME type matches the <code>brotli_types</code> list, Nginx falls back to dynamic compression at level 5.</p>
-        <p>This fallback mechanism ensures resilience. If the CI/CD pipeline fails to generate a pre-compressed asset due to a transient build error, the server gracefully handles the request dynamically, preventing uncompressed data from leaking to the client and triggering severe performance regressions.</p>
+        <p><strong>The static dictionary.</strong> The specification embeds a fixed 122KB dictionary of common web strings — around 13,500 words and fragments — plus a set of transformations that can be applied to them. So <code>&lt;/div&gt;</code>, <code>function</code>, <code>background-color</code>, <code>utf-8</code> and several thousand other things can be referenced without ever appearing in the compressed stream.</p>
 
-        <h2>Cloudflare Edge Rules and Origin Pull Optimization</h2>
-        <p>Cloudflare natively supports Brotli at the Edge, dynamically compressing payloads at levels 4–5 before delivering them to the client. The strategic goal is ensuring Cloudflare pulls pre-built Level 11 <code>.br</code> assets from the origin and passes them through unchanged, rather than re-compressing them at the edge. This eliminates redundant CPU overhead while delivering maximum compression ratios to end-users globally.</p>
-        <p>Configure Cloudflare Cache Rules to bypass "Auto Minify" and "Brotli" transformations for paths matching <code>/assets/*</code>. This forces Cloudflare to act as a passthrough proxy for your Level 11 binaries, ensuring origin-generated compressed assets are served without modification. The result: zero dynamic compression CPU cost at the edge, and globally cached highly compressed static assets.</p>
+        <h3>The dictionary matters less than the articles say</h3>
 
-        <h2>Build-Time Pre-Compression Architecture</h2>
-        <p>The foundation of the static compression strategy lies in the CI/CD pipeline. E-commerce platforms utilizing Node.js build tools (Webpack, Vite, Rollup) must integrate compression algorithms directly into their asset generation phase.</p>
-        <p>While various Webpack plugins exist (such as <code>brotli-webpack-plugin</code> or <code>compression-webpack-plugin</code>), relying on standard bash scripts executed during the Docker image build process often provides greater control, reliability, and framework agnosticism. A dedicated bash script can iterate through all generated output directories, identify target file extensions, and execute the native Brotli binary at the maximum compression level.</p>
-        <p>Below is a robust, production-grade bash script designed for execution within a Dockerfile or CI pipeline. It utilizes the native <code>brotli</code> utility and the <code>find</code> command to process files concurrently, minimizing build times.</p>
+        <p>The static dictionary gets most of the attention in write-ups about Brotli, including the previous version of this one, and it deserves less.</p>
+
+        <p>It is genuinely valuable for small files. A 2KB HTML fragment has very little internal redundancy for LZ77 to work with, so having a pre-shared vocabulary is a large relative win — this is why Brotli's advantage is proportionally biggest on tiny responses.</p>
+
+        <p>On a 900KB minified bundle, the dictionary is 122KB of vocabulary against a file that contains vastly more internal repetition than the dictionary could ever supply. The window size is doing the work; the dictionary is a rounding error. If you want to test this yourself, compress a large bundle at level 11 and compare against a Brotli build with the dictionary disabled. The difference is under a percent.</p>
+
+        <p>Where it does matter and nobody uses it: <em>custom</em> dictionaries. Brotli supports supplying your own, and the compression-dictionary-transport work in Chrome lets you use a previous version of a file as the dictionary for the next one. For a store shipping a bundle that changes by 3% per release, this can turn a 280KB download into an 8KB delta. Chrome 130 shipped it in late 2024 and support elsewhere is still thin, so it is a thing to watch rather than a thing to deploy — but it is the most interesting development in HTTP compression in a decade and it will make the gzip-versus-Brotli argument look quaint.</p>
+
+        <h2>3. The Eleven Levels, Measured</h2>
+
+        <p>Brotli has quality levels 0 to 11. Gzip has 1 to 9. The numbers are not comparable across algorithms and the relationship between level and cost is wildly non-linear, which is the part that catches people.</p>
+
+        <p>Here is a measurement I ran on a real production bundle — a 1.14MB minified Vue application from the distributor's storefront — on a single core of a c6i instance. Your numbers will differ; the shape will not.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Setting</th><th>Output</th><th>vs gzip -6</th><th>Encode time</th><th>Decode time</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>uncompressed</td><td>1,167 KB</td><td>—</td><td>—</td><td>—</td></tr>
+            <tr><td>gzip -1</td><td>367 KB</td><td>+11%</td><td>18 ms</td><td>4 ms</td></tr>
+            <tr><td>gzip -6</td><td>331 KB</td><td>baseline</td><td>41 ms</td><td>4 ms</td></tr>
+            <tr><td>gzip -9</td><td>328 KB</td><td>−1%</td><td>112 ms</td><td>4 ms</td></tr>
+            <tr><td>brotli -1</td><td>346 KB</td><td>+5%</td><td>14 ms</td><td>3 ms</td></tr>
+            <tr><td>brotli -4</td><td>304 KB</td><td>−8%</td><td>29 ms</td><td>3 ms</td></tr>
+            <tr><td>brotli -5</td><td>289 KB</td><td>−13%</td><td>48 ms</td><td>3 ms</td></tr>
+            <tr><td>brotli -6</td><td>285 KB</td><td>−14%</td><td>71 ms</td><td>3 ms</td></tr>
+            <tr><td>brotli -9</td><td>276 KB</td><td>−17%</td><td>310 ms</td><td>3 ms</td></tr>
+            <tr><td>brotli -11</td><td>259 KB</td><td>−22%</td><td>2,140 ms</td><td>3 ms</td></tr>
+          </tbody>
+        </table>
+
+        <p>Read the encode column. Level 11 is forty-five times slower than level 5 and buys 30KB. That ratio is the entire argument of this article.</p>
+
+        <p>Three other things worth pulling out of that table.</p>
+
+        <p>Decode time barely moves. Brotli decompresses at roughly gzip speed regardless of the level it was encoded at, and often slightly faster. This asymmetry is the whole reason precompression works: you can spend two seconds encoding once and every client pays three milliseconds decoding.</p>
+
+        <p>gzip -9 is nearly pointless. It is 2.7× the CPU of gzip -6 for 1% fewer bytes. If you are still running gzip dynamically, run it at 5 or 6. Nobody should be paying for gzip -9 at request time, and quite a lot of people are because 9 looks thorough.</p>
+
+        <p>Brotli level 4 is roughly gzip -6 speed with an 8% better result. This is the important comparison, because it means the swap from dynamic gzip to dynamic Brotli is free — you are not trading CPU for bytes, you are getting bytes for the same CPU. That is not true at level 11 and the confusion between those two facts is why the distributor's site got slower.</p>
+
+        <h2>4. Dynamic Compression: Picking A Level You Can Defend</h2>
+
+        <p>Dynamic compression means the response is generated per request and must be compressed in the request path. HTML from your application, GraphQL and REST payloads, search results, anything personalised.</p>
+
+        <p>The relevant question is not "which level compresses best" but "at what point does the compression time exceed the transfer time it saves". That crossover depends on the client's bandwidth, and the client's bandwidth is not something your server knows.</p>
+
+        <p>Work it through for a 90KB HTML response. Level 4 gives you roughly 22KB, level 11 roughly 19KB — a 3KB difference. On a 10 Mbps mobile connection, 3KB is about 2.4ms of transfer. On a 1 Gbps fibre line it is 0.024ms. The extra encode time to get those 3KB is somewhere between 40 and 200ms depending on the response.</p>
+
+        <p>You are never winning that trade. Not on any connection a customer of yours is using.</p>
+
+        <p>So: <strong>level 4 or 5 for dynamic content</strong>, and I lean towards 4 on CPU-constrained origins and 5 where there is headroom. Both comfortably beat gzip -6 on output size at comparable cost. Above 5, the curve turns against you sharply and the bytes you gain are not bytes anyone waits for.</p>
+
+        <p>There is one exception worth naming. If your responses are enormous — a 4MB product feed, a bulk export endpoint, a sitemap index — and they are fetched by machines over long-lived connections, the arithmetic flips, because the transfer time is now seconds rather than milliseconds. Compress those at 9 or 11, and cache the result so you only do it once. Do not raise the global level to serve them; use a location-specific override.</p>
+
+        <h2>5. Static Precompression: Where The Real Win Is</h2>
+
+        <p>Every argument above disappears if the compression happens at build time, because build-time CPU is free. Nobody is waiting for it.</p>
+
+        <p>Your fingerprinted assets — <code>app.7f3c2a.js</code>, <code>main.9b21e4.css</code>, your fonts if they are not already compressed formats, your SVG sprites — are immutable. Compressing them at request time, over and over, for years, at the cheap level, is strictly worse than compressing them once at level 11 during the build and having the server read the result off disk.</p>
+
+        <p>Two effects, and the second one is bigger than the first.</p>
+
+        <p>You get the level 11 output: 22% smaller than gzip against 13% at level 5 on that bundle. And you spend zero CPU per request. On a busy origin the second effect is what shows up in your monitoring, because compression was quietly consuming a real share of your worker time.</p>
+
+        <p>Here is the script I use. It is a bash script rather than a build plugin deliberately, because it works identically for Webpack, Vite, Rollup, a Magento static content deploy, and a directory of files somebody produced by hand.</p>
 
 <pre><code class="language-bash">#!/usr/bin/env bash
-# compress_assets.sh
-# Executes static Brotli and Gzip compression at maximum levels
-# Target: E-commerce build output directory (e.g., /dist or /build)
+# precompress.sh — build-time Brotli and gzip for immutable assets.
+# Runs after minification, after tree-shaking, after CSS purging.
+# Compressing pre-minified output wastes CPU and produces worse ratios.
+set -euo pipefail
 
-set -e
+TARGET="${1:-./dist}"
+# Below this size, compression is usually a net loss once you count
+# the framing overhead and the CPU on both ends. 1KB is a reasonable
+# floor; measure your own if you care.
+MIN_BYTES=1024
 
-TARGET_DIR="${1:-./dist}"
-echo "Initiating static asset compression for directory: ${TARGET_DIR}"
+echo "precompressing ${TARGET}"
 
-# Define the file extensions that benefit from text compression
-# Excluding binary formats like .png, .jpg, .webp, .woff2
-EXTENSIONS="\( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.xml' -o -name '*.txt' \)"
+# Note: no .woff2 here. WOFF2 is already Brotli-compressed internally;
+# recompressing it produces a larger file and costs you a request path
+# decision for nothing. Same for .png, .jpg, .webp, .avif, .mp4, .zip.
+mapfile -d '' FILES &lt; &lt;(
+  find "$TARGET" -type f \
+    \( -name '*.js'   -o -name '*.mjs'  -o -name '*.css' \
+    -o -name '*.html' -o -name '*.svg'  -o -name '*.json' \
+    -o -name '*.xml'  -o -name '*.txt'  -o -name '*.map' \) \
+    -size +${MIN_BYTES}c -print0
+)
 
-# Find all matching files and pipe them into a parallel execution block
-# -Z specifies the maximum compression level (11 for Brotli)
-# -f forces overwrite if the .br file already exists
-# -k keeps the original uncompressed file
+compress_one() {
+  local f="$1"
+  # -Z is level 11, -k keeps the original, -f overwrites a stale .br
+  brotli -Z -k -f "$f"
+  # zopfli produces gzip-compatible output 3-8% smaller than gzip -9
+  # for a lot more CPU, which at build time is exactly the trade we want.
+  if command -v zopfli &gt;/dev/null 2&gt;&amp;1; then
+    zopfli --i15 "$f"
+  else
+    gzip -9 -k -f "$f"
+  fi
 
-echo "Generating Brotli (.br) files at Level 11..."
-find "$TARGET_DIR" -type f $EXTENSIONS -print0 | xargs -0 -I {} -P $(nproc) bash -c '
-    if [ ! -f "{}.br" ] || [ "{}" -nt "{}.br" ]; then
-        brotli -Z -f -k "{}"
-        echo "Brotli: {}"
+  # Sanity check: if compression made it bigger, throw the result away
+  # rather than shipping a file the server will happily serve.
+  for ext in br gz; do
+    if [ -f "$f.$ext" ] &amp;&amp; [ "$(stat -c%s "$f.$ext")" -ge "$(stat -c%s "$f")" ]; then
+      rm -f "$f.$ext"
     fi
-'
+  done
+}
+export -f compress_one
 
-# Generate static Gzip fallbacks for legacy clients lacking Brotli support
-# -9 specifies maximum Gzip compression
-echo "Generating Gzip (.gz) fallbacks at Level 9..."
-find "$TARGET_DIR" -type f $EXTENSIONS -print0 | xargs -0 -I {} -P $(nproc) bash -c '
-    if [ ! -f "{}.gz" ] || [ "{}" -nt "{}.gz" ]; then
-        gzip -9 -f -k "{}"
-        echo "Gzip: {}"
-    fi
-'
+printf '%s\0' "${FILES[@]}" \
+  | xargs -0 -P "$(nproc)" -I{} bash -c 'compress_one "$@"' _ {}
 
-echo "Static asset compression complete."
-</code></pre>
+# Report, because a build step with no output is a build step that
+# silently stops working.
+orig=$(du -sb "$TARGET" --exclude='*.br' --exclude='*.gz' | cut -f1)
+br=$(find "$TARGET" -name '*.br' -printf '%s\n' | paste -sd+ | bc)
+printf 'precompressed %d files: %s -&gt; %s brotli\n' \
+  "${#FILES[@]}" "$(numfmt --to=iec "$orig")" "$(numfmt --to=iec "${br:-0}")"</code></pre>
 
-        <p>Integrating this script into a deployment pipeline guarantees that every textual asset is accompanied by its <code>.br</code> and <code>.gz</code> counterparts. The <code>-P $(nproc)</code> argument utilizes all available CPU cores, executing the compression operations in parallel. This significantly reduces the build duration, ensuring that aggressive compression strategies do not severely impact developer velocity or deployment frequency.</p>
-        <p>For frameworks utilizing Vite, the configuration can be handled natively via community plugins, although the underlying mathematical operations remain identical. The goal is to offload the compute-intensive Level 11 compression away from the runtime request path and into the isolated build environment.</p>
+        <p>The <code>zopfli</code> branch is worth explaining. Zopfli produces DEFLATE output — so it is served as ordinary gzip and every client understands it — but searches much harder, giving 3–8% smaller files than <code>gzip -9</code> at maybe 80× the CPU. At build time that is a trade you should take every single time, and almost nobody does. The clients that fall back to gzip are the oldest and slowest ones on your site; they benefit most from the extra few percent.</p>
 
-        <h2>Final Architectural Summary</h2>
-        <p>Brotli optimization is a comprehensive architectural strategy, not a simple toggle. By defining dynamic compression at Level 5 to preserve CPU cycles and aggressively pre-compressing static assets at Level 11 during CI/CD, e-commerce systems maximize network efficiency without runtime overhead. Nginx acts as the intelligent router, matching <code>Accept-Encoding: br</code> headers to pre-built <code>.br</code> files on disk, falling back to dynamic compression only when needed. The CDN edge amplifies this by caching those highly compressed outputs globally.</p>
-        <p>For high-traffic stores, trimming a 1MB payload to 700KB across millions of sessions translates directly into lower egress costs, faster rendering pipelines, and improved <a href="/blog/core-web-vitals/">Core Web Vitals</a> scores. The engineering investment in compiled Nginx modules, edge rules, and parallel build scripts is fully justified by the measurable performance delta.</p>
+        <p>The size sanity check at the end has saved me twice. A small JSON file and an already-compressed SVG both grew under compression, and Nginx will cheerfully serve a <code>.br</code> that is larger than the original because it has no reason to check.</p>
 
-        <hr />
+        <h3>Doing it in the bundler instead</h3>
+
+        <p>If you would rather keep it in the build tool, the Vite version is three lines and does the same job for the common case:</p>
+
+<pre><code class="language-javascript">// vite.config.js
+import { defineConfig } from 'vite';
+import compression from 'vite-plugin-compression';
+
+export default defineConfig({
+  plugins: [
+    // Two passes: one for Brotli, one for gzip. Both keep the original,
+    // because a client without either still needs something to fetch.
+    compression({
+      algorithm: 'brotliCompress',
+      ext: '.br',
+      threshold: 1024,
+      compressionOptions: {
+        params: {
+          // 11 — this runs at build time, so spend everything.
+          [require('zlib').constants.BROTLI_PARAM_QUALITY]: 11,
+          // Telling Brotli the input is text improves the model slightly.
+          [require('zlib').constants.BROTLI_PARAM_MODE]:
+            require('zlib').constants.BROTLI_MODE_TEXT,
+        },
+      },
+      deleteOriginFile: false,
+    }),
+    compression({ algorithm: 'gzip', ext: '.gz', threshold: 1024 }),
+  ],
+});</code></pre>
+
+        <p>I still prefer the script, for one specific reason: the build plugin only sees files the bundler emitted. It misses everything in your public directory, everything your CMS deploys, and everything a second build step produces. The script walks the output directory and gets all of it.</p>
+
+        <h2>6. Wiring It Into Nginx</h2>
+
+        <p>The <code>ngx_brotli</code> module is not compiled into most distribution packages, so you either build Nginx with it, use a distribution that ships it as a dynamic module, or use OpenResty. Since Nginx 1.11.5 it can be loaded dynamically, which is the least painful route.</p>
+
+<pre><code class="language-nginx"># /etc/nginx/nginx.conf — module load, before the http block
+load_module modules/ngx_http_brotli_filter_module.so;   # dynamic compression
+load_module modules/ngx_http_brotli_static_module.so;   # serves .br from disk
+
+http {
+    # ------------------------------------------------------------------
+    # Static: serve a pre-built .br if one exists next to the file.
+    # This is checked BEFORE the dynamic filter runs, so a precompressed
+    # asset never touches the compressor.
+    # ------------------------------------------------------------------
+    brotli_static on;
+    gzip_static   on;
+
+    # ------------------------------------------------------------------
+    # Dynamic: level 5, for responses generated per request.
+    # ------------------------------------------------------------------
+    brotli            on;
+    brotli_comp_level 5;
+    brotli_min_length 1024;
+
+    # 16MB window. Costs memory per active connection being compressed;
+    # if you are memory-constrained with high concurrency, 4m is a
+    # reasonable compromise and loses very little on typical responses.
+    brotli_window  16m;
+    brotli_buffers 16 8k;
+
+    brotli_types
+        application/atom+xml
+        application/javascript
+        application/json
+        application/ld+json
+        application/manifest+json
+        application/rss+xml
+        application/vnd.api+json
+        application/xml
+        font/ttf
+        image/svg+xml
+        image/x-icon
+        text/cache-manifest
+        text/css
+        text/javascript
+        text/plain
+        text/xml;
+    # text/html is always compressed and must NOT be listed; listing it
+    # is harmless in nginx but it is the line people add when they think
+    # HTML is not being compressed, and it is never the real cause.
+
+    # Keep gzip configured as the fallback. A client that sends only
+    # "gzip" in Accept-Encoding must still get a compressed response.
+    gzip              on;
+    gzip_comp_level   5;
+    gzip_min_length   1024;
+    gzip_vary         on;
+    gzip_proxied      any;
+    gzip_types        text/css text/plain text/xml application/javascript
+                      application/json image/svg+xml;
+
+    # gzip_vary emits "Vary: Accept-Encoding". Required for correctness
+    # with any shared cache in front. ngx_brotli sets it too.
+}</code></pre>
+
+        <p>One detail that costs people an afternoon: <code>brotli_static on</code> only serves <code>file.br</code> if that exact file exists. It does not compress on demand and cache the result, and it does not fall through to gzip_static if the <code>.br</code> is missing — it falls through to the dynamic filter, which will compress the original at level 5. So a build that fails to produce <code>.br</code> files does not break anything visibly; it just silently costs you the level-11 output and some CPU. That is exactly the kind of regression that survives for a year.</p>
+
+        <p>Assert on it in CI:</p>
+
+<pre><code class="language-bash"># Verify the deployed assets are actually being served precompressed.
+# A 200 with content-encoding: br proves nothing on its own — the
+# dynamic filter produces that too. Compare the byte count against
+# the .br file we built.
+URL="https://www.example.com/assets/app.7f3c2a.js"
+
+served=$(curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%{size_download}' "$URL")
+built=$(stat -c%s dist/assets/app.7f3c2a.js.br)
+
+# Allow a little slack for framing differences between builds.
+if [ "$served" -gt $(( built + 512 )) ]; then
+  echo "FAIL: served ${served}B but built ${built}B — brotli_static is not hitting"
+  exit 1
+fi
+echo "ok: precompressed asset served (${served}B)"</code></pre>
+
+        <h2>7. Apache, And The Node Case</h2>
+
+        <p>Apache's <code>mod_brotli</code> has been in core since 2.4.26 and is simpler to enable, but it has no static equivalent to <code>brotli_static</code>. You do it with rewrite rules, which is fiddly and works:</p>
+
+<pre><code class="language-apache">&lt;IfModule mod_rewrite.c&gt;
+  RewriteEngine On
+  # Only for clients that asked for br
+  RewriteCond %{HTTP:Accept-Encoding} br
+  # Only if the precompressed file actually exists
+  RewriteCond %{REQUEST_FILENAME}.br -f
+  RewriteRule ^(.*)$ $1.br [L]
+
+  # The rewritten file must carry the right headers, or the browser
+  # will try to execute a Brotli stream as JavaScript.
+  &lt;FilesMatch "\.js\.br$"&gt;
+    Header set Content-Encoding br
+    Header append Vary Accept-Encoding
+    ForceType application/javascript
+  &lt;/FilesMatch&gt;
+  &lt;FilesMatch "\.css\.br$"&gt;
+    Header set Content-Encoding br
+    Header append Vary Accept-Encoding
+    ForceType text/css
+  &lt;/FilesMatch&gt;
+&lt;/IfModule&gt;</code></pre>
+
+        <p>The <code>ForceType</code> lines are the bit that gets forgotten, and the symptom is a page that renders unstyled with a console full of MIME type errors.</p>
+
+        <p>For Node, do not compress in Node. The <code>compression</code> middleware runs on the event loop, and Brotli at any level is enough work to block it measurably under load. Put Nginx or your CDN in front and let it handle encoding. If you genuinely must, use the streaming API with an explicit low quality and a size hint:</p>
+
+<pre><code class="language-javascript">// If you must compress in-process, be explicit about everything.
+// The default quality for zlib.brotliCompress is 11, which is a
+// catastrophic default for a request handler.
+const zlib = require('zlib');
+
+const brotliOptions = (byteLength) =&gt; ({
+  params: {
+    [zlib.constants.BROTLI_PARAM_QUALITY]: 4,
+    [zlib.constants.BROTLI_PARAM_MODE]: zlib.constants.BROTLI_MODE_TEXT,
+    // Telling the encoder the size lets it choose a window without
+    // over-allocating for a small response.
+    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: byteLength,
+  },
+});
+
+app.use(require('compression')({
+  threshold: 1024,
+  brotli: { enabled: true, zlib: brotliOptions(0) },
+}));</code></pre>
+
+        <h2>8. What Compresses Badly, And What Not To Touch</h2>
+
+        <p>Compression is not free and it is not universally beneficial. Four categories to leave alone.</p>
+
+        <p><strong>Already-compressed binary formats.</strong> JPEG, PNG, WebP, AVIF, MP4, WOFF2, ZIP, PDF in most cases. These have had their redundancy removed already. Running Brotli over a JPEG costs CPU and produces a file 0.1% smaller or, frequently, slightly larger. WOFF2 is the one people get wrong most often, because it is a font and fonts feel like they should compress — WOFF2 is Brotli internally, so you are compressing a Brotli stream.</p>
+
+        <p><strong>Very small responses.</strong> There is per-stream overhead: headers, a window setup, and for tiny inputs the framing can exceed the saving. Below about 500 bytes you are usually losing, and between 500 and 1500 bytes it depends on the content. A 1024-byte floor is a defensible default and I have never seen it be wrong enough to matter.</p>
+
+        <p><strong>High-entropy text.</strong> Base64 blobs, encrypted payloads, UUID-heavy JSON, hashes. Base64 is a particular trap because it looks like text and is treated as text, but it encodes binary data at 4/3 expansion — the underlying entropy is high and Brotli will get very little back. If you have a JSON API returning base64 images inline, the compression ratio on those responses will be poor and the fix is not a better compressor, it is not inlining images in JSON.</p>
+
+        <p><strong>Already-encoded upstream responses.</strong> If your origin sends <code>Content-Encoding: gzip</code> and your proxy decompresses it to recompress it as Brotli, you are paying for a decompress and a compress on every request to save a few kilobytes. Configure the proxy to pass encoded content through, or to request identity from origin and encode once. Either is fine; doing both halves of the round trip is not.</p>
+
+        <p>The general test is whether the content has structure a back-reference can exploit. Human-readable text and source code: enormously. Machine-generated markup: even more, because it repeats. Random or already-packed bytes: not at all.</p>
+
+        <h2>9. The Fallback Path Still Matters</h2>
+
+        <p>Brotli over HTTPS has been supported in Chrome since version 50 and Firefox since 44, both in 2016, and in Safari since 11. Global support is somewhere north of 96%. So the fallback is a small share of traffic — and it is a share that skews towards old devices, corporate proxies and unusual clients, which is to say the visitors already having the worst time.</p>
+
+        <p>Two rules.</p>
+
+        <p><strong>Never serve Brotli to a client that did not ask for it.</strong> This sounds obvious and it goes wrong when a cache stores a Brotli response and serves it to a gzip-only client, which is a <code>Vary: Accept-Encoding</code> failure. The symptom is a page of binary garbage. Make sure every layer emits <code>Vary: Accept-Encoding</code> and that your CDN honours it.</p>
+
+        <p><strong>Keep the gzip files.</strong> Precompress both. The disk cost is trivial and the alternative is that your oldest clients get uncompressed responses, which for a 1.1MB bundle is a 3.5× penalty applied precisely to the people with the worst connections.</p>
+
+        <p>Also worth knowing: Brotli is only negotiated over HTTPS in every major browser. Over plain HTTP, browsers do not advertise <code>br</code> at all. This was a deliberate decision to avoid middlebox breakage. If you are testing against a local HTTP dev server and wondering why Brotli never kicks in, that is why, and it is the single most common false alarm I get asked about.</p>
+
+        <h2>10. Compression And Your CDN</h2>
+
+        <p>The interaction here produces more waste than any other part of the topic.</p>
+
+        <p>Most CDNs will compress on your behalf at the edge, typically at Brotli level 4 or 5. That is a sensible default and it is the wrong thing to happen to an asset you already compressed at level 11.</p>
+
+        <p>The failure mode is usually one of these. The origin sends an uncompressed asset, the edge compresses at level 5, and your build-time level 11 output is never served to anybody. Or the origin sends level 11 Brotli, the edge decompresses to apply an HTML transformation, and recompresses at level 5. Or the edge re-encodes based on a normalised <code>Accept-Encoding</code> that does not match what the client sent.</p>
+
+        <p>What you want is: pass through what the origin sent for immutable asset paths, and compress at the edge only for dynamic responses the origin did not encode.</p>
+
+<pre><code class="language-text"># Cloudflare configuration, expressed as rules:
+#
+# 1. Cache Rule on /assets/*
+#      - Respect origin Content-Encoding (do not re-compress)
+#      - Disable Auto Minify (it decompresses to rewrite, then recompresses)
+#      - Edge TTL 1 year, respect origin fingerprinting
+#
+# 2. Everything else
+#      - Brotli enabled, edge compresses dynamic responses
+#
+# The trap: "Auto Minify" and any HTML-rewriting feature (Rocket Loader,
+# Email Obfuscation, automatic Early Hints injection) all require the
+# edge to decode the body. Any one of them silently discards your
+# level-11 encoding on the paths it applies to.</code></pre>
+
+        <p>Then verify it, because every provider's UI describes this differently and none of them describe it clearly:</p>
+
+<pre><code class="language-bash"># Compare what the origin produced against what the edge delivered.
+# If the edge byte count is materially larger, it re-encoded.
+ASSET="/assets/app.7f3c2a.js"
+
+origin=$(curl -s -H 'Accept-Encoding: br' -H 'Host: www.example.com' \
+  -o /dev/null -w '%{size_download}' "https://origin.example.com${ASSET}")
+
+edge=$(curl -s -H 'Accept-Encoding: br' \
+  -o /dev/null -w '%{size_download}' "https://www.example.com${ASSET}")
+
+echo "origin=${origin}B  edge=${edge}B  delta=$(( edge - origin ))B"
+# A positive delta of more than a few hundred bytes means the edge
+# re-compressed at a lower level. Chase it.</code></pre>
+
+        <p>Getting this right on the distributor's site recovered 31KB per page load that they had been building and then throwing away for eight months. Nobody had checked, because everything reported <code>content-encoding: br</code> and everybody assumed that meant the build output was reaching customers. It said the response was Brotli. It did not say whose Brotli.</p>
+
+        <p>This is also worth a thought when you are configuring <a href="/blog/cdn-speed-seo/">cache keys at the edge</a>, since <code>Vary: Accept-Encoding</code> creates a cache variant per encoding and a mangled header from a proxy can create dozens.</p>
+
+        <h2>11. The Long Tail: Fonts, SVG, And Everything The Script Missed</h2>
+
+        <p>Bundles get all the attention because they are the biggest single file. The aggregate of everything else is frequently larger, and it is where precompression quietly does not happen.</p>
+
+        <p><strong>SVG.</strong> Text, and therefore extremely compressible — an icon sprite typically drops 70–80%. It is also the format most likely to be missing from a <code>brotli_types</code> list, because it lives under <code>image/</code> and people filter images out of their compression rules on the reasonable theory that images are already compressed. <code>image/svg+xml</code> must be in the list explicitly. I find this missing on maybe half the sites I look at.</p>
+
+        <p><strong>Fonts.</strong> WOFF2 is Brotli inside and must be left alone. Older WOFF is gzip-compressed inside and should also be left alone. Bare TTF and OTF are uncompressed and compress well — 40% or so — but if you are still serving raw TTF to browsers in 2026, converting to WOFF2 saves far more than any compression setting will.</p>
+
+        <p><strong>Source maps.</strong> Big, extremely compressible, and requested only by developers and error-reporting tools. Precompress them, and check whether you are serving them publicly at all — a 4MB source map fetched by a crawler is a bandwidth line item nobody notices.</p>
+
+        <p><strong>JSON that is not an API response.</strong> Translation files, product feeds, configuration blobs, the search index a client-side search library downloads. These are often served from a static path and often miss the compression rules because they were added by a different team at a different time. A 900KB Lunr index compresses to about 190KB and I have found it uncompressed twice.</p>
+
+        <p><strong>Your sitemap.</strong> Big, pure XML, fetched by crawlers repeatedly. Compresses by 85% or more. Google supports gzipped sitemaps served with the right headers and it is a genuinely free saving.</p>
+
+        <p>The way to find all of these is not to think about it, but to sort your resource timing table by <code>decodedBodySize − transferSize</code> and look at anything where the ratio is close to 1.0 and the file is not a known binary format. Every entry on that list is either incompressible or misconfigured, and you can tell which in about five seconds by looking at the extension.</p>
+
+        <h2>12. Rolling It Out Without Breaking Something</h2>
+
+        <p>Compression changes have an unusual risk profile: they almost never fail loudly. A misconfiguration produces bytes that are slightly wrong for a small subset of clients, or slightly larger than intended for everyone, and neither raises an alarm.</p>
+
+        <p>The failure modes I have actually seen, in order of how long they took to find:</p>
+
+        <p><strong>Double encoding.</strong> A proxy compresses a response that was already compressed and sets <code>Content-Encoding: br</code> once. The client decodes once and gets a Brotli stream where it expected JavaScript. Symptom: a completely broken page for everyone, found in minutes. This is the good kind of failure.</p>
+
+        <p><strong>Missing <code>Vary</code>.</strong> A shared cache stores the Brotli variant and serves it to a gzip-only client. Symptom: broken pages for 3% of visitors, mostly on corporate networks, reported as "the site doesn't work here" and impossible to reproduce. This one took a client six weeks.</p>
+
+        <p><strong>Stale <code>.br</code> files.</strong> The build regenerates <code>app.js</code> but the precompression step fails silently, leaving yesterday's <code>app.js.br</code> next to today's <code>app.js</code>. Nginx serves the stale one because it exists. Symptom: a deploy that visibly did not deploy, for Brotli-capable clients only. The <code>-f</code> flag in the script and a check that the <code>.br</code> is newer than its source both guard against this; use both.</p>
+
+        <p><strong>Correct but pointless.</strong> Everything works, everything reports <code>content-encoding: br</code>, and the level-11 build output is being discarded at the edge. Symptom: none whatsoever. This is the one that ran for eight months.</p>
+
+        <p>So roll it out in an order that makes each step verifiable. Static precompression first, with the CI byte-size assertion, because that step has a hard pass/fail. Then the dynamic level, one server at a time if you can, watching CPU rather than watching byte counts. Then the CDN pass-through rules, verified with the origin-versus-edge comparison. Do not do all three in one change, because if the result is worse you will not know which one did it — which is precisely how the distributor lost eleven days.</p>
+
+        <p>And keep the assertion running afterwards. Compression is the sort of thing that works on Tuesday, gets broken by an unrelated infrastructure change on a Thursday four months later, and is discovered the following year.</p>
+
+        <h2>13. Streaming, TTFB, And The Flush Trap</h2>
+
+        <p>Something the byte-count discussion misses entirely.</p>
+
+        <p>Compression buffers. To compress well, the encoder wants to see a chunk of input before it emits anything. For a server that streams HTML — sending the head early so the browser can start fetching CSS while the body is still being assembled — this directly conflicts with the compressor's desire to accumulate.</p>
+
+        <p>On a page using early flushing, an aggressive compression buffer can hold the first flush until the buffer fills, undoing the entire point of streaming. Your TTFB gets worse and your byte count gets slightly better.</p>
+
+        <p>Nginx's <code>brotli_buffers 16 8k</code> means 16 buffers of 8KB. If your early-flush head section is 3KB, it sits in a buffer waiting. The fix is to flush explicitly at the application level and ensure the proxy respects it — <code>proxy_buffering off</code> for the streaming location, or smaller buffers.</p>
+
+        <p>This matters if you are doing streamed server-side rendering, and it does not matter at all otherwise. I mention it because I spent a day on it once, chasing a TTFB regression that appeared when we enabled compression on a Next.js streaming route, and the cause was not obvious from any dashboard.</p>
+
+        <h2>14. Zstandard, Briefly</h2>
+
+        <p>You will see <code>zstd</code> mentioned. It is Facebook's algorithm, it is excellent, and it occupies a different point on the curve: much faster encoding than Brotli at similar ratios, which makes it superb for dynamic content.</p>
+
+        <p>Chrome shipped <code>Content-Encoding: zstd</code> in version 123, March 2024. Firefox followed in 126. Safari has not. So you are looking at maybe 70% of traffic, which means running it as a third encoding alongside Brotli and gzip, with a third set of precompressed files and a third cache variant.</p>
+
+        <p>My position: not yet for storefronts. The gain over Brotli on static assets is small — zstd's advantage is speed, and speed is precisely what you do not need when you compress at build time. For dynamic responses at scale on an API, where encode CPU is the binding constraint, it is genuinely compelling and I would use it. For a shop, add the complexity when Safari ships it.</p>
+
+        <h2>15. Compression And Security: BREACH</h2>
+
+        <p>Brief but not skippable.</p>
+
+        <p>The BREACH attack, published in 2013, exploits HTTP compression to extract secrets. If a response contains both a secret (a CSRF token) and attacker-controlled input (a reflected search term), the attacker can observe compressed response sizes across many requests and infer the secret one character at a time, because a guess that matches the token compresses slightly better.</p>
+
+        <p>This is real, it applies to Brotli exactly as it applies to gzip, and turning compression off is not the mitigation anyone actually uses. What people do instead:</p>
+
+        <p>Do not put CSRF tokens in responses that also reflect user input. Mask the token per request — XOR it with a random value that changes each time, so the compressed size does not correlate. Rate-limit, since the attack needs thousands of requests. And separate secrets from reflected content into different responses where you can.</p>
+
+        <p>Most modern frameworks mask CSRF tokens by default now. Rails does, Django does, Laravel does. If you have hand-rolled session handling, this is worth an hour of checking before you turn compression up on authenticated pages.</p>
+
+        <h2>16. Measuring The Byte Difference</h2>
+
+        <p>Measure the encoding, not the assumption. Every layer between your build and your customer can quietly change it.</p>
+
+<pre><code class="language-bash">#!/usr/bin/env bash
+# What is actually on the wire, per encoding, for a given URL.
+# Run against production. The gap between the br and gzip columns is
+# your real Brotli benefit; the gap to identity is your compression
+# benefit overall, which is the much bigger number.
+URL="${1:?usage: measure.sh URL}"
+
+for enc in "br" "gzip" "identity"; do
+  read -r bytes encoding &lt;&lt;&lt;"$(
+    curl -s -H "Accept-Encoding: ${enc}" -o /dev/null \
+      -w '%{size_download} ' "$URL"
+    curl -s -H "Accept-Encoding: ${enc}" -o /dev/null -D - "$URL" \
+      | awk 'tolower($1) == "content-encoding:" { print $2 }' | tr -d '\r'
+  )"
+  printf '%-10s %8s bytes   (served as: %s)\n' \
+    "$enc" "$bytes" "${encoding:-none}"
+done</code></pre>
+
+        <p>Run that against your five largest assets and your three most-requested HTML templates. That is ten numbers and it will take four minutes, and it is a better picture of your compression posture than any tool will give you.</p>
+
+        <p>For the site-wide view, the resource timing API gives you transfer size and decoded size on every request, and the ratio between them is your real compression rate on real content:</p>
+
+<pre><code class="language-javascript">// Actual compression ratio by resource type, from a real page load.
+// decodedBodySize is what the parser saw; transferSize is what crossed
+// the network including headers. Anything with a ratio near 1.0 is
+// either incompressible or is not being compressed — check which.
+const rows = performance.getEntriesByType('resource')
+  .filter(e =&gt; e.decodedBodySize &gt; 0 &amp;&amp; e.transferSize &gt; 0)
+  .map(e =&gt; ({
+    file: new URL(e.name).pathname.split('/').pop(),
+    type: e.initiatorType,
+    wire: Math.round(e.transferSize / 1024),
+    decoded: Math.round(e.decodedBodySize / 1024),
+    ratio: +(e.transferSize / e.decodedBodySize).toFixed(2),
+  }))
+  // Biggest absolute saving opportunity first, not biggest ratio.
+  .sort((a, b) =&gt; (b.decoded - b.wire) - (a.decoded - a.wire));
+
+console.table(rows.slice(0, 25));</code></pre>
+
+        <p>Sort by absolute bytes rather than by ratio. A file with a terrible ratio that is 2KB does not matter; a file with a decent ratio that is 400KB does.</p>
+
+        <h2>17. Measuring The Latency Difference, Which Is Smaller</h2>
+
+        <p>Here is the part I want to be honest about, because it is where compression articles overclaim.</p>
+
+        <p>Saving 40KB does not save 40KB worth of time. It saves 40KB divided by the effective throughput at that moment, and on a modern connection that number is small. At 10 Mbps, 40KB is about 32ms. At 40 Mbps it is 8ms.</p>
+
+        <p>Where it is worth more than the arithmetic suggests:</p>
+
+        <p><strong>Early in the connection.</strong> TCP slow start means the first few round trips carry very little. A response that fits in the initial congestion window — roughly 14KB — arrives in one round trip. One that is 20KB takes two. Compressing an 18KB HTML document down to 12KB can therefore save an entire RTT, which on mobile is 60–150ms. That is a much bigger effect than the byte count implies, and it is why compressing HTML matters more than compressing a large bundle that was always going to take several round trips.</p>
+
+        <p><strong>On genuinely slow connections.</strong> The 40KB that costs 8ms on fibre costs 640ms on a 500 Kbps rural connection. Your p95 mobile users are the ones who benefit, and they are invisible in your median.</p>
+
+        <p><strong>On metered data.</strong> Not a latency effect at all, but real. A customer on a capped plan cares about your 30% reduction in a way your dashboard cannot see.</p>
+
+        <p>Where it is worth less than claimed: for a fast connection fetching an asset that was already cached, which is most repeat visits. Compression only helps the first fetch. If your <a href="/blog/core-web-vitals/">LCP problem</a> is a render-blocking script or a 900ms server response, compression will not touch it, and I have watched a team spend a fortnight on compression tuning while a 1.4MB unoptimised hero image sat above the fold.</p>
+
+        <p>Do compression because it is cheap, correct, and permanent. Do not expect it to be the thing that fixes a slow site.</p>
+
+        <h2>18. A Worked Example</h2>
+
+        <p>The distributor. Magento 2.4 on AWS, four application servers behind an ALB, Cloudflare in front, roughly 340,000 sessions a month, B2B with a large logged-in population — which matters, because logged-in traffic bypasses the full page cache and is therefore dynamic.</p>
+
+        <p><strong>Where they started.</strong> Gzip level 6 dynamic on everything, no static precompression, Cloudflare compressing at the edge on top. Average HTML transfer 78KB. Main bundle 331KB on the wire. p75 TTFB 340ms.</p>
+
+        <p><strong>What went wrong first.</strong> The <code>brotli_comp_level 11</code> change described at the top. Deployed on a Thursday, TTFB regression visible in RUM by Friday, but attributed to a Magento patch that went out the same day. It took eleven days to find, because nobody suspected the compression change — it was a one-line config edit that everyone agreed was an improvement. Application server CPU had gone from 61% to 78% average and 94% at peak, which in retrospect was the obvious signal and which nobody was watching because CPU had never been interesting before.</p>
+
+        <p>The lesson I took from that is not about Brotli. It is that a change which improves one metric and degrades another will be attributed to whatever else shipped that week, and one-line config changes are the hardest to find because they do not look like deploys.</p>
+
+        <p><strong>What we actually did.</strong> Dynamic Brotli at level 5, replacing gzip 6. Byte-for-byte, dynamic HTML went from 78KB to 68KB with no measurable CPU change against the original gzip baseline.</p>
+
+        <p>Static precompression at level 11 in the Docker build, using the script above, applied to Magento's static content deploy output. This is roughly 4,800 files on a stock-plus-theme install and it added 90 seconds to the build.</p>
+
+        <p>Zopfli for the gzip fallbacks, which gained another 5% on that path.</p>
+
+        <p>Cloudflare cache rules to pass through origin encoding on <code>/static/*</code> and <code>/media/*</code>, and Auto Minify turned off entirely — it was decompressing and recompressing every asset, and its actual minification gain on already-minified files was 0.1%.</p>
+
+        <p><strong>Results, measured over three weeks.</strong> Main bundle 331KB to 259KB on the wire, a 22% reduction. Total transfer on a cold product page load 1.34MB to 1.09MB. Application server CPU down 9% from the original gzip baseline, because static assets stopped being compressed at request time. p75 TTFB 340ms to 318ms. p75 LCP 2.9s to 2.7s.</p>
+
+        <p><strong>The honest assessment.</strong> A 200ms LCP improvement for a day and a half of work is a good return, and it is not a transformation. In the same quarter, deferring three marketing scripts bought 600ms and took an afternoon. Compression is table stakes: you should have it, it should be configured properly, and it is unlikely to be your biggest available win.</p>
+
+        <p><strong>What I would do differently.</strong> Start with the static precompression, not the dynamic level. The static side has no downside, needs no tuning, and delivered most of the benefit. The dynamic level is where the risk lives and where I created a two-week regression. If I had done them in the other order, the CPU signal would have been unambiguous.</p>
+
+        <h2>19. Questions People Ask</h2>
+
+        <p><strong>"Should I use Brotli or gzip?"</strong> Both. Brotli for the 96% of clients that support it, gzip precompressed for the rest. This is not an either/or and framing it as one is what leads people to drop the fallback.</p>
+
+        <p><strong>"What level should I use?"</strong> 11 for anything compressed at build time. 4 or 5 for anything compressed in the request path. There is no situation on a storefront where 7 through 10 is the right answer — you are either paying request-time CPU, in which case go lower, or you are not, in which case go to 11.</p>
+
+        <p><strong>"My CDN says it does Brotli. Am I done?"</strong> No. Edge Brotli is level 4 or 5 and it applies to what your origin sent. You still want build-time level 11 on immutable assets, and you want to verify the edge is passing it through rather than re-encoding.</p>
+
+        <p><strong>"Does compression affect SEO?"</strong> Indirectly and weakly, via response time and page weight, the same as any performance work. There is no compression signal. What is real: a smaller page is crawled faster and Googlebot supports Brotli, so your crawl budget goes fractionally further. On a large catalogue that is worth something. It will not move a ranking on its own.</p>
+
+        <p><strong>"Is it worth compressing already-minified JavaScript?"</strong> Very much so — they are orthogonal. Minification removes whitespace and shortens identifiers; compression removes redundancy. Minified code compresses slightly worse in ratio terms because some redundancy is already gone, but the absolute output is far smaller. Do both, minify first.</p>
+
+        <p><strong>"What about compressing images?"</strong> Different problem entirely. Image bytes are addressed by format and by sizing, not by transport compression. Serving an AVIF instead of a JPEG saves an order of magnitude more than any Brotli setting; the <a href="/blog/responsive-webp-images/">format and srcset work</a> is where that effort belongs.</p>
+
+        <p><strong>"How much disk does precompression cost?"</strong> Roughly 30% of your asset directory for the <code>.br</code> files plus 35% for the <code>.gz</code>, so call it 1.65× your build output. On a build that produces 200MB, that is 130MB. It is not a consideration.</p>
+
+        <p><strong>"Can I precompress dynamic content?"</strong> Not directly, but you can cache the compressed result, which amounts to the same thing. Nginx's proxy cache stores the compressed response, so a cached page is compressed once and served many times. This is another reason a decent cache hit rate makes every other optimisation cheaper.</p>
+
+        <p><strong>"Why is my JSON API not compressed?"</strong> Nearly always a missing MIME type. <code>application/json</code> is in most default lists but <code>application/vnd.api+json</code>, <code>application/ld+json</code> and custom vendor types are not, and a GraphQL endpoint returning <code>application/graphql-response+json</code> will sail past a stock configuration uncompressed. Check the actual <code>Content-Type</code> your API emits against your <code>brotli_types</code> list.</p>
+
+        <p><strong>"Does HTTP/2 or HTTP/3 change any of this?"</strong> Header compression changes — HPACK and QPACK compress headers, which is separate from body compression and happens automatically. Body compression is unchanged. What does change is that multiplexing removes the incentive to concatenate everything into one giant bundle, and smaller files compress slightly worse individually, so there is a mild tension there. Not enough to change how you bundle.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>Check what is actually on the wire before changing anything. Run the three-encoding curl comparison against your largest bundle and your busiest HTML template. You may find you are already fine, or you may find you are shipping something uncompressed, and either answer saves you a week.</p>
+
+        <p>Add build-time precompression at level 11 for every immutable asset, with gzip fallbacks via zopfli. No tuning, no risk, no request-path cost. This is the change with the best ratio of benefit to danger in the whole article and it is the one people do last.</p>
+
+        <p>Turn on <code>brotli_static</code> and <code>gzip_static</code>, then assert in CI that the served bytes match the built bytes. Without that assertion you will not notice when it stops working, and it will stop working.</p>
+
+        <p>Only then look at the dynamic level. Set it to 5, watch application CPU for a week, and drop to 4 if CPU is tight. Do not go higher, whatever the level number implies about quality.</p>
+
+        <p>Audit your CDN for re-encoding. Compare origin bytes against edge bytes for one asset. If they differ by more than a few hundred bytes, your build-time compression is being discarded and you have been paying for it in build minutes for nothing.</p>
+
+        <p>Check your MIME type list against what your APIs actually return, particularly GraphQL and anything with a vendor content type.</p>
+
+        <p>Then measure LCP and TTFB in the field, before and after, and be prepared for the improvement to be modest. Compression is hygiene. It should be right, it should stay right, and the day you find yourself tuning it for a third week is the day to go and look at your images instead.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify Stores</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
               <p>Network performance optimizations and latency reduction techniques.</p>
             </li>
             <li>
@@ -356,7 +812,6 @@ echo "Static asset compression complete."
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -390,6 +845,6 @@ echo "Static asset compression complete."
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

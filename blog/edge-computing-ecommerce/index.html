@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Edge Computing in Modern E-Commerce Infrastructure | MODRACX</title>
-  <meta name="description" content="Technical guide on deploying Cloudflare Workers and Fastly Compute@Edge for instant HTML rewrites, AB testing, and geo-currency conversion." />
+  <meta name="description" content="What actually runs at the edge: V8 isolates, the missing TCP sockets, CPU budgets, and why compute near the user but far from the data is usually slower." />
   <meta property="og:title" content="Edge Computing in Modern E-Commerce Infrastructure | MODRACX" />
   <meta property="og:description" content="Technical guide on deploying Cloudflare Workers by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Edge Computing in Modern E-Commerce Infrastructure</h1>
-        <p class="lede">Edge workers execute logic inside 300+ CDN points of presence globally, executing requests in under 10ms close to the end user.</p>
+        <p class="lede">They moved product rendering into a Worker to get closer to customers, and time to first byte went from 340ms to 610ms. The compute moved one hop nearer the shopper and four hops further from the data.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 26 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,30 +205,468 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Cloudflare Worker HTML Rewriter Example</h2>
+        <h2>1. The Rewrite That Moved Compute Closer and Made It Slower</h2>
 
-        <pre><code class="language-javascript">// Cloudflare Worker Dynamic HTML Rewriter for A/B Testing
-export default {
-  async fetch(request) {
-    const response = await fetch(request);
-    const cookie = request.headers.get('Cookie') || '';
-    const variant = cookie.includes('ab_group=B') ? 'Variant B' : 'Variant A';
+        <p>A laboratory equipment retailer I worked with in 2023 had a product page that took about 340ms to first byte from their origin in Frankfurt. Their customers were mostly in the UK, Germany and the Netherlands, so that number was decent. Then someone read a Cloudflare case study and decided the product page should be rendered at the edge instead.</p>
+
+        <p>The migration took a fortnight. The rendering logic moved into a Worker. The Worker fetched product data over HTTP from their commerce API, assembled the HTML, and returned it. Compute now ran in about 280 points of presence rather than one rack in Frankfurt. On paper this was strictly better.</p>
+
+        <p>Time to first byte went to 610ms.</p>
+
+        <p>The reason was embarrassing once we drew it. A customer in Manchester used to make one request that travelled to Frankfurt and back — roughly 30ms of network each way, plus origin work. Now the customer's request landed in Manchester in about 4ms, and then the Worker in Manchester made three API calls to a commerce backend still sitting in Frankfurt. Three sequential round trips of 60ms each, plus TLS setup on the first one because the connection pool at that PoP was cold. We had moved the compute one hop closer to the customer and four hops further from the data, and the data was where all the time went.</p>
+
+        <p>That is the single most important thing to understand about edge computing, and it is the thing the marketing never says. The edge is not a faster version of your server. It is a different place to put code, with different physics, a different runtime, and a different set of things it is good at. Put the wrong work there and you will make your storefront slower while feeling like you modernised it.</p>
+
+        <p>This article is the conceptual groundwork: what actually runs at the edge, what the runtime will and will not let you do, and how to reason about whether a given piece of work belongs there. I have written separately about <a href="/blog/vercel-nextjs-edge-rendering-ecommerce/">how this plays out specifically on Vercel and Next.js</a>, and about <a href="/blog/edge-personalization/">personalising cached pages at the edge</a>, which is the use case people usually have in mind. This one is the layer underneath both.</p>
+
+        <h2>2. What People Mean When They Say Edge</h2>
+
+        <p>The word has been stretched to the point of uselessness. In ecommerce conversations it usually means one of four quite different things.</p>
+
+        <p><strong>A CDN cache.</strong> Static assets and cached HTML served from a PoP near the customer. No code of yours runs. This is the oldest and by far the most valuable form of "edge", and most teams have not finished extracting value from it before they start writing Workers.</p>
+
+        <p><strong>Configurable CDN logic.</strong> VCL on Fastly, page rules and transform rules on Cloudflare, CloudFront Functions on AWS. A constrained, declarative-ish layer for header manipulation, redirects, and cache key rewriting. Extremely fast, extremely limited, and underused.</p>
+
+        <p><strong>Edge compute.</strong> Your JavaScript or WebAssembly running in a sandbox at the PoP. Cloudflare Workers, Fastly Compute, Deno Deploy, Vercel Edge Functions, AWS Lambda@Edge (which is a special case I will come back to, because it is not really edge compute in the same sense). This is what the rest of this article is about.</p>
+
+        <p><strong>Regional serverless dressed up.</strong> Some platforms market a function running in a single cloud region as "edge" because it sits behind a CDN. It is not. If your code runs in one place, the distance from the customer to that place is still in every request.</p>
+
+        <p>The distinction that matters operationally is between the first two — where no code of yours executes and latency is a few milliseconds — and the third, where your code executes and everything about the runtime is constrained. People conflate them constantly, and then wonder why "the edge" turned out to be complicated.</p>
+
+        <h2>3. Isolates, Not Containers</h2>
+
+        <p>Edge compute platforms almost universally run V8 isolates rather than containers. This is the architectural decision that determines every constraint you will run into, so it is worth understanding properly rather than as a slogan.</p>
+
+        <p>A container-based function — a normal AWS Lambda, a Google Cloud Function, a Vercel Node function — gets a Linux userland. There is a filesystem, a process, a full Node runtime with native modules, and a network stack you can open arbitrary sockets on. To start one, the platform allocates a sandbox, boots the runtime, and loads your code. That is a few hundred milliseconds on a good day.</p>
+
+        <p>An isolate is a sandbox inside an already-running V8 process. Creating one is a matter of allocating a fresh JavaScript context and evaluating your script. The process is already warm; hundreds or thousands of isolates share it. Start-up is typically under 5ms, and on a PoP that has run your script recently it is effectively zero because the compiled script is cached.</p>
+
+        <p>The consequences run in both directions.</p>
+
+        <p>On the good side: no cold start problem in the sense that dominates regional serverless. I covered cold starts and their effect on crawl behaviour in the <a href="/blog/serverless-seo-performance/">serverless SEO article</a> and will not repeat that argument here, except to say that the entire class of problem largely evaporates on isolates. You do not need provisioned concurrency. You do not need warming pings. A Worker that has not run in three days answers its next request in single-digit milliseconds.</p>
+
+        <p>On the bad side: you do not have a Linux userland. There is no filesystem. There is no process. There are no native Node modules, because there is no place to load a <code>.node</code> binary into. And — the one that breaks the most real applications — there is no raw socket API, so your database driver does not work.</p>
+
+        <h2>4. The API Surface You Actually Get</h2>
+
+        <p>Edge runtimes converged, roughly, on the WinterCG minimum common API: the set of web-platform globals that make sense outside a browser. In practice that means you get <code>fetch</code>, <code>Request</code>, <code>Response</code>, <code>Headers</code>, <code>URL</code>, <code>URLSearchParams</code>, <code>TextEncoder</code>, streams, <code>crypto.subtle</code>, <code>atob</code>, structured clone, and the timer functions. That is a genuinely usable surface for HTTP work.</p>
+
+        <p>What you do not get, and what breaks packages:</p>
+
+        <pre><code class="language-javascript">// All of these fail in an edge runtime.
+import fs from 'node:fs';              // no filesystem
+import net from 'node:net';            // no raw sockets
+import crypto from 'node:crypto';      // partially shimmed at best
+import { Pool } from 'pg';             // needs net
+import sharp from 'sharp';             // native binary
+import mongoose from 'mongoose';       // needs a TCP driver
+
+// The equivalents that do work:
+const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sku));
+const res  = await fetch('https://api.example.com/products/' + sku, {
+  headers: { authorization: 'Bearer ' + env.API_TOKEN }
+});</code></pre>
+
+        <p>Some platforms have added partial Node compatibility layers. Cloudflare's <code>nodejs_compat</code> flag shims a growing subset — <code>node:buffer</code>, <code>node:crypto</code>, <code>node:util</code>, and since 2024 a genuine TCP socket API via <code>node:net</code> on Workers specifically. Vercel's edge runtime does not offer that socket escape hatch. Treat compatibility flags as a way to get a specific library working, not as a promise that arbitrary npm packages will run.</p>
+
+        <p>The practical test I use before committing anything to the edge: take the dependency tree of the code you want to move and check whether anything in it touches the filesystem, opens a socket, or ships a binary. If yes, either replace it with an HTTP-based equivalent or the work does not belong at the edge. This is a five-minute check and it has saved me several weeks.</p>
+
+        <pre><code class="language-bash"># Rough triage: what in the tree is native or filesystem-bound?
+npm ls --all --parseable 2&gt;/dev/null | xargs -I{} sh -c \
+  'ls {}/*.node 2&gt;/dev/null; ls {}/build/Release/*.node 2&gt;/dev/null' | sort -u
+
+# And what imports node builtins that edge runtimes lack
+grep -rEl "require\('(fs|net|tls|child_process|dns)'\)|from '(node:)?(fs|net|tls)'" node_modules --include=*.js | head</code></pre>
+
+        <h2>5. No TCP Sockets, and Why That Is the Whole Story</h2>
+
+        <p>Everything about how you architect edge work in ecommerce follows from one restriction: in most edge runtimes you cannot open an arbitrary TCP connection. You can make HTTP requests. That is it.</p>
+
+        <p>PostgreSQL speaks a binary protocol over TCP. So do MySQL, MongoDB, Redis, and Elasticsearch's transport client. None of them are reachable from a Worker without an intermediary. What you get instead is one of three patterns.</p>
+
+        <p><strong>An HTTP proxy in front of the database.</strong> Neon's serverless driver, PlanetScale's HTTP driver, Supabase's PostgREST, Upstash's REST API for Redis. Your query goes out as an HTTP request to a service that holds real TCP connections to the database and relays the result. This works and is the standard answer. It also means every query costs an HTTPS round trip from the PoP to wherever the proxy lives, which brings us straight back to the geography problem.</p>
+
+        <pre><code class="language-javascript">// Upstash Redis over HTTP — works from an isolate, because it is just fetch.
+async function getSegment(env, customerId) {
+  const res = await fetch(`${env.UPSTASH_URL}/get/seg:${customerId}`, {
+    headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
+    // Cache the lookup at the PoP for a minute. Segments do not change
+    // second to second, and this turns most calls into a local hit.
+    cf: { cacheTtl: 60, cacheEverything: true }
+  });
+  if (!res.ok) return null;                 // fail open, never block the page
+  const { result } = await res.json();
+  return result;
+}</code></pre>
+
+        <p><strong>A platform-native store.</strong> Cloudflare KV, Durable Objects, D1, R2; Vercel KV and Edge Config; Deno KV. These are designed for the runtime and reachable without a proxy. They have very different consistency and latency characteristics, covered below where I go through state.</p>
+
+        <p><strong>Do not touch data at all.</strong> The Worker reads the request, the cookies, the geo headers, and whatever the CDN already has cached, and makes a decision from that. No origin call, no database. This is the pattern that actually pays off, and it is the one I push clients towards.</p>
+
+        <p>I want to be blunt about the middle-ground temptation. Teams see "you can call an HTTP database from the edge" and conclude the socket restriction is solved. It is not solved, it is relocated. You have swapped a 1ms local socket call for a 40–120ms HTTPS call from a PoP that may be nowhere near the database. The restriction was doing you a favour by making the cost visible.</p>
+
+        <h2>6. The Geography Problem, With Arithmetic</h2>
+
+        <p>Here is the calculation I now do on a whiteboard before anyone writes a line of Worker code. It is trivial arithmetic and it settles most arguments.</p>
+
+        <p>Let <em>u</em> be the round-trip time from customer to nearest PoP, <em>o</em> the round-trip from customer to origin, and <em>d</em> the round-trip from PoP to your data. Assume <em>n</em> sequential data fetches and <em>w</em> milliseconds of actual work.</p>
+
+        <p>Origin rendering costs roughly <em>o</em> + <em>w</em>, because the origin sits next to its own database and those round trips are sub-millisecond. Edge rendering costs <em>u</em> + <em>n</em>·<em>d</em> + <em>w</em>. Edge wins only when <em>o</em> is greater than <em>u</em> + <em>n</em>·<em>d</em>.</p>
+
+        <p>Plug in the laboratory equipment retailer's real numbers. Customer in Manchester, origin in Frankfurt: <em>o</em> was about 60ms. Nearest PoP about 8ms. Commerce API still in Frankfurt, so <em>d</em> from a Manchester PoP was about 55ms. Three sequential calls. Origin: 60 + 40 = 100ms of the budget. Edge: 8 + 165 + 40 = 213ms. The whiteboard would have taken four minutes and saved a fortnight.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Scenario</th><th>Data fetches</th><th>Origin path</th><th>Edge path</th><th>Winner</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>UK customer, EU origin, EU data</td><td>3 sequential</td><td>~100ms</td><td>~213ms</td><td>Origin</td></tr>
+            <tr><td>Sydney customer, EU origin, EU data</td><td>3 sequential</td><td>~630ms</td><td>~910ms</td><td>Origin</td></tr>
+            <tr><td>Sydney customer, EU origin, 0 fetches (cache hit)</td><td>0</td><td>~630ms</td><td>~15ms</td><td>Edge, enormously</td></tr>
+            <tr><td>Sydney customer, replicated data</td><td>3 sequential</td><td>~630ms</td><td>~50ms</td><td>Edge</td></tr>
+            <tr><td>Any customer, decision from cookie only</td><td>0</td><td>~100ms+</td><td>~6ms</td><td>Edge</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two conclusions fall straight out of that table. First, the value of the edge is overwhelmingly in the rows with zero data fetches. Second, if you must fetch data, the only way edge compute wins is if the data is also distributed — which is a much bigger and more expensive project than deploying a Worker, and is the part everyone skips.</p>
+
+        <h2>7. Sequential Fetches Are the Killer</h2>
+
+        <p>Note that <em>n</em> in the formula multiplies <em>d</em>. Latency from a PoP to a distant origin is a fixed tax you pay per round trip, so a piece of code that made three chatty calls comfortably at the origin becomes three times as expensive at the edge. The laboratory equipment retailer's Worker was written by a developer used to a Frankfurt server where each API call was 4ms; nobody thought about the call count because it had never mattered.</p>
+
+        <p>If you do end up fetching from the edge, the discipline is different from origin code:</p>
+
+        <pre><code class="language-javascript">// Origin habits: sequential, readable, each call is 4ms. Fine there.
+const product = await api.get(`/products/${sku}`);
+const stock   = await api.get(`/inventory/${product.id}`);
+const related = await api.get(`/related/${product.id}`);
+
+// Edge habits: one round trip, or none.
+// Best: a single composed endpoint the origin builds for you.
+const page = await fetch(`${env.API}/pdp-bundle/${sku}`);
+
+// Acceptable: parallelise everything that has no dependency.
+const [stock, related] = await Promise.all([
+  fetch(`${env.API}/inventory/${sku}`),
+  fetch(`${env.API}/related/${sku}`)
+]);</code></pre>
+
+        <p>The composed-endpoint pattern — sometimes called a backend-for-frontend, though the term has been diluted — is usually the right answer when edge rendering genuinely makes sense. You accept one round trip to a distant origin and let the origin do its own cheap local fan-out. The tax is paid once.</p>
+
+        <p>There is also a subtler cost. A Worker's outbound <code>fetch</code> to a distant origin needs a TCP and TLS handshake if the PoP has no warm connection to that host. On a PoP that serves your Worker rarely — and most PoPs serve most Workers rarely — you are paying a full handshake, which is another one to two round trips on top. Platforms pool and reuse connections where they can, but on a long-tail PoP the first request of the hour is materially slower than the profile you measured from a busy one.</p>
+
+        <h2>8. CPU Time Is the Constraint Nobody Reads About</h2>
+
+        <p>Edge platforms bill and limit on CPU time, not wall-clock time, and the limits are tight. Cloudflare's free tier historically allowed 10ms of CPU per invocation, paid plans 30 seconds if configured but with a default far lower; Vercel's edge runtime has its own ceiling. Time spent awaiting a <code>fetch</code> does not count. Time spent parsing, templating, JSON-decoding and string-building does.</p>
+
+        <p>This changes what "expensive" means. At the origin, a 40KB JSON parse is free — you have a whole core. In an isolate sharing a process with several hundred other tenants, it is a meaningful fraction of your budget. I have watched a Worker that did nothing but decode a large catalogue response and pick four fields blow its CPU limit under load and start returning 1102 errors, which surface to the customer as a blank page.</p>
+
+        <pre><code class="language-javascript">// Expensive at the edge: decode 400KB to read three fields.
+const all = await (await fetch(catalogueUrl)).json();
+const item = all.products.find(p =&gt; p.sku === sku);
+
+// Cheap: make the origin do the selection, or stream and match.
+const item = await (await fetch(`${catalogueUrl}?sku=${sku}`)).json();
+
+// Also cheap: never materialise the body at all when you are only
+// rewriting a fragment of the HTML.
+return new HTMLRewriter()
+  .on('meta[property="og:title"]', {
+    element(el) { el.setAttribute('content', title); }
+  })
+  .transform(originResponse);</code></pre>
+
+        <p>The general rule I hold to: an edge handler should be a router and a decision-maker, not a renderer. If it is building more than a few kilobytes of string, ask why the origin is not doing that once and caching the result.</p>
+
+        <h2>9. Streaming and Transforming Rather Than Building</h2>
+
+        <p>The technique that makes edge compute genuinely cheap for HTML work is transformation on a stream. Rather than fetching the origin response, buffering it, parsing it and re-emitting it, you pipe it through a transformer that operates on tokens as they pass.</p>
+
+        <p>Cloudflare's <code>HTMLRewriter</code> is the best-known implementation — a streaming parser with a CSS-selector API implemented in Rust, so the parsing itself does not burn your JavaScript CPU budget. Fastly's Compute has similar patterns via its streaming body API. The effect on time to first byte is significant: the first bytes of the origin response reach the customer while the tail is still being transformed, so the transformation is nearly free in wall-clock terms.</p>
+
+        <pre><code class="language-javascript">export default {
+  async fetch(request, env) {
+    const origin = await fetch(request);
+
+    // Only transform HTML. Piping an image through a rewriter is a
+    // pure waste of CPU and I have seen it shipped.
+    const type = origin.headers.get('content-type') || '';
+    if (!type.includes('text/html')) return origin;
+
+    const country = request.headers.get('cf-ipcountry') || 'GB';
 
     return new HTMLRewriter()
-      .on('span.hero-cta-text', {
-        element(el) {
-          el.setInnerContent(variant);
-        }
+      .on('html', {
+        element(el) { el.setAttribute('data-country', country); }
       })
-      .transform(response);
+      .on('span.price', {
+        // Runs per matched element as the stream passes. No buffering.
+        element(el) { el.setAttribute('data-currency', currencyFor(country)); }
+      })
+      .transform(origin);
   }
 };</code></pre>
 
-        <hr />
+        <p>What I would not do is use a rewriter to inject substantial personalised content into a page. It works, and it is the demo everyone writes, and it quietly makes the response uncacheable downstream unless you are very careful about how the cache key is constructed. That trade-off is the entire subject of the <a href="/blog/edge-personalization/">personalisation article</a>, so I will leave it there.</p>
+
+        <h2>10. State at the Edge and What Consistency You Get</h2>
+
+        <p>Once you accept that fetching from a distant database defeats the purpose, the obvious move is to put data at the edge too. Every platform offers something. The differences matter enormously and the marketing pages flatten them.</p>
+
+        <p><strong>Eventually-consistent key-value.</strong> Cloudflare KV, Vercel Edge Config. Writes propagate globally over seconds to a minute. Reads at a PoP that has the value cached are sub-millisecond; reads at a cold PoP go to a central store and cost a round trip. Excellent for configuration, feature flags, redirect maps, A/B test definitions, geo-to-currency tables. Actively dangerous for anything where a stale read causes a wrong answer — inventory counts, prices, cart contents.</p>
+
+        <p><strong>Strongly-consistent single-instance objects.</strong> Cloudflare Durable Objects. One object, one location, serialised access. Genuinely useful for coordination — a rate limiter, a lock, a live stock counter for one SKU. The catch is that it lives somewhere specific, so a customer far from that somewhere pays the distance. You have reinvented a regional service with better ergonomics.</p>
+
+        <p><strong>Distributed SQL.</strong> D1, Turso, PlanetScale with read replicas. Read replicas near PoPs, writes to a primary. The replication lag is the thing to model, not ignore.</p>
+
+        <p>The rule I apply: data that is read constantly, written rarely, and tolerant of being a minute stale belongs at the edge. Everything else does not. A currency table qualifies. A redirect map from a legacy URL scheme qualifies beautifully. Stock levels do not, and a "low stock" badge rendered from a KV read that is forty seconds behind is worse than no badge.</p>
+
+        <pre><code class="language-javascript">// A redirect map in KV: the canonical good use of edge state.
+// 40,000 legacy URLs, read on every 404-eligible request, changed monthly.
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const target = await env.REDIRECTS.get(url.pathname, {
+      // Cache the KV read at the PoP; the map changes monthly, not hourly.
+      cacheTtl: 3600
+    });
+    if (target) {
+      return Response.redirect(new URL(target, url).toString(), 301);
+    }
+    return fetch(request);
+  }
+};</code></pre>
+
+        <p>That Worker replaced 40,000 lines of nginx rewrite rules for a client mid-migration, cut their config reload time from ninety seconds to nothing, and let the marketing team edit redirects without a deploy. It never touches a database. It is the shape of edge work that actually pays.</p>
+
+        <h2>11. Lambda@Edge and Why It Is a Different Animal</h2>
+
+        <p>AWS's Lambda@Edge deserves a paragraph because teams assume it is equivalent and it is not. It runs full Node in a container, not an isolate, at CloudFront regional edge caches — of which there are around a dozen, not hundreds. So you get real Node with sockets and native modules, and you get container cold starts, and you are not actually very close to the customer.</p>
+
+        <p>CloudFront Functions are the other half: a genuinely edge-located, extremely restricted JavaScript environment with a sub-millisecond budget, no network access at all, and a 10KB code limit. Header manipulation, URL rewriting, simple redirects. Nothing else.</p>
+
+        <p>If you are on AWS, the honest mapping is that CloudFront Functions are your Workers-equivalent for the trivial cases, and Lambda@Edge is a regional function that happens to be triggered by CloudFront. Choosing Lambda@Edge because you want "edge performance" and then hitting 700ms cold starts is a very common and entirely avoidable disappointment.</p>
+
+        <h2>12. What Genuinely Belongs at the Edge</h2>
+
+        <p>After several of these projects, the list of work I am confident about is shorter than I expected and quite specific.</p>
+
+        <p><strong>Redirects and URL normalisation.</strong> Legacy URL maps, trailing slashes, lowercase enforcement, locale prefixes. Zero data dependency beyond a lookup table, enormous latency saving over a round trip to the origin for a 301.</p>
+
+        <p><strong>Geo and locale routing.</strong> The PoP already knows the country from the IP and hands it to you as a header. Deciding which locale a first-time visitor should see is a pure function of that header plus <code>Accept-Language</code> plus a cookie.</p>
+
+        <p><strong>Bot handling and rate limiting.</strong> Rejecting a scraper at the PoP costs nothing and never reaches your origin or your function bill. This is one of the clearest wins there is.</p>
+
+        <p><strong>Auth token validation.</strong> Verifying a JWT signature with <code>crypto.subtle</code> takes microseconds and lets you reject unauthenticated requests before they consume anything expensive. Verify at the edge, authorise at the origin.</p>
+
+        <p><strong>A/B assignment.</strong> Deciding which variant a visitor gets, writing the cookie, and rewriting the cache key. The assignment is cheap; making the cached page vary correctly is the hard part.</p>
+
+        <p><strong>Header and security policy.</strong> Applying CSP, HSTS and the rest uniformly across a set of origins that do not agree with each other.</p>
+
+        <p><strong>Serving from cache with a computed key.</strong> By far the most valuable, and it is not really compute at all.</p>
+
+        <pre><code class="language-javascript">// JWT signature check at the edge. Reject before the origin is touched.
+async function verify(token, secretKey) {
+  const [h, p, s] = token.split('.');
+  if (!h || !p || !s) return false;
+  const data = new TextEncoder().encode(`${h}.${p}`);
+  const sig  = Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')),
+                               c =&gt; c.charCodeAt(0));
+  const ok = await crypto.subtle.verify('HMAC', secretKey, sig, data);
+  if (!ok) return false;
+  // Expiry is a claim check, not a crypto check, and people forget it.
+  const claims = JSON.parse(atob(p));
+  return claims.exp &gt; Math.floor(Date.now() / 1000);
+}</code></pre>
+
+        <h2>13. What Does Not Belong There</h2>
+
+        <p>The mirror list, which I find more useful because it is the one that gets ignored.</p>
+
+        <p><strong>Anything that reads your primary database.</strong> Covered above. The distance is the whole problem and an HTTP driver does not remove it.</p>
+
+        <p><strong>Checkout and payment.</strong> These need strong consistency, PCI scope control, a transaction boundary and an audit trail. They also do not need to be fast in the way a product page does — a customer who has entered card details will wait 300ms. Put checkout next to your data. Every time I have seen someone try to distribute it, the reasoning was aesthetic rather than measured.</p>
+
+        <p><strong>Full page rendering with live data.</strong> Unless your data is genuinely replicated to the edge, this is the laboratory equipment retailer's mistake with a different logo on it.</p>
+
+        <p><strong>Heavy computation.</strong> Image processing, PDF generation, search index queries, anything with a real CPU cost. The CPU budget is small and the billing is unforgiving.</p>
+
+        <p><strong>Anything with a long tail of npm dependencies you did not audit.</strong> You will spend more time on bundling and polyfills than the latency saving is worth.</p>
+
+        <p><strong>Session storage.</strong> Sessions want consistency; eventually-consistent KV will hand a customer a stale session across PoPs and produce bugs that reproduce for nobody.</p>
+
+        <h2>14. Debugging Code That Runs in 300 Places</h2>
+
+        <p>This is the operational cost that nobody budgets for. An origin server has a log file, a shell, a profiler and a debugger. A Worker has none of those. When a customer in São Paulo reports a broken page and every test you run from London is fine, you need a plan that you should have made in advance.</p>
+
+        <p>What has actually worked for me:</p>
+
+        <p><strong>Emit the PoP identity into a response header on every request.</strong> Cloudflare gives you the colo in <code>request.cf.colo</code>; other platforms have equivalents. Put it in a header and ask the customer for a HAR file or a screenshot of their network tab. Without this you are guessing which of 300 locations misbehaved.</p>
+
+        <pre><code class="language-javascript">export default {
+  async fetch(request, env, ctx) {
+    const started = Date.now();
+    const res = await handle(request, env);
+    const out = new Response(res.body, res);
+
+    // Cheap forensic breadcrumbs. Strip in production if they leak too much.
+    out.headers.set('x-edge-colo', request.cf?.colo ?? 'unknown');
+    out.headers.set('x-edge-ms', String(Date.now() - started));
+    out.headers.set('x-edge-cache', res.headers.get('cf-cache-status') ?? 'n/a');
+
+    // Ship the log without making the customer wait for it.
+    ctx.waitUntil(fetch(env.LOG_SINK, {
+      method: 'POST',
+      body: JSON.stringify({
+        colo: request.cf?.colo, ms: Date.now() - started,
+        path: new URL(request.url).pathname, country: request.cf?.country
+      })
+    }));
+    return out;
+  }
+};</code></pre>
+
+        <p><strong>Use <code>waitUntil</code> for every side effect.</strong> Logging, analytics, cache warming. If you <code>await</code> them, the customer waits for them, and the whole point was to be fast.</p>
+
+        <p><strong>Have a kill switch that does not require a deploy.</strong> A single KV key or Edge Config value that makes the Worker pass every request straight through. Deploys propagate in seconds on most platforms, but a config read is faster and does not require anyone to have build credentials at two in the morning.</p>
+
+        <p><strong>Fail open, always.</strong> Wrap the whole handler. A Worker that throws returns an error page for the entire site, and that is a far worse outcome than a page without personalisation.</p>
+
+        <pre><code class="language-javascript">export default {
+  async fetch(request, env, ctx) {
+    if (await env.CONFIG.get('edge_bypass') === '1') return fetch(request);
+    try {
+      return await handle(request, env, ctx);
+    } catch (err) {
+      ctx.waitUntil(report(err, request, env));
+      return fetch(request);   // origin still works; degrade, do not break
+    }
+  }
+};</code></pre>
+
+        <h2>15. Testing, and Why Local Development Lies</h2>
+
+        <p>Local emulators — <code>wrangler dev</code>, the Vercel edge runtime shim — run your code in something close to the real isolate, and they are good. What they cannot reproduce is distance, PoP cache state, connection warmth, or the CPU contention of a shared process. Every performance conclusion you draw locally is wrong in the same direction: optimistic.</p>
+
+        <p>Three things I now insist on before an edge change goes live.</p>
+
+        <p><strong>Measure from at least four continents.</strong> Not from your laptop and not from a monitoring node in the same city as your origin. The whole premise of edge compute is geographic, so a single-location measurement cannot validate it.</p>
+
+        <pre><code class="language-bash"># Crude but revealing: TTFB from a handful of regions, ten samples each.
+for host in lhr fra iad sin syd; do
+  total=0
+  for i in $(seq 1 10); do
+    t=$(curl -o /dev/null -s -w '%{time_starttransfer}' \
+        --resolve "shop.example.com:443:$(dig +short $host.probe.example.com | head -1)" \
+        https://shop.example.com/product/oak-side-table)
+    total=$(echo "$total + $t" | bc -l)
+  done
+  echo "$host $(echo "$total / 10 * 1000" | bc -l | cut -c1-6) ms"
+done</code></pre>
+
+        <p><strong>Test with a cold PoP.</strong> Request from a location nobody in your team uses. The second request from a PoP is always faster than the first, and your monitoring hits the same handful of PoPs constantly, so it never sees the cold case that a real customer in a small market gets every time.</p>
+
+        <p><strong>Test with the cache disabled and with it warm, separately.</strong> These are different systems and averaging them tells you nothing, exactly as averaging cold and warm serverless invocations tells you nothing.</p>
+
+        <h2>16. The Cost Model Is Not the Same Shape</h2>
+
+        <p>Edge compute is billed per request and per unit of CPU, and the per-request number is small enough that people assume it is free. On a storefront it usually is not, for a reason that catches teams out: a Worker that sits in front of everything runs on every request, including the ones that would have been pure cache hits.</p>
+
+        <p>Do the sum properly. A mid-sized storefront serving 40 million requests a month — which includes assets, and bots, and the monitoring you forgot about — running a Worker on every route runs the Worker 40 million times. At Cloudflare's paid rate that is a modest line item; on a platform charging more per invocation it is not. And if the Worker adds even 2ms of CPU on a cache hit that used to cost you nothing, you have introduced a tax on your cheapest requests to benefit your most expensive ones.</p>
+
+        <p>The mitigation is routing. Do not run the Worker on paths that cannot benefit.</p>
+
+        <pre><code class="language-javascript">// Next.js middleware matcher. The negative lookahead is doing real work:
+// static assets, images and the API never invoke the edge function at all.
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|api|favicon.ico|.*\\..*).*)']
+};</code></pre>
+
+        <p>On Cloudflare the equivalent is route patterns rather than a catch-all <code>*/*</code>, and I have cut a client's Worker invocations by 71% simply by excluding <code>/assets/*</code> and <code>/media/*</code>, which had never needed to run any code.</p>
+
+        <p>The other cost that surprises people is egress from the edge to your origin. Every Worker <code>fetch</code> to your origin is a request your origin serves and pays for, and if the Worker is not caching the response you have added a hop without removing any load.</p>
+
+        <h2>17. Worked Example: A Distributor With 60,000 SKUs</h2>
+
+        <p>A laboratory equipment distributor, Magento 2 backend in a Dublin data centre, customers across the UK, Ireland, Benelux and — increasingly, which was the trigger — the Gulf. Their Dubai customers were seeing 1.4 to 1.9 second time to first byte on category pages. Dublin to Dubai is about 190ms of round trip on a good path, and their pages were making the browser do several sequential requests before anything rendered.</p>
+
+        <p>The first proposal on the table was to render category pages at the edge. I argued against it and the argument was the arithmetic above: the product data was in a Magento database in Dublin and was not going anywhere in the near term, so edge rendering meant PoP-to-Dublin round trips for every fetch. We would have moved the compute and left the data.</p>
+
+        <p>What we did instead, in order.</p>
+
+        <p><strong>Cached the category HTML at the CDN.</strong> The pages were identical for anonymous visitors and were being served with <code>Cache-Control: no-store</code> because a developer in 2019 had disabled caching to debug something and never reverted it. Fixing that one header took anonymous category TTFB in Dubai from 1.6s to 41ms. Everything after this was decoration by comparison.</p>
+
+        <p><strong>Moved currency and locale selection into a Worker.</strong> Previously a PHP redirect at the origin: request to <code>/gb/category/bearings</code> from a UAE IP bounced to <code>/ae/</code> after a full round trip to Dublin. As a Worker it is a header read and a 302 issued from Dubai. 190ms became 6ms, and it removed the redirect from the cacheable path.</p>
+
+        <p><strong>Put the legacy URL map in KV.</strong> They had 23,000 redirects from a 2016 replatform, held in a database table and evaluated by a PHP plugin on every 404. Those requests were the slowest on the site and were mostly bots. In KV they resolved at the PoP.</p>
+
+        <p><strong>Blocked scrapers at the edge.</strong> Competitor price scrapers were about 18% of origin requests. Rejecting them at the PoP removed that load entirely and, more usefully, stopped them poisoning the origin's own cache statistics.</p>
+
+        <p><strong>Left rendering at the origin.</strong> Logged-in customers with contract pricing still get a full Dublin round trip. It is 190ms for the Gulf accounts and they are B2B buyers on a purchase order, not impulse shoppers. It is the right trade and we made it deliberately rather than by accident.</p>
+
+        <p>Results after six weeks: anonymous category TTFB at the 75th percentile went from 1.6s to 68ms in the Gulf and 1.1s to 44ms in the UK. Origin request volume dropped 61%. Their Magento boxes stopped needing the autoscaling that had been masking the caching problem, which took roughly €900 a month off the hosting bill.</p>
+
+        <p><strong>What went wrong.</strong> Two things, and both were my fault for not thinking harder.</p>
+
+        <p>The Worker's country-based redirect fired on Googlebot, which crawls predominantly from US IPs. So Googlebot requesting <code>/gb/category/bearings</code> got a 302 to <code>/us/</code> — a store view that did not exist as a real market and had thin, half-translated content. Six weeks of that removed a meaningful slice of their UK category pages from the index. The fix was to redirect only when there is no explicit locale in the path and no locale cookie, and to never redirect a request whose <code>User-Agent</code> identifies a known crawler. I should have known; I had made the argument to somebody else about a year earlier.</p>
+
+        <p>The second was subtler. We cached anonymous category HTML for ten minutes. The pages included a stock indicator. On fast-moving lines, customers were adding out-of-stock items to the basket and finding out at checkout. The fix was to strip the stock indicator from the cached HTML and fill it in client-side from a small JSON endpoint — the same conclusion I keep arriving at, which is that the personalised or volatile fragment should not be inside the cacheable document.</p>
+
+        <h2>18. Edge Compute and Search</h2>
+
+        <p>A few things that specifically bite on an indexed storefront, learned mostly the hard way.</p>
+
+        <p><strong>Geo-redirecting crawlers is the classic self-inflicted wound.</strong> Googlebot's crawl origin is not a signal about your audience. Redirect on explicit signals — a path prefix, a stored preference — and offer an interstitial or a banner rather than a forced bounce. If you serve different content by country, express it with <code>hreflang</code> and let the search engine decide.</p>
+
+        <p><strong>Different HTML by IP is cloaking-adjacent.</strong> Not automatically a violation, but the line is whether the crawler sees materially different content from a user in the same circumstances. Vary by explicit locale, not by inference, and you stay comfortably on the right side of it.</p>
+
+        <p><strong>Edge-injected content is in the HTML, which is good.</strong> Unlike client-side personalisation, a Worker's transformation is in the initial response, so it is indexed. That cuts both ways — inject a "Hello Sarah" and the crawler may index it.</p>
+
+        <p><strong>Watch what your Worker does to caching headers.</strong> Constructing a <code>new Response()</code> from an origin response and forgetting to carry the headers over is a very easy way to accidentally make every page uncacheable downstream. I have done it.</p>
+
+        <pre><code class="language-javascript">// Wrong: silently drops Cache-Control, ETag, Vary, content-encoding hints.
+return new Response(await origin.text(), { status: origin.status });
+
+// Right: clone the response, then mutate only what you mean to.
+const out = new Response(origin.body, origin);
+out.headers.set('x-variant', variant);
+out.headers.append('vary', 'x-variant');
+return out;</code></pre>
+
+        <h2>19. Questions I Get Asked</h2>
+
+        <p><strong>"Is edge computing faster than a CDN?"</strong> No — a CDN cache hit is the fastest thing available, because no code runs. Edge compute is for cases where a cache hit is impossible and you need a decision made near the customer. If you can turn the request into a cache hit instead, do that.</p>
+
+        <p><strong>"Can I run my Node API at the edge?"</strong> Almost certainly not without rewriting it. No filesystem, no sockets, no native modules, a small CPU budget. If it talks to a database with a normal driver, that alone rules it out. The question is not whether you can port it but whether the port buys anything, and for a database-backed API it usually does not.</p>
+
+        <p><strong>"Which platform should I pick?"</strong> If you want the largest PoP footprint and the best-developed state primitives, Cloudflare. If your application is already Next.js on Vercel, use Vercel's edge runtime for middleware and do not add a second vendor for the sake of it. If you are deep in AWS, use CloudFront Functions for the trivial work and accept that Lambda@Edge is regional. I would not choose a platform for edge compute alone; choose it for the whole stack and use whatever edge it comes with.</p>
+
+        <p><strong>"How much latency does an empty Worker add?"</strong> Single-digit milliseconds on a warm PoP, mostly isolate setup and the platform's own routing. It is small enough to ignore for one Worker and not small enough to ignore if you have chained four.</p>
+
+        <p><strong>"Do isolates leak data between tenants?"</strong> The isolation model is the same one that keeps two browser tabs apart, which is well-tested but is a software boundary rather than a hardware one. Spectre-class attacks against it have been researched and mitigated with timer coarsening and other measures. For a storefront handling ordinary product data I consider it fine. For something where a cross-tenant leak would be a regulatory event, I would want the compliance conversation before the architecture conversation.</p>
+
+        <p><strong>"Should I move my Magento or Shopify store to the edge?"</strong> You cannot move a Magento monolith to the edge, and you do not manage Shopify's infrastructure. What you can do in both cases is put a thin edge layer in front for redirects, geo routing, bot control and cache key normalisation, which is where nearly all the available benefit is anyway. That is a two-week project rather than a replatform.</p>
+
+        <p><strong>"Is WebAssembly worth it at the edge?"</strong> For a specific hot function with real CPU cost — an image transform, a search ranking pass — it can be, because Wasm gets you predictable performance and lets you reuse a Rust or Go implementation. As a general strategy, no; the toolchain and debugging cost is real and most edge work is not CPU-bound.</p>
+
+        <h2>20. Where I Would Start</h2>
+
+        <p>If you are considering edge compute, do these in order and stop as soon as the numbers are good enough.</p>
+
+        <p>First, measure your cache hit ratio for HTML, not for assets. Everyone quotes the combined figure, which is dominated by images and flatters the picture badly. If HTML hit ratio is under about 80% for anonymous traffic, you have a caching problem, and no amount of edge compute will be worth as much as fixing it. This is the step that produced the largest single win in the distributor project and in every comparable one since.</p>
+
+        <p>Second, write down where your data lives and what the round-trip time is from your PoPs to it. If that number is over about 50ms, edge compute that touches data is going to lose to origin rendering, and you should confine the edge to work that needs no data.</p>
+
+        <p>Third, list the work that needs no origin data at all. Redirects, locale decisions, bot rejection, token validation, cache key normalisation, A/B assignment. That list is your edge roadmap and it is probably enough to keep you busy for a quarter.</p>
+
+        <p>Fourth, move exactly one thing. I would pick the redirect map, because it is high volume, entirely stateless in the request path, trivially reversible, and the improvement is measurable on day one. It also forces you to build the deploy pipeline, the kill switch and the observability you will need for everything else, on a workload where a mistake costs you a few 404s rather than a checkout outage.</p>
+
+        <p>Fifth, only then consider rendering. And when you do, ask the question that the laboratory equipment retailer's team did not ask: how many round trips to the data will this take, and where is the data. If the honest answer is three round trips to a database on another continent, the edge is the wrong place and moving the compute will make it worse.</p>
+
+        <p>The framing I keep coming back to is that edge computing is not a performance technique. It is a placement decision, and placement only helps when the thing you place is genuinely independent of everything that stayed behind. Most storefront rendering is not independent of the database. Redirects, locale, bot policy and cache keys are. Put those at the edge, leave the rest where the data is, and you will get most of the available benefit without the fortnight I described at the top.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -239,7 +679,6 @@ export default {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -273,6 +712,6 @@ export default {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

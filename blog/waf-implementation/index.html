@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Implementing a Web Application Firewall (WAF) for Ecommerce | MODRACX</title>
-  <meta name="description" content="Technical blueprint for deploying Cloudflare WAF, AWS WAF, and ModSecurity rules to protect Magento and Shopify stores against SQL injection, XSS, and DDoS attacks." />
+  <meta name="description" content="Deploying a WAF on Magento and Shopify: OWASP CRS anomaly scoring, Cloudflare and AWS rules, rate limiting, bot defence and a detection-mode rollout." />
   <meta property="og:title" content="Implementing a Web Application Firewall (WAF) for Ecommerce | MODRACX" />
   <meta property="og:description" content="Technical blueprint for deploying WAF rules by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Implementing a Web Application Firewall (WAF) for Ecommerce</h1>
-        <p class="lede">A Web Application Firewall filters malicious HTTP traffic before it reaches your application servers. Learn how to construct Cloudflare Custom WAF Expression Rules to block SQLi, XSS, and bot scraping.</p>
+        <p class="lede">A managed ruleset went live on a Friday and blocked twelve thousand checkouts by Monday. How to deploy a WAF that stops attacks instead of customers.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,17 +205,504 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Cloudflare WAF Expression Rule Example</h2>
+        <h2>1. The Rule That Blocked Twelve Thousand Orders</h2>
 
-        <pre><code class="language-text"># Cloudflare WAF Expression Rule for Blocking Magento Admin Scrapers
-(http.request.uri.path contains "/admin_" and ip.geoip.country ne "US" and not ip.src in {192.0.2.1 198.51.100.2})
-or (http.request.uri.path contains "/customer/account/loginPost" and http.request.rate_limit.exceeded)</code></pre>
+        <p>A safety equipment retailer turned on their CDN's managed WAF ruleset on a Friday afternoon in April, because a pen test report had recommended it and the box was easy to tick. On Monday morning the finance lead asked why the weekend's revenue was down 40% year on year.</p>
 
-        <hr />
+        <p>The ruleset included an SQL injection signature that matched the string <code>select</code> followed by whitespace and a word, appearing anywhere in a request body. Their checkout posted a JSON payload containing a delivery preference field. One of the values was <code>select delivery date</code>. Every customer who chose that option got a 403 from the edge, on the final step, with a generic error page they had no reason to interpret as anything but a broken site.</p>
+
+        <p>Roughly twelve thousand sessions hit it over 62 hours. Maybe a third would have converted. The block page carried no support reference, so almost nobody contacted the store — they just left. There was nothing in the application logs at all, because the requests never reached the application.</p>
+
+        <p>I've deployed a lot of WAFs and I've caused a version of that outage myself, on a smaller scale, on a Magento admin form. The lesson isn't that WAFs are dangerous. It's that a WAF is a piece of production infrastructure that sits in front of every request you serve, and turning one on in blocking mode without a detection period is the same class of decision as deploying a database migration without testing it.</p>
+
+        <p>This article is about doing it properly: what the two security models are and which you should use where, how the OWASP Core Rule Set actually scores a request, tuning without disabling everything, the Cloudflare and AWS specifics, rate limiting and bot defence, and what a WAF genuinely cannot do for you. The client-side half of the problem — the attacks that never touch your origin — is a separate discipline covered in <a href="/blog/csp-implementation/">the Content-Security-Policy guide</a>, and the two overlap far less than vendors imply.</p>
+
+        <h2>2. What a WAF Is, Precisely</h2>
+
+        <p>A reverse proxy that inspects HTTP requests and responses against a rule set, and takes an action — allow, block, challenge, log, rate limit — before the request reaches your application.</p>
+
+        <p>That's it. Everything else is packaging.</p>
+
+        <p>The distinction from a network firewall matters. A network firewall works on addresses and ports; it can tell you that traffic is arriving on 443 from a particular IP but it has no idea whether the request body contains an injection payload. A WAF parses the HTTP layer: method, path, query string, headers, cookies, body, and in better implementations the JSON or XML structure inside the body.</p>
+
+        <p>Three things follow that people consistently get wrong.</p>
+
+        <p><strong>It must terminate TLS.</strong> To inspect a request, the WAF has to decrypt it. That means your CDN or load balancer holds a certificate and sees plaintext for every request, including card details on the way to your payment endpoint if you're not tokenising client-side. This is a real consideration for PCI scope and for your data processing agreements, and it's the reason a WAF is genuinely part of your cardholder data environment even though it never stores anything.</p>
+
+        <p><strong>It sees requests, not behaviour.</strong> A single request that looks fine is allowed. Ten thousand identical fine-looking requests are also allowed unless something is specifically counting them. Rate limiting and bot detection are separate mechanisms that happen to be sold in the same product, and buying a WAF does not get you them by default.</p>
+
+        <p><strong>It is a filter, not a fix.</strong> A WAF in front of an unpatched Magento is an unpatched Magento with a filter in front of it. That filter buys you time, and buying time is valuable — the window between a vulnerability being disclosed and your maintenance window is exactly when stores get hit — but it does not close the hole.</p>
+
+        <h2>3. Where It Sits Changes What It Can Do</h2>
+
+        <p>Three deployment positions, and the choice affects everything downstream.</p>
+
+        <h3>At the CDN edge</h3>
+
+        <p>Cloudflare, Akamai, Fastly, AWS WAF on CloudFront. Requests are filtered in a data centre near the customer, hundreds of miles from your origin.</p>
+
+        <p>This is the only position that helps with volumetric attacks, because blocked traffic never crosses your transit. It's also the only position with enough aggregate visibility to run useful bot reputation — Cloudflare sees a meaningful fraction of the web and knows what a given IP has been doing on other people's sites in the last hour, which is information you cannot generate yourself.</p>
+
+        <p>The cost is that you're a tenant. Rule syntax is theirs, managed ruleset updates land when they land, and debugging a false positive means reading their logs in their format.</p>
+
+        <h3>On the host</h3>
+
+        <p>ModSecurity in Nginx or Apache, or Coraza, which is the actively maintained Go reimplementation and what I'd choose now given ModSecurity's Nginx connector has been effectively in maintenance mode. Runs on your servers, in your stack, with your logs.</p>
+
+        <p>Complete control, full request visibility including anything the CDN normalised away, and rules you can version in Git alongside the application. The cost is CPU on your origin — expect 3 to 8% overhead at CRS paranoia level 1, considerably more above it — and no help whatsoever against a flood, because the flood has already arrived.</p>
+
+        <h3>Inside the application</h3>
+
+        <p>RASP, or hand-rolled middleware. Rare in ecommerce and I mostly don't recommend it: it has the best context and the worst performance profile, and the ecommerce platforms don't have good integration points for it.</p>
+
+        <p>My default for a store of any size is edge plus host. Edge for volume, reputation and bots. Host for the rules that need to be precise and that you need to be able to reason about. Running both is not redundant, because they see different things — the edge sees the raw connection, the host sees what survived the CDN's normalisation.</p>
+
+        <h2>4. Negative and Positive Security Models</h2>
+
+        <p>Every rule you will ever write belongs to one of two families and they behave completely differently.</p>
+
+        <p><strong>Negative</strong> means blocking known-bad. Signatures for SQL injection, XSS payloads, path traversal, command injection. This is what a managed ruleset gives you out of the box. Broad coverage, no configuration, and an inherent false positive rate because the signatures have to guess at intent from a string.</p>
+
+        <p><strong>Positive</strong> means allowing known-good and denying everything else. This endpoint accepts POST with these five fields, of these types, within these lengths, from authenticated sessions only. Near-zero false positives once tuned, near-total coverage for the endpoints you've defined, and a lot of work per endpoint.</p>
+
+        <p>The right answer for a storefront is both, applied to different surfaces.</p>
+
+        <p>Negative everywhere, because you cannot enumerate the legitimate shape of every request on a Magento install with forty extensions. Positive on the small number of endpoints that matter most and change least: the admin login, the payment callbacks, the API paths your mobile app uses, the webhook receivers.</p>
+
+        <p>Payment gateway webhooks are the clearest case. You know the source IP ranges, the exact path, the method, the content type, the signature header. A positive rule there is four lines and eliminates an entire class of forged-notification fraud where an attacker posts a fake "payment received" callback and gets an order fulfilled.</p>
+
+        <pre><code class="language-text">// Cloudflare custom rule, action: Block
+// Everything that is not a legitimate PSP webhook is denied outright.
+(http.request.uri.path eq "/webhooks/psp/notify"
+ and not (
+   http.request.method eq "POST"
+   and http.request.headers["content-type"][0] eq "application/json"
+   and len(http.request.headers["x-psp-signature"][0]) &gt; 0
+   and ip.src in {203.0.113.0/24 198.51.100.0/24}
+ ))</code></pre>
+
+        <p>Signature verification still happens in the application. The rule means an attacker never gets to attempt it.</p>
+
+        <h2>5. How the OWASP Core Rule Set Actually Works</h2>
+
+        <p>CRS is the free rule set behind ModSecurity, Coraza, and — with modifications — the managed rulesets at most CDNs. Understanding its scoring model is the difference between tuning it and turning it off.</p>
+
+        <p>It does not block on a single match. Each rule that fires adds to an anomaly score: 5 for critical, 4 for error, 3 for warning, 2 for notice. At the end of the request phase, if the total meets the inbound threshold — 5 by default — the request is blocked.</p>
+
+        <p>So a single critical match blocks. Two warnings don't. Three do. Raising the threshold to 10 means a request needs two critical hits, which cuts false positives substantially and lets real single-signature attacks through. That trade is the main dial you have.</p>
+
+        <p>The second dial is paranoia level, 1 through 4.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>PL</th><th>What it adds</th><th>False positive rate</th><th>Use for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>High-confidence signatures only</td><td>Very low</td><td>Default. Start here, always.</td></tr>
+            <tr><td>2</td><td>Broader patterns, more regex</td><td>Noticeable — expect tuning</td><td>After PL1 is clean for a month.</td></tr>
+            <tr><td>3</td><td>Aggressive, catches obfuscation</td><td>High</td><td>Admin paths, APIs with known shapes.</td></tr>
+            <tr><td>4</td><td>Character-class restrictions</td><td>Extreme</td><td>Almost never on a storefront.</td></tr>
+          </tbody>
+        </table>
+
+        <p>PL3 and PL4 exist for applications where you control every input. A Magento storefront with customer-written product reviews and a WYSIWYG CMS is not that application. I have never successfully run PL3 on a full storefront; I have run it usefully on <code>/admin</code> and on a JSON API where every field was numeric.</p>
+
+        <pre><code class="language-apache"># crs-setup.conf — the four settings that matter most
+SecAction "id:900000,phase:1,nolog,pass,t:none,\
+  setvar:tx.blocking_paranoia_level=1"
+
+# Detection paranoia one level above blocking: rules at PL2 log but
+# never block. This is how you preview a level before committing.
+SecAction "id:900001,phase:1,nolog,pass,t:none,\
+  setvar:tx.detection_paranoia_level=2"
+
+SecAction "id:900110,phase:1,nolog,pass,t:none,\
+  setvar:tx.inbound_anomaly_score_threshold=5,\
+  setvar:tx.outbound_anomaly_score_threshold=4"
+
+# Sampling: run CRS on 10% of traffic while you measure CPU impact.
+SecAction "id:900400,phase:1,nolog,pass,t:none,\
+  setvar:tx.sampling_percentage=100"</code></pre>
+
+        <p>That detection-paranoia-level trick is the most useful thing in CRS and almost nobody uses it. It runs the higher level's rules in logging mode only, so you can see exactly what PL2 would break before you enable it.</p>
+
+        <h2>6. Tuning Without Gutting It</h2>
+
+        <p>The universal failure mode: false positive appears, someone disables the rule globally, six months later half the ruleset is off and the WAF is decoration.</p>
+
+        <p>The discipline is to make every exclusion as narrow as it can be. Four levels, in order of preference.</p>
+
+        <p><strong>Exclude one rule for one parameter on one path.</strong> The best kind. The rule still protects everything else.</p>
+
+        <pre><code class="language-apache"># The CMS body field legitimately contains HTML. Turn off the XSS
+# rules for that one parameter, on that one admin path, nowhere else.
+SecRule REQUEST_URI "@beginsWith /admin/cms/page/save" \
+  "id:1001,phase:2,pass,nolog,\
+   ctl:ruleRemoveTargetById=941100;ARGS:content,\
+   ctl:ruleRemoveTargetById=941110;ARGS:content,\
+   ctl:ruleRemoveTargetById=941160;ARGS:content"</code></pre>
+
+        <p><strong>Exclude a rule group for a path.</strong> Acceptable when a whole family of rules conflicts with a known-safe endpoint.</p>
+
+        <p><strong>Raise the threshold for a path.</strong> Blunt but sometimes right — a search endpoint that accumulates warnings from ordinary queries.</p>
+
+        <p><strong>Disable a rule globally.</strong> Last resort, and it should require a written reason in the config. I put the ticket number in the comment; it's saved me from re-litigating decisions I'd forgotten making.</p>
+
+        <p>The endpoints that need exclusions on almost every Magento build, from the audits I've done: the CMS page and block save actions, the product description field, the customer review submission, the GraphQL endpoint, the newsletter template editor, and the layout XML update field in the admin — that last one legitimately contains angle brackets and attribute syntax and trips XSS rules on every save.</p>
+
+        <p>On Shopify you have no ModSecurity, but the same reasoning applies to Cloudflare rules if you front the store, and app proxy paths are where the exclusions land.</p>
+
+        <h2>7. Cloudflare, Concretely</h2>
+
+        <p>The layering matters because rules evaluate in a fixed order and the first terminating action wins: IP access rules, then WAF custom rules, then rate limiting, then managed rules.</p>
+
+        <p>Which means a custom rule that skips managed rules for a path must be written as a Skip action in custom rules — you cannot "undo" a managed rule block later in the chain.</p>
+
+        <pre><code class="language-text">// Rule 1 — Skip. Payment callbacks must never be filtered.
+// Ordered first, terminating, so nothing downstream can block them.
+Expression: (http.request.uri.path in {"/paypal/ipn/" "/adyen/notification/"}
+             and ip.src in $psp_ranges)
+Action: Skip → All remaining custom rules, Managed rules, Rate limiting
+
+// Rule 2 — Managed Challenge. Admin from outside known networks.
+Expression: (http.request.uri.path contains "/admin_x7k2/"
+             and not ip.src in $office_and_vpn)
+Action: Managed Challenge
+
+// Rule 3 — Block. Known exploit paths that do not exist on this store.
+Expression: (http.request.uri.path contains "/wp-login.php"
+             or http.request.uri.path contains "/.env"
+             or http.request.uri.path contains "/.git/config"
+             or http.request.uri.path contains "/vendor/phpunit/")
+Action: Block
+
+// Rule 4 — Managed Challenge. Checkout from a datacentre ASN.
+// Real customers are not on hosting provider networks.
+Expression: (http.request.uri.path contains "/checkout/"
+             and ip.src.asnum in {14061 16509 15169 24940 63949})
+Action: Managed Challenge</code></pre>
+
+        <p>Rule 3 deserves a comment because it's the cheapest win in this whole article. A Magento or Shopify store receives a constant background of scans for WordPress paths, exposed <code>.env</code> files, and PHPUnit's remote code execution vector. None of those paths exist. Blocking them costs one rule and removes a large fraction of your log noise, which matters because noise is what stops people reading logs.</p>
+
+        <p>Rate limiting is configured separately and it's where most of the real defensive value lives:</p>
+
+        <pre><code class="language-text">// Login: 5 attempts per 10 minutes per IP. Credential stuffing dies here.
+Path: /customer/account/loginPost
+Characteristics: IP
+Period: 600s   Requests: 5   Action: Block for 3600s
+
+// Admin login: harsher, and no legitimate user hits this.
+Path: /admin_x7k2/admin/auth/login
+Characteristics: IP
+Period: 600s   Requests: 3   Action: Block for 86400s
+
+// Coupon validation: the enumeration attack nobody watches for.
+Path: /checkout/cart/couponPost
+Characteristics: IP
+Period: 300s   Requests: 10   Action: Managed Challenge
+
+// Search: expensive queries, scraped catalogues.
+Path: /catalogsearch/result/
+Characteristics: IP
+Period: 60s    Requests: 30   Action: Managed Challenge</code></pre>
+
+        <p>Coupon enumeration is worth dwelling on because it's specific to ecommerce and almost never defended. An attacker scripts thousands of guesses against the coupon endpoint, finds the codes that return a discount instead of an error, and either uses them or sells them. I've seen a store lose four figures a month to a leaked <code>STAFF40</code> code found this way. Ten attempts per five minutes stops it entirely and no real customer notices.</p>
+
+        <p>Use Managed Challenge rather than Block wherever a false positive would cost you a customer. A challenge is recoverable; a 403 is a lost session.</p>
+
+        <h2>8. AWS WAF, and the Budget Nobody Mentions</h2>
+
+        <p>AWS WAF attaches a Web ACL to CloudFront, an ALB, or API Gateway. Rules evaluate in the order you set, with an explicit priority number, and each ACL has a capacity budget measured in WCUs — 1,500 by default, raisable on request.</p>
+
+        <p>That budget is the thing that catches people. The managed rule groups are not free: the Core Rule Set is 700 WCU, Known Bad Inputs 200, SQL Database 200, Linux 200, PHP 100, Anonymous IP List 50. Add the common set and you have spent most of your budget before writing a single rule of your own.</p>
+
+        <pre><code class="language-json">{
+  "Name": "storefront-acl",
+  "DefaultAction": { "Allow": {} },
+  "Rules": [
+    {
+      "Name": "psp-webhook-allow",
+      "Priority": 0,
+      "Statement": {
+        "AndStatement": { "Statements": [
+          { "ByteMatchStatement": {
+              "SearchString": "/webhooks/psp/",
+              "FieldToMatch": { "UriPath": {} },
+              "PositionalConstraint": "STARTS_WITH",
+              "TextTransformations": [{ "Priority": 0, "Type": "NONE" }] } },
+          { "IPSetReferenceStatement": { "ARN": "arn:aws:wafv2:...:ipset/psp-ranges" } }
+        ]}
+      },
+      "Action": { "Allow": {} },
+      "VisibilityConfig": { "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true, "MetricName": "psp" }
+    },
+    {
+      "Name": "AWSManagedRulesCommonRuleSet",
+      "Priority": 10,
+      "OverrideAction": { "Count": {} },
+      "Statement": { "ManagedRuleGroupStatement": {
+        "VendorName": "AWS", "Name": "AWSManagedRulesCommonRuleSet",
+        "RuleActionOverrides": [
+          { "Name": "SizeRestrictions_BODY", "ActionToUse": { "Count": {} } },
+          { "Name": "CrossSiteScripting_BODY", "ActionToUse": { "Count": {} } }
+        ]
+      }},
+      "VisibilityConfig": { "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true, "MetricName": "common" }
+    },
+    {
+      "Name": "login-rate-limit",
+      "Priority": 20,
+      "Statement": { "RateBasedStatement": {
+        "Limit": 100, "EvaluationWindowSec": 300, "AggregateKeyType": "IP",
+        "ScopeDownStatement": { "ByteMatchStatement": {
+          "SearchString": "/customer/account/loginPost",
+          "FieldToMatch": { "UriPath": {} },
+          "PositionalConstraint": "CONTAINS",
+          "TextTransformations": [{ "Priority": 0, "Type": "LOWERCASE" }] } }
+      }},
+      "Action": { "Block": {} },
+      "VisibilityConfig": { "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true, "MetricName": "login" }
+    }
+  ]
+}</code></pre>
+
+        <p>Note <code>OverrideAction: Count</code> on the managed group. That is the AWS equivalent of detection mode and it is how you must deploy any managed rule group for the first two weeks. It evaluates everything, emits metrics, blocks nothing.</p>
+
+        <p>Two AWS-specific traps. <code>SizeRestrictions_BODY</code> blocks bodies over 8KB by default, and AWS WAF only inspects the first 8KB regardless — a product import or a long CMS save exceeds that routinely. And rate-based rules had a five-minute fixed window until the configurable <code>EvaluationWindowSec</code> arrived; a one-minute window is far more responsive for login protection if your account supports it.</p>
+
+        <h2>9. Shopify: What You Actually Control</h2>
+
+        <p>On Shopify you do not run a WAF on the storefront. Shopify does, on their infrastructure, and you have no visibility into it and no configuration.</p>
+
+        <p>That's mostly good. Their platform absorbs volumetric attacks, patches the application layer, and takes the checkout out of your scope entirely. It also means the attacks you can still suffer are the ones a platform WAF is least suited to: credential stuffing against customer accounts, coupon enumeration, scraping, and gift card balance checking.</p>
+
+        <p>What you can do, in descending order of value.</p>
+
+        <p>Shopify's own bot protection and checkout captcha, which you can enable in the admin and which people leave off because it adds friction. Turn it on for account creation and login at minimum.</p>
+
+        <p>Point your apex domain at Cloudflare in front of Shopify. This works — Shopify accepts proxied traffic — and gives you custom rules, rate limiting and bot management on the paths that matter. The caveat is that you must not proxy the checkout hostname and you must be careful with certificate management. I've done this twice and both times the setup took longer than expected because of the interaction between Shopify's own CDN and the proxy layer.</p>
+
+        <p>Rate limit your app proxy paths. Any app that exposes an endpoint under <code>/apps/</code> is a route into a third party's infrastructure carrying your customers' session context, and it's the most common weak point on an otherwise well-run Shopify store.</p>
+
+        <p>Audit installed apps quarterly and remove what isn't used. On Shopify your attack surface is largely other people's code, which is a different problem from Magento's but not a smaller one.</p>
+
+        <h2>10. Bots Are the Real Traffic Problem</h2>
+
+        <p>The injection signatures get the attention. In terms of what actually costs a store money, automated traffic is bigger by a wide margin, and it splits into categories that need different handling.</p>
+
+        <h3>Credential stuffing</h3>
+
+        <p>Someone has a list of a hundred million email and password pairs from unrelated breaches and is testing them against your login. Reuse rates mean a small fraction work. The successful ones become account takeovers: stored cards used, loyalty points drained, addresses changed to a drop.</p>
+
+        <p>Rate limiting per IP is the first line and attackers know it, so serious operations distribute across residential proxy pools at one or two attempts per address. Against that, per-IP limits are close to useless and you need behavioural signals — is this address new, is it on a residential proxy list, does the request have a plausible TLS fingerprint, is the failure rate for this endpoint globally elevated right now.</p>
+
+        <p>That last signal is the one only an edge provider has, and it's the honest argument for paying for bot management rather than writing rules.</p>
+
+        <h3>Card testing</h3>
+
+        <p>Stolen card numbers are validated by attempting small purchases. Your store is the test harness. The costs are direct — chargeback fees at £15 to £25 each regardless of amount, and a rising fraud ratio that can put you on a card scheme monitoring programme.</p>
+
+        <p>Signals that work: many payment attempts from one session, many distinct cards from one IP or device fingerprint, a checkout completed in under four seconds, cheap items only, billing addresses that don't match the country of the IP. Your PSP has fraud tooling for this and it should be your primary control; the WAF's job is rate limiting the payment endpoint and challenging datacentre traffic on checkout.</p>
+
+        <h3>Scrapers</h3>
+
+        <p>Competitors pulling your prices, aggregators building feeds, and now the AI crawlers. Some are welcome, some are not, and the distinction is a business decision rather than a security one.</p>
+
+        <p>Distinguish verified crawlers by reverse DNS rather than user agent, which is trivially forged. Cloudflare's verified bot category does this for you. Then decide: Googlebot and Bingbot always allowed; GPTBot, CCBot and their peers, your call, but express it in <code>robots.txt</code> as well as in rules because the honest ones read it and blocking without declaring is a support problem waiting to happen.</p>
+
+        <pre><code class="language-text">// Challenge unverified bots on expensive paths only.
+// Blocking bots site-wide is how you accidentally deindex yourself.
+(cf.client.bot eq false
+ and cf.threat_score &gt; 14
+ and (http.request.uri.path contains "/catalogsearch/"
+      or http.request.uri.query contains "product_list_order"
+      or http.request.uri.path matches "^/[a-z-]+\\.html$"))</code></pre>
+
+        <p>I've watched a store block Googlebot for eleven days with an over-broad user-agent rule. Organic traffic halved and took two months to recover. If you write a bot rule, verify against real crawler traffic in your logs before it goes to blocking mode, and set up an alert on crawl rate.</p>
+
+        <h3>Inventory hoarding and drop bots</h3>
+
+        <p>Limited releases attract automation that adds to cart in milliseconds. This is a queue design problem more than a WAF problem — a waiting room product, a randomised release window, or account-age requirements do more than any rule. But rate limiting add-to-cart and requiring a challenge before cart operations on release days is a cheap layer.</p>
+
+        <h2>11. Virtual Patching: The Thing WAFs Are Genuinely Best At</h2>
+
+        <p>A critical vulnerability is disclosed in your platform on a Tuesday. Your next release window is a week away, the patch touches a core file you've overridden, and QA needs two days. That gap is where stores get compromised, and it's where a WAF earns its cost more clearly than anywhere else.</p>
+
+        <p>A targeted rule blocking the specific exploit pattern can be live in ten minutes.</p>
+
+        <pre><code class="language-apache"># Virtual patch: block the exploit shape, not the whole endpoint.
+# Ticket SEC-4471. Remove after 2.4.7-p3 is deployed everywhere.
+SecRule REQUEST_URI "@beginsWith /rest/V1/guest-carts" \
+  "id:1100,phase:2,deny,status:403,log,\
+   msg:'Virtual patch SEC-4471: nested payload in guest cart',\
+   chain"
+  SecRule REQUEST_BODY "@rx \"extension_attributes\"\\s*:\\s*\\{[^}]{2000,}" \
+    "t:none"</code></pre>
+
+        <p>Two rules for the Magento history books, both of which I deployed as virtual patches before the official fix landed on client systems: the 2022 template injection in the email field, and the SQLi in the older SUPEE era. In both cases the WAF rule was live the same day and the patch followed within the fortnight.</p>
+
+        <p>The discipline that makes this work: every virtual patch has a ticket reference and an expiry. Rules added in a panic and never removed accumulate until nobody knows what the WAF is doing. I review them quarterly and delete anything whose underlying vulnerability has been patched for a full release cycle.</p>
+
+        <h2>12. Detection Mode Is Not Optional</h2>
+
+        <p>The safety equipment retailer's outage was entirely preventable by a two-week detection period, and I want to be specific about what that period involves because "run it in log mode first" is advice people follow badly.</p>
+
+        <p>Deploy every rule with the action set to log or count. Then answer three questions before you switch anything to block.</p>
+
+        <p><strong>What is the total volume of would-be blocks?</strong> If it's more than about 0.1% of requests, something is wrong with the ruleset, not with your traffic. On a healthy store at CRS PL1 after tuning, I expect under 0.05%.</p>
+
+        <p><strong>Which rules account for it?</strong> Sort by rule ID. The distribution is always heavily skewed — typically three or four rules produce 90% of the noise, and they're the ones you write exclusions for. Everything else is probably real.</p>
+
+        <p><strong>Do any would-be blocks land on conversion paths?</strong> This is the question that matters. Filter the log to requests whose path contains checkout, cart, login, or account. A false positive on a product page annoys someone. A false positive on <code>/checkout/onepage/saveOrder</code> costs an order, and you will not hear about it.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# Cloudflare detection review. Requires CF_TOKEN and ZONE.
+# Pulls the last 24h of logged (not blocked) events, grouped by rule.
+curl -sS "https://api.cloudflare.com/client/v4/graphql" \
+  -H "Authorization: Bearer ${CF_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  --data @- &lt;&lt;'JSON' | python3 -m json.tool
+{"query":"
+  query { viewer { zones(filter: {zoneTag: \"ZONE_ID\"}) {
+    firewallEventsAdaptiveGroups(
+      limit: 200,
+      filter: { datetime_geq: \"2026-08-06T00:00:00Z\", action: \"log\" },
+      orderBy: [count_DESC]
+    ) { count dimensions { ruleId action clientRequestPath } }
+  }}}"}
+JSON</code></pre>
+
+        <p>Then a second pass filtering to conversion paths only. If that returns anything, investigate every single row before enabling blocking. It's usually a dozen rows and an hour of work.</p>
+
+        <p>And when you do switch to blocking, do it per rule and per path, not all at once. Managed ruleset to block on static asset paths first, then content pages, then account, then checkout last. Two weeks of detection followed by a staged enable is about six weeks end to end. That's the honest timeline and it's shorter than the recovery from one bad Friday.</p>
+
+        <h2>13. Custom Block Pages, and Why They Pay for Themselves</h2>
+
+        <p>The garden furniture store's block page said "Error 1020 — Access Denied" with a Cloudflare ray ID and nothing else. No customer contacted support. Every one of them left.</p>
+
+        <p>A block page should say, in plain language, that something about the request looked automated, apologise, give a reference code, and offer a route to a human. Cloudflare exposes the ray ID; ModSecurity has the unique ID. Put it on the page.</p>
+
+        <pre><code class="language-html">&lt;!-- Custom WAF block page. The reference is the whole point:
+     it turns a silent lost order into a two-minute support call. --&gt;
+&lt;h1&gt;We couldn't complete that request&lt;/h1&gt;
+&lt;p&gt;Our security system flagged something unusual. If you were
+placing an order, nothing has been charged.&lt;/p&gt;
+&lt;p&gt;Please call 0800 000 0000 or email help@example.com quoting
+reference &lt;strong&gt;::RAY_ID::&lt;/strong&gt; and we'll finish the order
+for you.&lt;/p&gt;</code></pre>
+
+        <p>This is also your false positive detection system. If support gets three calls a week with reference codes, you have data you'd otherwise never see. On the garden furniture store we added this after the incident and it surfaced two further rule problems within a month that the logs alone hadn't made obvious.</p>
+
+        <h2>14. PCI DSS, and What the Standard Actually Requires</h2>
+
+        <p>Requirement 6.4.1 in PCI DSS 4.0 gives you two options for public-facing web applications: review application code with automated or manual tools at least annually and after changes, <em>or</em> deploy an automated technical solution that continuously detects and prevents web-based attacks. A WAF satisfies the second.</p>
+
+        <p>Note "continuously" and note "prevents". A WAF in detection mode does not satisfy 6.4.1, because it detects and does not prevent. I've had that argument with a merchant who wanted to keep everything in log mode indefinitely and claim the control; their assessor did not accept it, correctly.</p>
+
+        <p>6.4.2 supersedes 6.4.1 from 31 March 2025 and removes the code review option entirely for public-facing apps: you must deploy the automated technical solution. So if you take payments and have a public storefront, a WAF in blocking mode is no longer one of two choices.</p>
+
+        <p>Separately, 11.6.1 requires change detection on payment page headers and content, which a WAF does not address at all — that's the client-side monitoring problem I've written about in the CSP context, and in the wider survey of <a href="/blog/secure-http-headers/">security headers and what each one defends</a>.</p>
+
+        <p>What assessors ask for beyond the deployment itself: evidence it's in blocking mode, evidence the rules are updated, log retention, and a documented process for reviewing alerts. The last one is where merchants fail. Have a named owner and a weekly review that produces a record.</p>
+
+        <h2>15. Performance, Measured Rather Than Assumed</h2>
+
+        <p>The question I get in every kickoff is what the WAF costs in latency, and the answer differs by an order of magnitude depending on where it runs.</p>
+
+        <p>At the edge, effectively nothing on a request that's already going through the CDN — rule evaluation is sub-millisecond and it happens on a machine near the user. If you were not already using a CDN, the CDN itself is a larger effect than the WAF, and usually a positive one.</p>
+
+        <p>On the host, real. ModSecurity with CRS at PL1 costs roughly 3 to 8% of CPU on a typical Magento origin, and request body inspection is the expensive part. At PL2 I've measured 12%. The <code>SecRequestBodyLimit</code> and <code>SecRequestBodyNoFilesLimit</code> settings are the main lever — inspecting a 50MB product image upload byte by byte is pointless and expensive.</p>
+
+        <pre><code class="language-apache"># Don't inspect file uploads as request bodies; do inspect form fields.
+SecRequestBodyLimit 13107200
+SecRequestBodyNoFilesLimit 131072
+SecRequestBodyLimitAction Reject
+
+# Response body inspection catches data leakage but doubles the cost
+# and interacts badly with streaming. Off unless you have a reason.
+SecResponseBodyAccess Off</code></pre>
+
+        <p>Response body inspection deserves its own note. It can catch a SQL error message leaking a table name, which is genuinely useful during an assessment. It also buffers responses, which breaks streaming and adds latency to every page. I turn it on for a week during a security review and then off again.</p>
+
+        <p>Measure your own numbers. Run <code>ab</code> or <code>k6</code> against the origin with the module enabled and disabled, same hardware, same dataset, and get a figure rather than trusting mine.</p>
+
+        <h2>16. A Worked Example</h2>
+
+        <p>Same garden furniture retailer, six months after the incident, because they kept me on to do it properly. Magento 2.4.7, three application nodes behind an ALB, Cloudflare in front, about 90,000 sessions a week.</p>
+
+        <p><strong>Weeks one and two, detection.</strong> Cloudflare managed ruleset in log mode, ModSecurity with CRS 4.x at PL1 in <code>DetectionOnly</code> on one of the three nodes. 41 million requests, 96,000 would-be blocks, which is 0.23% and too high.</p>
+
+        <p><strong>Week three, analysis.</strong> Four rules produced 88% of the noise. CRS 941100 and 941160 firing on the CMS content field. 942100 on the layered navigation query string, because filter values contained apostrophes — "Barnaby's Choice" was a product line name. 920420 on the GraphQL content type. And rule 949110, the anomaly scorer, firing downstream of all of them.</p>
+
+        <p>Four targeted exclusions took the rate to 0.04%. The apostrophe one is worth noting as a general lesson: real product data contains characters that look like injection, and the store's own catalogue is a permanent source of false positives that a generic ruleset cannot anticipate.</p>
+
+        <p><strong>Week four, conversion path review.</strong> Filtered the remaining logged events to checkout, cart, login and account paths. 61 events over the fortnight. Fifty-two were genuine attacks — SQLi attempts against the login form, mostly from three ASNs. Seven were a single customer with a corrupted browser extension mangling their requests. Two were an internal integration posting XML to a JSON endpoint, which was a bug worth finding.</p>
+
+        <p><strong>Week five, staged enable.</strong> Blocking on static and category paths. Nothing happened. Then content pages. Then account.</p>
+
+        <p><strong>Week six, checkout.</strong> Enabled on a Tuesday at 10am with me watching a dashboard of conversion rate against the same hour the previous week. Held steady. Rate limiting on login, coupon and search enabled the same day.</p>
+
+        <p><strong>What went wrong.</strong> Three weeks later, a marketing campaign sent a burst of traffic through a URL with a tracking parameter containing a base64 payload, and CRS 942440 — SQL comment sequence detection — matched a <code>--</code> that appeared in the encoded string. About 900 sessions blocked over four hours on a Saturday. The block page had the reference code by then, six people called, support escalated within ninety minutes, and we fixed it with a targeted exclusion on the parameter. Cost maybe £2,000 of revenue rather than the £40,000 of the original incident, and the difference was entirely the block page and the alerting.</p>
+
+        <p><strong>Results over the following six months.</strong> Credential stuffing attempts against the login dropped from a baseline of around 14,000 a week reaching the application to under 200. Account takeover reports went from two or three a month to zero in five of the six months. Chargebacks from card testing fell by about 70% after the checkout ASN challenge, though the PSP's own rules were tightened in the same period so I won't claim all of it. Origin CPU fell 11%, which nobody predicted and which came entirely from bot traffic no longer being served.</p>
+
+        <h2>17. What a WAF Will Not Do</h2>
+
+        <p>Worth being blunt, because the product category is oversold.</p>
+
+        <p>It will not stop a client-side skimmer. A script running in a customer's browser and posting card data to an attacker's domain never touches your origin. Your WAF has no visibility. This is the single largest gap and the reason CSP and SRI are separate, necessary controls.</p>
+
+        <p>It will not stop an attacker who has valid credentials. A compromised admin account making legitimate-looking requests is indistinguishable from an administrator. Multi-factor authentication and IP restrictions on the admin path do more here than any rule.</p>
+
+        <p>It will not stop business logic abuse. Applying a stacked discount twice, exploiting a returns process, ordering a mispriced item — every request is well-formed and permitted. That's application logic and it needs application fixes.</p>
+
+        <p>It will not stop a determined attacker with time. WAF bypass is a well-documented field: encoding tricks, parameter pollution, HTTP request smuggling to slip past the parser, chunked encoding, oversized bodies exploiting inspection limits. A WAF raises cost and blocks automation. It does not stop a person who has decided to get in.</p>
+
+        <p>It will not fix an unpatched application. It buys you a window. Use the window.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Cloudflare or AWS WAF?"</strong> If your traffic already goes through Cloudflare, Cloudflare — the rule language is far more pleasant, the bot intelligence is better, and there's no WCU budget to manage. AWS WAF makes sense when you're deep in AWS, want everything in Terraform alongside the rest of your infrastructure, and need the ACL attached to an ALB or API Gateway rather than a CDN. I'd not run both at the edge.</p>
+
+        <p><strong>"Is the free Cloudflare WAF enough?"</strong> For a small store, it's a real improvement over nothing. You get the basic managed ruleset and limited custom rules. You don't get the full OWASP ruleset, meaningful rate limiting, or bot management, and rate limiting is the part I'd least want to be without. The Pro tier is the point where it becomes a serious control.</p>
+
+        <p><strong>"Will it break my payment gateway callbacks?"</strong> It will, eventually, if you don't allowlist them. PSP callbacks come from fixed ranges and often carry payloads that look unusual to signature rules. Allowlist by source range with a Skip action ordered first, before anything else can evaluate. This is the second most common WAF outage I'm called about, after checkout false positives.</p>
+
+        <p><strong>"How often do rules need updating?"</strong> Managed rulesets update themselves; your job is to read the change notes and re-run detection after a major version bump. CRS 3 to CRS 4 changed rule IDs and scoring enough that exclusions written for the old version silently stopped applying. Your own rules need a quarterly review, mainly to delete expired virtual patches.</p>
+
+        <p><strong>"Can I run a WAF on a headless storefront?"</strong> Yes, and the rules go on the API rather than the pages. GraphQL is awkward — a single endpoint, single method, everything in the body, so path-based rules are useless. Depth limiting and query cost analysis belong in the GraphQL layer itself, and the WAF's job reduces to rate limiting and blocking obvious payloads. There's more on hardening that boundary in the piece on <a href="/blog/secure-api-gateways/">secure API gateways</a>.</p>
+
+        <p><strong>"Should the WAF see checkout traffic at all, given PCI scope?"</strong> It has to, to protect it. That does put the terminating proxy in scope. Every major provider is a PCI DSS Level 1 service provider and will supply an attestation — get it, keep it, and list them as a service provider in your own documentation. It's a paperwork exercise, not an architectural problem.</p>
+
+        <p><strong>"We're on Shopify, do we need any of this?"</strong> Not a WAF in the traditional sense. You need bot protection on login and account creation, rate limiting if you front the store with a proxy, and app hygiene. The platform handles the rest, and that's a legitimate reason to be on it.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>Order matters here more than in most of this work, because the first two steps prevent the third from hurting you.</p>
+
+        <p>One. Allowlist your payment callbacks and any known integration source ranges, with a Skip action ordered before everything else. Do this before you enable a single blocking rule.</p>
+
+        <p>Two. Build the custom block page with a reference code and a phone number. Ten minutes, and it converts silent lost revenue into support tickets you can act on.</p>
+
+        <p>Three. Enable the managed ruleset in detection mode only. Leave it two weeks, minimum. A full month if your traffic has a monthly cycle.</p>
+
+        <p>Four. Rate limit the login, admin login, coupon and search endpoints. These are safe to enable in blocking mode immediately, because the thresholds are far above legitimate use, and they address the attacks that actually cost you money.</p>
+
+        <p>Five. Block scans for paths that don't exist on your platform. One rule, no risk, and a large reduction in log noise.</p>
+
+        <p>Six. Analyse the detection logs, sorted by rule and filtered to conversion paths. Write narrow exclusions. Never disable a rule globally without a written reason.</p>
+
+        <p>Seven. Enable blocking in stages: static, then content, then account, then checkout, with a day between each and someone watching conversion.</p>
+
+        <p>Eight. Set up alerting on block rate. A sudden spike is either an attack or your own regression, and you want to know which within minutes rather than on Monday.</p>
+
+        <p>The thing I'd push back on hardest if someone wanted to skip it: the detection period. It's two weeks of apparently doing nothing, it's the least satisfying part of the project, and it is the only thing standing between you and a Friday afternoon that costs more than the WAF will ever save.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -226,7 +715,6 @@ or (http.request.uri.path contains "/customer/account/loginPost" and http.reques
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -260,6 +748,6 @@ or (http.request.uri.path contains "/customer/account/loginPost" and http.reques
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

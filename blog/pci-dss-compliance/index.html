@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>PCI-DSS 4.0 Compliance Blueprint for Magento & Shopify | MODRACX</title>
-  <meta name="description" content="Technical guide on achieving PCI-DSS 4.0 compliance for Magento 2 and Shopify Plus merchants. Covers Requirement 6.4.3 script management, ASV scanning, and tokenization." />
+  <meta name="description" content="PCI DSS for ecommerce engineers: choosing the right SAQ, reducing scope, requirements 6.4.3 and 11.6.1 in practice, the findings that come up most often, and how to automate the evidence." />
   <meta property="og:title" content="PCI-DSS 4.0 Compliance Blueprint for Magento & Shopify | MODRACX" />
   <meta property="og:description" content="Technical guide on achieving PCI-DSS 4.0 compliance by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>PCI-DSS 4.0 Compliance Blueprint for Magento & Shopify</h1>
-        <p class="lede">PCI-DSS 4.0 introduces mandatory requirements for managing payment page JavaScript (Requirement 6.4.3 and 11.6.1). Learn how to implement automated script integrity audits and CSP monitoring.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>PCI-DSS 4.0 Compliance Blueprint for Magento &amp; Shopify</h1>
+        <p class="lede">Most merchants filled in SAQ A because an onboarding form suggested it, and most of them are actually on A-EP. Here is what scope really means, what v4.0 changed for storefronts, and the engineering work that makes the rest routine.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 38 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 22 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,15 +205,351 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>PCI-DSS Requirement 6.4.3 Script Audit Header</h2>
+        <h2>1. The Question That Reveals Everything</h2>
 
-        <pre><code class="language-http">Content-Security-Policy: default-src 'self'; script-src 'self' https://js.stripe.com 'nonce-rAnd0m123'; report-uri https://modracx.report-uri.com/r/d/csp/enforce;</code></pre>
+        <p>When a merchant tells me they're PCI compliant, I ask one question: which SAQ did you fill in, and who decided that was the right one?</p>
 
-        <hr />
+        <p>The answer is nearly always "SAQ A" and "our payment provider's onboarding form suggested it." Sometimes it's "the finance director filled it in." Occasionally nobody can remember.</p>
+
+        <p>SAQ A is the shortest self-assessment questionnaire, and it exists for merchants who have fully outsourced card handling — the payment page is served by someone else, and no card data touches anything the merchant controls. If that describes you, wonderful. If your checkout page is served by your own server and merely embeds a payment provider's fields, you are probably on SAQ A-EP, which is roughly four times longer and includes requirements about your own infrastructure that SAQ A skips entirely.</p>
+
+        <p>Nobody checks this until something goes wrong. Then your acquirer asks for evidence, a forensic investigator looks at the architecture, and the gap between the questionnaire you signed and the environment you actually run becomes a commercial problem rather than a paperwork one.</p>
+
+        <p>I should be clear about what this article is and isn't. I'm an engineer, not a Qualified Security Assessor. What follows is the technical view — what the requirements mean for how you build and run a storefront, where the real work is, and which parts of v4.0 changed things for ecommerce specifically. Your acquirer and your QSA determine your formal obligations, and if there's a conflict between them and this article, they win.</p>
+
+        <h2>2. What PCI DSS Actually Is</h2>
+
+        <p>A set of security requirements maintained by the card brands collectively, applying to anyone who stores, processes, or transmits cardholder data. It's a contractual obligation via your acquiring bank rather than a law, which changes the enforcement mechanism but not the consequences: fines, increased transaction fees, and in serious cases losing your ability to take card payments.</p>
+
+        <p>Two dimensions determine what you have to do.</p>
+
+        <p><strong>Your level</strong>, which is driven by annual transaction volume. Level 1 — broadly over six million transactions a year with a given brand, though the thresholds vary — requires an annual on-site assessment by a QSA and quarterly scans by an Approved Scanning Vendor. Levels 2 to 4 generally permit self-assessment, with the thresholds and specifics set by each brand and by your acquirer. A breach can move you up a level regardless of volume.</p>
+
+        <p><strong>Your SAQ type</strong>, which is driven by architecture — specifically, how card data flows. This is where merchants most often get it wrong, and it matters more than level for day-to-day engineering.</p>
+
+        <h3>The SAQ types that apply to ecommerce</h3>
+
+        <p><strong>SAQ A</strong> — card data is entirely handled by a validated third party. The classic case is a full redirect to the provider's hosted payment page, where the customer leaves your domain, pays, and comes back. Historically the lightest questionnaire by a wide margin.</p>
+
+        <p><strong>SAQ A-EP</strong> — you don't receive card data, but your server delivers the page that does. Embedded iframes, hosted fields, drop-in components: the customer stays on your domain, your page is what loads the payment form, and therefore your page's integrity determines whether the card data is safe. Much longer, and includes requirements about your own systems.</p>
+
+        <p><strong>SAQ D</strong> — everything else, including any case where card data touches your systems. Long, demanding, and the reason "don't touch card data" is the single most valuable architectural decision available.</p>
+
+        <p>The distinction between A and A-EP is the one that catches people, because from a customer's perspective a redirect and an embedded iframe look similar and from an engineer's perspective both mean "we don't store cards". They differ in one crucial way: with an iframe, an attacker who compromises your page can replace the iframe, and the customer will type their card into the replacement. That's exactly the Magecart pattern, and it's why the requirements diverge.</p>
+
+        <h2>3. Scope Is the Whole Game</h2>
+
+        <p>If you take one concept from this article, take this one. PCI DSS applies to your cardholder data environment — the systems that store, process or transmit card data, <em>plus</em> any system that could affect the security of those systems.</p>
+
+        <p>That second clause is where scope quietly expands. A jump host that can SSH into a payment server is in scope. A monitoring agent with credentials to the payment database is in scope. A shared authentication service is in scope. A flat network where the warehouse printer can reach the payment server puts the warehouse printer in scope.</p>
+
+        <p>Merchants who find PCI painful are almost always merchants with a large scope. Merchants who find it manageable have spent effort making the scope small.</p>
+
+        <p>The exercise that produces the most value, and which I'd do before reading a single requirement, is drawing the data flow honestly. Where does a card number appear? Not where it's stored — where it <em>appears</em>, even momentarily, even in memory, even in a log you didn't mean to write.</p>
+
+        <p>Places I find card data that nobody expected:</p>
+
+        <p><strong>Application logs.</strong> A debug log of a request body from a form post, written during an incident three years ago and never turned off. This is the most common finding I encounter and it's usually a one-line fix plus a very uncomfortable conversation about log retention.</p>
+
+        <p><strong>Error tracking.</strong> An exception handler that serialises the request context to a third-party error service. Card data leaves your environment entirely, into a vendor with a different retention policy.</p>
+
+        <p><strong>Support tooling.</strong> Customers email card numbers. They shouldn't and they do. If your helpdesk stores those emails, your helpdesk is in scope, and so is your mail server, and so is the backup of both.</p>
+
+        <p><strong>Phone orders.</strong> The classic. Someone in customer service takes a card over the phone and types it into an admin interface. That admin interface, the workstation, and the call recording system are all now in scope. This one route can turn a tidy SAQ A-EP environment into SAQ D.</p>
+
+        <p><strong>Session storage and browser state.</strong> A checkout that keeps form state in <code>sessionStorage</code> for a multi-step flow, including the card field. It never reaches your server and it is still a problem.</p>
+
+        <h2>4. Reducing Scope, Which Is the Actual Work</h2>
+
+        <p>Three architectural moves, in descending order of effectiveness.</p>
+
+        <p><strong>Full redirect.</strong> The customer goes to the provider's domain, pays there, comes back. Your systems never see a card number and your page cannot be manipulated into capturing one, because the capture doesn't happen on your page. This is the strongest position and it's SAQ A territory.</p>
+
+        <p>The objection is always conversion. There's a real cost to sending customers to a differently-branded page mid-checkout, though modern providers let you style the hosted page enough to reduce it. Whether the conversion difference outweighs the compliance and breach-risk reduction is a business decision, and it's worth actually measuring rather than assuming — I've seen the assumed gap turn out to be smaller than the noise in the data.</p>
+
+        <p><strong>Iframed hosted fields.</strong> The provider's fields are embedded in your page via iframes, so the card data goes directly from the customer's browser to the provider without passing through your JavaScript or your server. Same-origin policy prevents your page reading inside their iframe.</p>
+
+        <p>This is the pragmatic middle ground most merchants land on, and it's genuinely good — but it puts you in SAQ A-EP, because your page's integrity now matters. An attacker who can inject script into your checkout can overlay a fake form on top of the real iframe, and the customer cannot tell.</p>
+
+        <p><strong>Tokenisation for anything stored.</strong> If you need repeat billing, subscriptions, or one-click checkout, store the provider's token rather than the card. A token is useless to an attacker and worthless outside your merchant account. There is essentially no good reason to store a PAN yourself in 2026.</p>
+
+        <p>What all three have in common: they're decisions made when the checkout is built, and they're expensive to retrofit. If you're replatforming, this is the moment to get it right.</p>
+
+        <h2>5. What v4.0 Changed for Ecommerce</h2>
+
+        <p>Version 4.0 arrived in 2022 with a long transition, and the future-dated requirements became mandatory on 31 March 2025. Two of them changed the engineering picture for storefronts specifically, and they are the reason PCI has recently started appearing in front-end tickets.</p>
+
+        <h3>Requirement 6.4.3 — manage the scripts on your payment page</h3>
+
+        <p>Every script loaded and executed in the consumer's browser on a payment page must be authorised, justified, and inventoried. Not a list someone wrote once. A maintained inventory with a reason for each entry and evidence that its integrity is assured.</p>
+
+        <p>This is a bigger ask than it reads. Most checkout pages I audit load somewhere between six and twenty scripts, and nobody can name an owner for all of them. The exercise of listing them, finding an owner, and asking what breaks if it's removed routinely deletes a third — which is a performance win and a compliance win from the same afternoon.</p>
+
+        <p>Start by finding out what's actually there, including the scripts loaded by other scripts:</p>
+
+        <pre><code class="language-javascript">// Run in the console on your live payment page
+const origin = location.origin;
+console.table(
+  [...document.querySelectorAll('script[src]')].map(s =&gt; ({
+    src: s.src,
+    thirdParty: !s.src.startsWith(origin),
+    integrity: s.integrity || '—',
+    async: s.async,
+    defer: s.defer
+  }))
+);
+
+// And the ones injected at runtime, which the markup will not show you
+const known = new Set([...document.querySelectorAll('script[src]')].map(s =&gt; s.src));
+new PerformanceObserver(list =&gt; {
+  for (const e of list.getEntries()) {
+    if (e.initiatorType === 'script' &amp;&amp; !known.has(e.name)) {
+      known.add(e.name);
+      console.warn('injected at runtime:', e.name);
+    }
+  }
+}).observe({ type: 'resource', buffered: true });</code></pre>
+
+        <p>The second block produces the surprises. Scripts in your HTML are the ones you know about; scripts those scripts load are the actual attack surface.</p>
+
+        <p>The awkward conversation this forces is about tag managers. A tag manager's purpose is to let people add code without a deploy, which is precisely what "authorised and inventoried" forbids. My recommendation is consistently to remove the tag manager from the payment page — not from the site, from the page where card data is entered — and fire conversion tracking from the confirmation page or server-side instead. That lands more often than you'd expect once a QSA finding is the alternative.</p>
+
+        <h3>Requirement 11.6.1 — detect tampering</h3>
+
+        <p>You must deploy a mechanism that detects unauthorised modification to the HTTP headers and the script content of payment pages, and alerts on it, evaluated at least weekly.</p>
+
+        <p>The word doing the work is <em>detect</em>. Prevention isn't enough; you need to know when something changed. In practice that means some combination of:</p>
+
+        <p><strong>Subresource Integrity</strong> on the scripts that support it, so a changed file simply doesn't execute and an error handler tells you. Covered properly in <a href="/blog/sri-implementation/">the SRI guide</a>, including why tag managers resist it.</p>
+
+        <p><strong>A Content Security Policy in reporting mode</strong> alongside your enforcing one, so a script from an undeclared source generates a report even where it would otherwise be silently blocked.</p>
+
+        <p><strong>An external check</strong> that fetches your payment page on a schedule, extracts the script tags and header set, and compares against a known-good baseline. This is the piece that satisfies "evaluated at least weekly" most directly, and it's not hard to build:</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# payment-page-baseline.sh — run nightly; diff against the committed baseline
+set -euo pipefail
+URL="https://shop.example.com/checkout"
+OUT=$(mktemp)
+
+{
+  echo "== headers"
+  curl -sI "$URL" | tr -d '\r' | grep -iE '^(content-security-policy|strict-transport|x-content-type|referrer-policy):' | sort
+  echo "== scripts"
+  curl -sS "$URL" | grep -oE '&lt;script[^&gt;]*src="[^"]+"' | grep -oE 'src="[^"]+"' | sort -u
+} &gt; "$OUT"
+
+if ! diff -u baseline/payment-page.txt "$OUT"; then
+  echo "PAYMENT PAGE CHANGED — investigate before approving" &gt;&amp;2
+  exit 1
+fi
+echo "payment page matches baseline"</code></pre>
+
+        <p>Commit the baseline. A legitimate change means updating it in a pull request, which turns "we monitor our payment page" from an assertion into an artefact with a review history — exactly the sort of evidence an assessor wants to see.</p>
+
+        <h3>The other v4.0 changes worth knowing</h3>
+
+        <p><strong>Passwords lengthened.</strong> The minimum moved from seven characters to twelve for accounts with access to the cardholder data environment. Trivial to configure, occasionally awkward with legacy systems that cap length.</p>
+
+        <p><strong>Multi-factor authentication broadened.</strong> Required for all access into the CDE, not only remote or administrative access. If your admin panel is in scope, everyone signing into it needs MFA.</p>
+
+        <p><strong>Targeted risk analysis.</strong> Several requirements now let you set your own frequency for a control, provided you document a risk analysis justifying it and review it annually. This is genuinely useful flexibility and it is not a loophole — a documented, defensible analysis is more work than following the default, and assessors read them.</p>
+
+        <p><strong>The customised approach.</strong> You may meet a requirement's objective by a different method than prescribed, with documentation and QSA validation. Powerful for organisations with mature security programmes and unusual architectures. Not a shortcut for anyone else.</p>
+
+        <h2>6. Findings I See Most Often</h2>
+
+        <p>Roughly ordered by how frequently they come up on ecommerce assessments.</p>
+
+        <p><strong>Card data in logs.</strong> Discussed above. Check your logs today; it takes ten minutes and it's the highest-probability finding on this list.</p>
+
+        <pre><code class="language-bash"># Crude but effective — run against a sample of recent logs
+grep -rEo '\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b' /var/log/app/ | head</code></pre>
+
+        <p><strong>Unsegmented networks.</strong> A flat network means everything is in scope. Segmentation is the single most effective scope-reduction technique after not handling card data at all, and it needs to be tested — a firewall rule you believe in is not evidence.</p>
+
+        <p><strong>Shared accounts.</strong> A <code>deploy</code> user that three engineers use, or a shared admin login. Requirement 8 wants individual accountability, and shared credentials also make incident investigation nearly impossible.</p>
+
+        <p><strong>Missing or unreviewed logs.</strong> Requirement 10 asks for logging <em>and</em> daily review of security events. Most merchants have logs. Fewer have a defined review process, and "we look at them if something happens" is not one.</p>
+
+        <p><strong>Unpatched systems.</strong> Requirement 6 requires critical patches within a month. On a Magento estate that means keeping current with security releases, which is a resourcing commitment rather than a technical one, and it's where I see teams fall behind quietly.</p>
+
+        <p><strong>Third parties without a responsibility matrix.</strong> Requirement 12.8 wants a written record of which PCI requirements each service provider is responsible for and which are yours. Most merchants have the contracts and not the matrix, and building it usually reveals a requirement everyone assumed the other party was covering.</p>
+
+        <p><strong>Test data in production.</strong> Test card numbers in a live database, or a staging environment with a copy of production data. The latter is worse than it sounds — a staging environment with real cardholder data is fully in scope, and it's usually the least hardened system you own.</p>
+
+        <h2>7. Segmentation, Practically</h2>
+
+        <p>Segmentation is how a large organisation keeps PCI scope small, and it is the requirement most often claimed and least often demonstrated.</p>
+
+        <p>The principle is straightforward: if a system cannot communicate with the cardholder data environment, it is out of scope. The difficulty is that "cannot communicate" is a stronger claim than most networks can support, and assessors test it rather than accepting it.</p>
+
+        <p>What counts as segmentation:</p>
+
+        <p><strong>Network controls that deny by default.</strong> A firewall or security group whose default action is deny, with an explicit, documented allowlist of what may cross the boundary. An allow-by-default network with some deny rules is not segmentation; it is an aspiration.</p>
+
+        <p><strong>Separate identity.</strong> A shared directory that authenticates both the CDE and the corporate network means a compromise of that directory reaches both. This is the segmentation gap I find most often in otherwise well-built environments, because network diagrams show the network and not the trust relationships layered on top of it.</p>
+
+        <p><strong>Separate administrative paths.</strong> If the same jump host reaches both environments, the jump host is in scope and so is anything that can reach it. Dedicated access paths cost a little more and remove a great deal of scope.</p>
+
+        <p>What does not count, despite frequently being offered as evidence: VLANs without enforced filtering between them, application-layer separation on shared infrastructure, and "we don't have a route configured" without a control that prevents one being added.</p>
+
+        <p>In a cloud environment the same logic applies with different nouns. Separate accounts or subscriptions per environment give you a hard boundary that a security group in a shared account does not. Cross-account roles are the controlled crossing point, and they're auditable, which assessors like. The pattern that causes trouble is a single account with everything in it, separated by tags and good intentions.</p>
+
+        <p>Whatever you build, plan for it to be tested. The annual penetration test must attempt to cross the boundary from the out-of-scope side and document that it failed. Book that explicitly with your testers, because a general application pen test will not cover it and discovering the gap at report time means an unplanned engagement.</p>
+
+        <h2>8. The Scan and Test Requirements</h2>
+
+        <p>Two things get confused constantly.</p>
+
+        <p><strong>ASV scans</strong> are quarterly external vulnerability scans performed by an Approved Scanning Vendor against your internet-facing addresses. Automated, relatively cheap, and required for most merchant levels. A passing scan means no vulnerabilities above the failing threshold; you may need to rescan after remediation to get a clean quarter on record.</p>
+
+        <p>The practical annoyance is that ASV scans flag things a WAF already mitigates, and disputing a finding requires evidence. Budget time for it; the first scan of a new environment always produces a list.</p>
+
+        <p><strong>Penetration testing</strong> is a manual exercise by a skilled human, required annually and after significant infrastructure or application changes. It covers the network and application layers and, if you rely on segmentation to reduce scope, must specifically verify that the segmentation holds.</p>
+
+        <p>That segmentation test matters and is often skipped. If you claim your warehouse network cannot reach your payment environment, someone must attempt it and document the result. A firewall configuration is a claim; a tested boundary is evidence.</p>
+
+        <p>Also worth planning for: "significant change" triggers a retest. A replatform, a new payment provider, a move to a new cloud region — each can require testing outside your annual cycle. Building that into project budgets prevents an unwelcome discovery late in a migration.</p>
+
+        <h2>9. What an Assessment Actually Involves</h2>
+
+        <p>Demystifying this helps, because the anticipation is usually worse than the reality.</p>
+
+        <p><strong>Scoping.</strong> The QSA works out what's in scope, and this is where you either save or spend a great deal of the engagement's effort. Come with an accurate data flow diagram and a network diagram. If you don't have them, the QSA will build them with you, at your expense and more slowly.</p>
+
+        <p><strong>Evidence gathering.</strong> Configuration exports, policy documents, screenshots, sampled logs, change tickets. The volume surprises people. Most requirements are satisfied by a document plus evidence the document is followed — a patching policy is not enough; they want the patching policy and evidence of patches applied within its stated window.</p>
+
+        <p><strong>Interviews.</strong> The QSA talks to engineers, support staff, and anyone in the card flow. This is where the phone-orders problem tends to surface, because someone in customer service describes their actual workflow rather than the documented one.</p>
+
+        <p><strong>Testing.</strong> Sampled verification — they'll pick systems and check them rather than examining everything.</p>
+
+        <p><strong>Remediation and reporting.</strong> Findings get fixed and re-evidenced, then the Report on Compliance is produced.</p>
+
+        <p>The pattern I'd encourage: treat the QSA as a collaborator rather than an examiner. The ones I've worked with are pragmatic and would much rather help you build a defensible position than catch you out. Asking "how would you like to see this evidenced" early saves weeks.</p>
+
+        <h2>10. The Requirements Nobody Reads Until It Matters</h2>
+
+        <p>Requirement 12 covers policy and process, and it is where merchants who are technically solid still lose weeks. Three parts deserve attention before an assessment rather than during one.</p>
+
+        <p><strong>An incident response plan that names people.</strong> Requirement 12.10 wants a documented plan, tested annually, covering who does what when card data may have been exposed. The version that fails is a generic template with no names, no phone numbers, and no evidence anyone has read it.</p>
+
+        <p>The version that works is short and specific: who declares an incident, who contacts the acquirer and within what timeframe, who engages the forensic investigator, who talks to customers, and where the out-of-hours numbers are. One page, with real names, reviewed when people leave. Test it as a tabletop exercise once a year and write down that you did — that record is the evidence.</p>
+
+        <p>The detail worth knowing in advance: your acquirer contract almost certainly requires notification within a tight window, often measured in hours, and mandates using a PCI Forensic Investigator from an approved list. Finding that out during an incident is a bad time to find it out.</p>
+
+        <p><strong>Security awareness training.</strong> Requirement 12.6 asks for it at hire and annually, covering phishing and social engineering specifically. Unexciting, and it addresses the route by which most merchants actually get compromised — not a clever browser attack but someone's credentials.</p>
+
+        <p><strong>The service provider inventory and responsibility matrix.</strong> Requirement 12.8 wants a list of every third party with access to cardholder data or that could affect its security, their PCI status, and a written division of responsibility.</p>
+
+        <p>Building it is a genuinely useful exercise beyond compliance, because it surfaces the requirements everyone assumed someone else covered. A typical storefront's list is longer than expected: payment provider, hosting, CDN, fraud screening, tag manager, error tracking, session recording, email service, warehouse integration, and whichever agency has admin access. Each needs a line, and several will need a conversation.</p>
+
+        <h2>11. Building Compliance Into Engineering</h2>
+
+        <p>The merchants who find this manageable have moved the work into normal engineering practice rather than treating it as an annual event.</p>
+
+        <p><strong>Automate the evidence.</strong> If a requirement asks for a quarterly check, script the check and store its output with a timestamp. Annual evidence gathering becomes a directory listing rather than an archaeology project.</p>
+
+        <p><strong>Put the payment page baseline in CI.</strong> The script above, run on every deploy plus nightly. It satisfies a requirement and it catches real problems.</p>
+
+        <p><strong>Fail builds on unpinned third-party scripts</strong> in payment templates. That's requirement 6.4.3 enforced by the build rather than by memory.</p>
+
+        <p><strong>Keep the responsibility matrix in the repository.</strong> A markdown table listing each service provider and which requirements they cover, reviewed when contracts change. It's the artefact most often missing and among the easiest to maintain.</p>
+
+        <p><strong>Log scrubbing at the framework level.</strong> Don't rely on developers remembering not to log request bodies. Redact at the logging layer so it's structurally impossible:</p>
+
+        <pre><code class="language-javascript">const SENSITIVE = /\b(?:card(?:_?number)?|pan|cvv|cvc|securityCode|expiry)\b/i;
+const PAN = /\b(?:\d[ -]*?){13,19}\b/g;
+
+function redact(value, key = '') {
+  if (SENSITIVE.test(key)) return '[REDACTED]';
+  if (typeof value === 'string') return value.replace(PAN, '[REDACTED-PAN]');
+  if (value &amp;&amp; typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) =&gt; [k, redact(v, k)])
+    );
+  }
+  return value;
+}
+
+logger.addFilter(entry =&gt; redact(entry));</code></pre>
+
+        <p>That regex is deliberately broad and will occasionally redact an order number that looks like a card. That trade is correct: a false positive costs you a debugging session, a false negative costs you a finding.</p>
+
+        <h2>12. Platform Notes</h2>
+
+        <p>The general principles land differently depending on what you run.</p>
+
+        <h3>Magento and Adobe Commerce</h3>
+
+        <p>Self-hosted means the whole stack is yours: the servers, the patching, the segmentation, the logs. That is the heaviest position on this page, and it's the correct one for merchants who need the control.</p>
+
+        <p>The specifics I check first. Payment integration method, because a module that posts card data through your server puts you in SAQ D while an iframe-based one does not — and the module's marketing copy is not reliable evidence of which it is, so read the integration. Admin access, because the Magento admin is in scope if it can touch order data with card references, which means MFA and individual accounts rather than a shared login. Patch cadence, because security releases arrive on a schedule and requirement 6 gives you a month. And the extension estate, since every third-party module is code running in your environment with your privileges.</p>
+
+        <p>Adobe Commerce on cloud infrastructure shifts some responsibility to Adobe, and the responsibility matrix for that arrangement is published — read it rather than assuming, because the split is not intuitive in places.</p>
+
+        <h3>Shopify</h3>
+
+        <p>Shopify handles the payment environment and is itself compliant, which removes most of the heavy requirements. Merchants on Shopify Payments with standard checkout generally fall into the lightest category.</p>
+
+        <p>What remains yours: app hygiene, because every installed app has permissions and some can read order data; staff account discipline, including MFA and removing leavers promptly; and anything you build outside Shopify that touches order data — a custom ERP sync, a reporting warehouse, a support tool. Those are your systems and your scope.</p>
+
+        <p>The area where Shopify merchants get caught is a custom storefront. Building a headless front end against the Storefront API and handling checkout yourself changes the picture materially, and the assumption that "we're on Shopify so it's handled" stops being true at exactly that point.</p>
+
+        <h3>Headless and composable architectures</h3>
+
+        <p>More moving parts, and scope determined by where the payment step lives rather than by the architecture's name. A headless storefront that redirects to a hosted payment page is in a strong position. One that renders payment fields inside its own React application is squarely in A-EP territory, with the added complication that the front end is often deployed by a different team on a different cadence from everything else.</p>
+
+        <p>The practical advice for composable stacks: decide early which single team owns the payment page's contents, and give them a veto. The failure mode is a checkout page assembled from components owned by four teams, where nobody can answer the inventory question because no one person knows what ships.</p>
+
+        <h2>13. What It Costs</h2>
+
+        <p>Ranges rather than numbers, because they vary hugely by region and by scope.</p>
+
+        <p>A self-assessment with quarterly ASV scans is the cheap end — scanning is a modest annual subscription, and the cost is mostly internal time. A Level 1 assessment with a QSA is a substantial professional-services engagement, and the first year is always the most expensive because you're building documentation that subsequently only needs updating.</p>
+
+        <p>The costs people underestimate are internal. Evidence gathering across a first assessment consumes real engineering weeks. Remediation of findings is unplanned work. And segmentation projects, if you need one, are infrastructure programmes rather than tickets.</p>
+
+        <p>The cost that dominates everything, of course, is a breach: forensic investigation, card brand fines, mandatory upgrade to Level 1 assessment, remediation under time pressure, and the customer-trust consequences that don't appear on any invoice. Every hour spent on scope reduction is an hour that reduces that exposure, which is the argument I'd make to a finance director rather than the compliance one.</p>
+
+        <h2>14. Questions That Come Up</h2>
+
+        <p><strong>"We use Stripe, so we're compliant, right?"</strong> Stripe is compliant. You are responsible for your own environment, and the SAQ you fall under depends on how you've integrated. Stripe Checkout as a full redirect is very different from Stripe Elements embedded in your page, even though both mean you never see a card number.</p>
+
+        <p><strong>"Does PCI apply if we're small?"</strong> Yes. Transaction volume determines validation requirements, not whether the standard applies. A merchant doing two hundred orders a month still has obligations, and small merchants are targeted precisely because they're assumed not to be looking.</p>
+
+        <p><strong>"Can we store the last four digits?"</strong> Yes — truncated PANs are permitted for display and reconciliation, and that's why receipts show them. Storing the full PAN requires strong encryption, key management, and puts you firmly in SAQ D. Storing the CVV after authorisation is prohibited outright, with no exceptions.</p>
+
+        <p><strong>"Is a WAF enough for requirement 6.6?"</strong> A WAF is one of the permitted approaches for protecting public-facing web applications, the other being application code review or vulnerability assessment. A WAF you deployed and never tuned is weak evidence. Be able to show it's configured for your application and that someone reviews what it blocks.</p>
+
+        <p><strong>"What about phone orders?"</strong> The route that most often expands scope unexpectedly. Options include pause-and-resume call recording, DTMF masking services where the customer types digits that agents never hear, or sending a secure payment link so the customer enters their own card. All are better than an agent typing a card into your admin.</p>
+
+        <p><strong>"Our developers need production access to debug."</strong> Common and usually solvable. Better logging, better staging with realistic-but-synthetic data, and time-limited elevated access with an approval trail. Standing production access for developers in a CDE is a finding waiting to happen.</p>
+
+        <p><strong>"Do we need to be compliant before we launch?"</strong> Your acquirer will usually want the SAQ before enabling live payments, so in a practical sense yes. The better question is when to do the architectural work, and the answer is during the build — choosing a redirect or hosted fields costs nothing at design time and is a substantial project to retrofit once a checkout is live and converting.</p>
+
+        <p><strong>"How does this interact with GDPR?"</strong> They overlap and don't conflict. PCI cares about cardholder data specifically; GDPR cares about personal data broadly. A PCI-driven exercise to remove card data from logs usually improves your GDPR position too, since the same logs contain names, addresses and emails. Do them as one project.</p>
+
+        <h2>15. Where I'd Start This Week</h2>
+
+        <p>Find out which SAQ you're actually on, and check that it matches your architecture. If your checkout page is served by your servers and embeds a provider's fields, and you filled in SAQ A, that's the first thing to fix — and fixing it means either doing the A-EP work or moving to a full redirect.</p>
+
+        <p>Grep your logs for card numbers. Ten minutes, and it's the most common finding there is.</p>
+
+        <p>Run the script inventory on your live payment page, including the runtime-injected ones. Then find an owner for each. Expect not to find one for several, and delete those — that satisfies part of 6.4.3 and makes the page faster.</p>
+
+        <p>Write the payment page baseline check and put it in CI. That's 11.6.1 addressed with about thirty lines of shell.</p>
+
+        <p>Book the segmentation test explicitly with whoever does your penetration testing, if you rely on segmentation at all. It is the item most often assumed to be covered and most often isn't.</p>
+
+        <p>Then draw the data flow diagram, honestly, including phone orders and support email. That diagram determines your scope, your scope determines your effort, and everything else in this article is downstream of it.</p>
+
+        <p>One framing that helps when this competes with feature work for priority. Almost every item on that list is something you would want anyway if you had never heard of PCI. Card numbers in logs is a data-handling defect. An unowned script on the checkout page is a supply-chain exposure and a performance cost. A flat network is an incident waiting to spread. An untested incident plan is an incident you will handle badly. The standard is not asking you to do unusual things; it is asking you to do ordinary things and keep evidence that you did them. The evidence is the only part that is genuinely additional work, and automating it — which is most of what the engineering section above describes — reduces that to close to nothing.</p>
+
+        <p>The merchants who struggle with PCI are the ones who treat it as a questionnaire to be survived once a year. The ones who find it routine made a small number of architectural decisions — don't touch card data, segment the network, keep the payment page minimal — and then let normal engineering discipline carry the rest.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -219,12 +557,11 @@
               <p>PCI-DSS 4.0 requirement 6.4.3 compliance.</p>
             </li>
             <li>
-              <strong><a href="/blog/secure-payment-gateways/">Secure Payment Gateways: Best Practices for Magento & Shopify</a></strong>
+              <strong><a href="/blog/secure-payment-gateways/">Secure Payment Gateways: Best Practices for Magento &amp; Shopify</a></strong>
               <p>Tokenization with Stripe Elements and Adyen Drop-in.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -258,6 +595,6 @@
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

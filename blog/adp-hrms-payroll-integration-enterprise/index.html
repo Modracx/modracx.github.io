@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>ADP HRMS & Payroll Integration for Enterprise | MODRACX</title>
-  <meta name="description" content="Technical architectural guide on integrating ADP Workforce Now REST API v2 with enterprise e-commerce portals for automated payroll ledger posting." />
+  <meta name="description" content="ADP Workforce Now integration for ecommerce operations: data minimisation, mutual TLS auth, deadline-aware scheduling around pay cutoffs, audit trails and failing safely." />
   <meta property="og:title" content="ADP HRMS & Payroll Integration for Enterprise | MODRACX" />
   <meta property="og:description" content="Technical architectural guide on ADP HRMS integration by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>ADP HRMS & Payroll Integration for Enterprise</h1>
-        <p class="lede">Connecting ADP Workforce Now APIs directly with corporate backend portals automates labor cost allocations against daily order fulfillment volume.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>ADP HRMS &amp; Payroll Integration for Enterprise</h1>
+        <p class="lede">Thirty-one warehouse staff were paid short because a retry landed ten hours after the payroll cutoff. Everything worked as designed, and that was the problem.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,35 +205,470 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>ADP Worker API v2 Request Code</h2>
+        <h2>1. Thirty-One People Paid Short</h2>
 
-        <pre><code class="language-javascript">// Node.js ADP Worker API Request with Client Certificate
-const axios = require('axios');
-const fs = require('fs');
-const https = require('https');
+        <p>On the last Friday of February, thirty-one warehouse staff at a fulfilment operator I was working with received a payslip missing between four and eleven hours of weekend overtime. The amounts ranged from about £38 to £126. Several of them found out when a direct debit bounced.</p>
 
-const agent = new https.Agent({
-  cert: fs.readFileSync('./adp.crt'),
-  key: fs.readFileSync('./adp.key')
-});
+        <p>The cause was a batch window. Their time and attendance data flowed from a workforce scheduling system into a middleware job we had built, which aggregated hours against fulfilment volume for cost allocation and pushed approved overtime into ADP. The job ran nightly at 02:00. Payroll's input cutoff was 16:00 on the Tuesday before payday. That Tuesday, the fulfilment platform had a slow database migration running and the 02:00 job took eleven hours instead of forty minutes, finishing at 13:04 — comfortably before the cutoff, except that the job processed dates in ascending order and the migration had caused a partial failure on the final chunk, which was the weekend in question. The chunk retried on the next scheduled run. At 02:00 on Wednesday. Ten hours after payroll had closed.
 
-async function getADPWorker(associateId, accessToken) {
-  const url = `https://api.adp.com/hr/v2/workers/${associateId}`;
-  return await axios.get(url, {
-    headers: { 'Authorization': `Bearer ${accessToken}` },
-    httpsAgent: agent
-  });
-}</code></pre>
+        </p>
 
-        <hr />
+        <p>Everything about the integration behaved as designed. There was a retry, it worked, and the data arrived. It arrived after the only moment it mattered.</p>
+
+        <p>Fixing it took a week: an off-cycle payment run, thirty-one manual approvals, an apology from the operations director, and a formal note in the company's grievance log because two people raised it through their union rep. The engineering fix was a deadline-aware scheduler and an alert on unprocessed hours as the cutoff approached. That took a day.</p>
+
+        <p>This is the thing that makes payroll integration different from every other system-to-system link I write about. An order that syncs late gets fixed and nobody outside the business notices. A payroll record that syncs late means somebody's rent is short. The correctness bar is not higher because the data is more complex — it is higher because the failure lands on a person who did not choose to be part of your architecture.</p>
+
+        <p>The generic integration machinery still applies. Idempotency, bounded retries, dead-letter queues, reconciliation: all of it, exactly as described in the piece on <a href="/blog/sap-commerce-cloud-erp-sync/">SAP Commerce Cloud and S/4HANA synchronisation</a>. I will not restate it. This article is about the four things that are genuinely different — what you are allowed to hold, who can reach it, when it has to be there, and what you do when it is wrong.</p>
+
+        <h2>2. Payroll Data Is Not Order Data</h2>
+
+        <p>Engineers who have spent their careers on commerce systems tend to underestimate the shift here, and I include myself in the first year I did this work.</p>
+
+        <p>An order record contains a name, an address, an email, some items and a total. It is personal data and it deserves care. A worker record from ADP contains a legal name, a date of birth, a national insurance or social security number, a home address, bank account details, salary or hourly rate, tax code, employment status, and depending on which endpoints you call, information about sickness absence, statutory leave including maternity and paternity, garnishments and attachment of earnings orders, and pension and union deductions.</p>
+
+        <p>Several of those are special category data under UK and EU data protection law — health data inferable from sickness absence, and trade union membership inferable from a deduction line. Special category data has a higher processing bar than "we have a legitimate interest", and a payroll integration that pulls a full worker object because it was easier than selecting fields will be holding it whether it wanted to or not.</p>
+
+        <p>The practical difference in how you build:</p>
+
+        <p><strong>Minimisation is not a nice-to-have, it is the design.</strong> On a commerce integration I will happily replicate a fuller record than strictly needed because storage is cheap and future requirements are unknown. Here the opposite discipline applies. Every field you copy is a field that appears in a breach notification. Start from zero and justify each addition in writing.</p>
+
+        <p><strong>Logs are a data store.</strong> A commerce integration that logs full request bodies at debug level is untidy. A payroll integration that does the same has put bank details into a log aggregator with a ninety-day retention, indexed and searchable by anyone with a login to the observability platform. I have found this on inherited systems more than once.</p>
+
+        <p><strong>The blast radius of a bug is a person.</strong> A duplicate order export produces a duplicate shipment and an annoyed customer. A duplicate payroll input produces a duplicate payment, a clawback conversation, and in some jurisdictions a legal process for recovering an overpayment that the employee is not automatically obliged to repay.</p>
+
+        <p>So the first architectural decision on any ADP integration is not about APIs. It is: what is the smallest set of fields that satisfies the business requirement, and can we satisfy it without holding identifiers at all?</p>
+
+        <h2>3. What You Actually Need To Read</h2>
+
+        <p>The stated requirement on the fulfilment operator was "allocate labour cost against daily order volume so we can see cost per order by site and by shift". That is a genuinely useful number and it drives real decisions about shift patterns and agency staffing.</p>
+
+        <p>Here is what that requirement needs, per worker per day: a stable pseudonymous identifier, a site, a shift or department code, hours worked split by regular and premium, and a cost. That is five fields and not one of them is a name.</p>
+
+        <p>Here is what most first-pass designs pull: the full worker demographic object, because the endpoint returns it and filtering felt like premature optimisation.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Data</th><th>Needed for cost allocation?</th><th>Decision</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Associate OID</td><td>As a join key only</td><td>Hash it; store the hash</td></tr>
+            <tr><td>Legal name</td><td>No</td><td>Do not retrieve</td></tr>
+            <tr><td>Date of birth, national ID</td><td>No</td><td>Do not retrieve</td></tr>
+            <tr><td>Home address</td><td>No</td><td>Do not retrieve</td></tr>
+            <tr><td>Bank details</td><td>No</td><td>Do not retrieve, ever</td></tr>
+            <tr><td>Hourly rate</td><td>Yes, to compute cost</td><td>Retrieve; restrict; do not display per person</td></tr>
+            <tr><td>Work location / cost centre</td><td>Yes</td><td>Retrieve</td></tr>
+            <tr><td>Job title / department</td><td>Yes, for grouping</td><td>Retrieve</td></tr>
+            <tr><td>Hours by pay code</td><td>Yes</td><td>Retrieve</td></tr>
+            <tr><td>Absence reason</td><td>No</td><td>Retrieve presence only, never reason</td></tr>
+          </tbody>
+        </table>
+
+        <p>That last row deserves a note. "Hours not worked" is operationally useful for capacity planning. "Hours not worked because of a hospital appointment" is health data. ADP's absence data can carry reason codes, and the correct handling is to map every reason to a binary at the point of retrieval, in the integration, before anything is stored — not to store the reason and filter it in the reporting layer.</p>
+
+        <p>The hourly rate row is the contested one. You need it to compute cost, and it is one of the most sensitive fields in the set — an internal dashboard that lets a shift supervisor infer a colleague's pay is a serious problem regardless of what data protection law says about it. The pattern I use: compute cost inside the integration, store the cost aggregated to a group of at least five people, and never persist a per-person rate outside the integration's own encrypted working store. If a group has fewer than five members that day, suppress the cell rather than showing it.</p>
+
+        <h2>4. Certificates, Not API Keys</h2>
+
+        <p>ADP's API authentication is the most unusual thing about integrating with them and the part that surprises teams used to a bearer token from a dashboard.</p>
+
+        <p>Access uses OAuth 2.0 client credentials, which is ordinary. What is not ordinary is that the token request itself is made over mutual TLS with a client certificate that ADP issues to you for a specific consumer application. No certificate, no token. The certificate has an expiry, typically a year or two out, and when it expires your integration stops completely.</p>
+
+        <pre><code class="language-python">import requests, time, threading
+
+class AdpAuth:
+    """ADP client-credentials with mutual TLS. The cert is the credential;
+    the client secret alone gets you nothing."""
+
+    TOKEN_URL = "https://accounts.adp.com/auth/oauth/v2/token"
+
+    def __init__(self, client_id, client_secret, cert_path, key_path):
+        self._lock = threading.Lock()
+        self._token, self._expires_at = None, 0
+        self._auth = (client_id, client_secret)
+        # requests takes a (cert, key) tuple; the key must not be passphrase
+        # protected here, so it lives in a secrets manager and is written to
+        # a tmpfs path at process start, never to disk.
+        self._cert = (cert_path, key_path)
+
+    def token(self):
+        if self._token and time.time() &lt; self._expires_at - 120:
+            return self._token
+        with self._lock:
+            if self._token and time.time() &lt; self._expires_at - 120:
+                return self._token
+            r = requests.post(
+                self.TOKEN_URL,
+                data={"grant_type": "client_credentials"},
+                auth=self._auth,
+                cert=self._cert,
+                timeout=20,
+            )
+            r.raise_for_status()
+            body = r.json()
+            self._token = body["access_token"]
+            self._expires_at = time.time() + int(body.get("expires_in", 3600))
+            return self._token</code></pre>
+
+        <p>Three operational points follow from certificate-based auth, and all three have bitten real projects.</p>
+
+        <p><strong>Certificate expiry needs a calendar entry and an alert, not a memory.</strong> The renewal involves generating a signing request, submitting it through ADP's developer portal, and waiting for issuance, which is not an afternoon's work. Alert at ninety days, sixty days, and thirty days before expiry, and route it to a team rather than an individual. The individual will have left.</p>
+
+        <p><strong>The private key must never touch a repository or a container image.</strong> Obvious, and I have found it in a Dockerfile. Load it from a secrets manager at process start and write it to a memory-backed filesystem if the HTTP library demands a path.</p>
+
+        <p><strong>Non-production needs its own certificate and its own consumer application.</strong> Sharing production credentials with a staging environment means a test run can write to live payroll. That is not a hypothetical: the whole category of "we thought we were pointing at the sandbox" incidents ends here badly rather than embarrassingly.</p>
+
+        <p>Scopes are the other half. ADP grants API access per product per consumer application, and the granularity is real — you can be granted worker demographics without payroll, or time cards without demographics. Ask for the narrowest set that satisfies the requirement, and revisit it when the requirement changes, because scope creep in an access grant is invisible until an audit.</p>
+
+        <h2>5. Where The Data Lands And Who Can Reach It</h2>
+
+        <p>Assume for a moment that you have minimised properly and are holding a hashed worker identifier, a site, a department, hours by pay code, and a computed cost. That is still an HR dataset and it still needs handling that a product catalogue does not.</p>
+
+        <p>The controls I treat as non-negotiable on this kind of build:</p>
+
+        <p><strong>A separate datastore, not a schema in the commerce database.</strong> The temptation is to put labour cost in the same warehouse as order data because the join is the whole point. Do the join in a reporting layer over two sources rather than by co-locating raw HR data with data that has a much wider access list. The number of people with read access to a commerce data warehouse is always larger than anyone thinks.</p>
+
+        <p><strong>Encryption at rest with a separate key.</strong> Not the platform default key shared with everything else. A key you can revoke independently, whose usage you can audit independently, and whose access policy names a small number of principals.</p>
+
+        <p><strong>Network isolation for the integration process.</strong> The component holding an ADP certificate should not be reachable from the storefront, should not share a runtime with anything customer-facing, and should egress only to ADP. This is ordinary <a href="/blog/zero-trust-security/">zero trust segmentation</a> and it is worth the extra deployment complexity here specifically.</p>
+
+        <p><strong>Pseudonymous identifiers everywhere downstream.</strong> The ADP Associate OID is a stable identifier tied to a real person in a system your HR team can query. Downstream of the integration, use a keyed hash of it, with the key held only by the integration. Then a leak of the analytics database is a leak of opaque strings rather than a leak of a workforce roster.</p>
+
+        <pre><code class="language-python">import hmac, hashlib
+
+# Keyed hash, not a plain digest: an unkeyed SHA-256 of an identifier
+# is trivially reversible by anyone who can enumerate the identifier space,
+# and an AOID space is small enough to enumerate.
+def pseudonym(associate_oid: str, key: bytes) -&gt; str:
+    return hmac.new(key, associate_oid.encode(), hashlib.sha256).hexdigest()[:32]
+
+# The reverse map lives only in the integration's own encrypted store and is
+# only ever read for a named, logged, time-boxed purpose — a payroll query
+# from HR, not a curiosity from an analyst.</code></pre>
+
+        <p><strong>Field-level redaction in logs, enforced by the logger.</strong> Not by convention, not by code review. A serialiser that refuses to emit any key on a deny list, applied at the logging boundary, so a developer adding a debug line cannot accidentally leak. And a test that asserts it.</p>
+
+        <pre><code class="language-python">import json, logging
+
+DENY = {"associateOID", "governmentID", "birthDate", "legalName", "givenName",
+        "familyName1", "bankAccountNumber", "routingNumber", "baseRemuneration",
+        "hourlyRateAmount", "socialInsuranceProgram"}
+
+class RedactingFormatter(logging.Formatter):
+    def format(self, record):
+        if isinstance(getattr(record, "payload", None), dict):
+            record.payload = self._scrub(record.payload)
+        return super().format(record)
+
+    def _scrub(self, obj):
+        if isinstance(obj, dict):
+            return {k: ("[redacted]" if k in DENY else self._scrub(v))
+                    for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._scrub(v) for v in obj]
+        return obj
+
+# Test that must exist and must fail the build:
+#   assert "[redacted]" in capture_log(worker_payload_with_government_id)</code></pre>
+
+        <h2>6. Access Control On Your Side Of The Line</h2>
+
+        <p>ADP has its own role model and it is thorough. The gap is always on the receiving side, where the data arrives in your systems and inherits your access model, which was designed for order data.</p>
+
+        <p>Three rules I apply.</p>
+
+        <p><strong>Nobody gets standing access to individual-level HR data.</strong> Aggregates by default. Individual records only through a request that names a purpose, is approved by someone in HR rather than engineering, expires automatically, and is logged in a place the requester cannot edit. Break-glass access for a production incident is legitimate and should be equally logged and reviewed afterwards.</p>
+
+        <p><strong>Engineers debugging the integration work on synthetic data.</strong> This is a bigger constraint than it sounds and it forces a discipline that is worth having anyway: a fixture set of realistic workers with realistic edge cases — mid-period rate changes, a rehire, a worker with two concurrent positions, a leaver on the last day of a pay period — that lives in version control and is used by every test. If you can only reproduce a bug against production HR data, you have built something you cannot safely maintain.</p>
+
+        <p><strong>The dashboard suppresses small groups.</strong> Cost per order by site and shift is fine. Cost per order by site, shift and department, on a night shift with three people, is a pay disclosure with extra steps. Implement a minimum group size in the query layer, not in the chart configuration, because chart configurations get edited.</p>
+
+        <p>There is a related point about who owns the integration. On a commerce project the integration usually sits between two engineering teams. Here it sits between engineering and HR, and HR are the data owners in a way that has legal weight. The person who signs off what fields are retrieved should be the person accountable for the data, and they should re-approve it when the scope changes. Writing that down as a one-page data processing note, agreed once, prevents the slow accumulation of "while we're at it, can we also pull" requests that turns a minimal integration into a shadow HR database over eighteen months.</p>
+
+        <h2>7. The Pay Calendar Is The Architecture</h2>
+
+        <p>Here is the part that the opening incident was really about, and the part that generic integration advice does not cover at all.</p>
+
+        <p>Commerce integrations are designed around throughput and latency. Payroll integrations are designed around deadlines. Those are different problems and they need different scheduling.</p>
+
+        <p>A pay cycle has a fixed sequence: a period end, a data collection window, an approval window, a payroll input cutoff, a processing run, and a payment date. Behind the payment date sits a banking lead time — direct deposit files go to the bank two banking days ahead in most arrangements — which means the practical point of no return is earlier than the payment date by rather more than people assume.</p>
+
+        <p>After the cutoff, a correction is not a data fix. It is an off-cycle payment run, which usually costs money, requires named approval, and in some payroll configurations cannot be done at all without manual intervention from a payroll administrator. This is why lateness is categorically worse here than elsewhere.</p>
+
+        <p>So the scheduler needs to know the calendar.</p>
+
+        <pre><code class="language-python">from datetime import datetime, timedelta, timezone
+
+class PayCalendar:
+    """Deadline-aware scheduling. The integration's job is not 'run nightly',
+    it is 'be complete before the cutoff', and those are different contracts."""
+
+    def __init__(self, periods):
+        # periods: [{period_end, input_cutoff, pay_date}], loaded from config
+        # and reviewed by payroll each year — bank holidays move cutoffs.
+        self.periods = sorted(periods, key=lambda p: p["input_cutoff"])
+
+    def current(self, now=None):
+        now = now or datetime.now(timezone.utc)
+        for p in self.periods:
+            if now &lt;= p["input_cutoff"]:
+                return p
+        raise NoOpenPeriod(now)
+
+    def urgency(self, now=None):
+        now = now or datetime.now(timezone.utc)
+        p = self.current(now)
+        remaining = p["input_cutoff"] - now
+        if remaining &lt; timedelta(hours=4):
+            return "critical"      # page a human, do not just retry
+        if remaining &lt; timedelta(hours=24):
+            return "elevated"      # run every 30 minutes, alert on any failure
+        return "normal"</code></pre>
+
+        <p>What changes with urgency is not just the frequency. Three behaviours flip.</p>
+
+        <p><strong>Retry strategy inverts.</strong> Normally you back off on failure to avoid hammering a struggling system. Approaching a cutoff, backing off is the wrong instinct — you want to retry harder and escalate to a person faster, because an unprocessed record at the cutoff is a worse outcome than extra load.</p>
+
+        <p><strong>Partial success becomes unacceptable.</strong> Under normal conditions, processing 9,980 of 10,000 records and dead-lettering twenty is a fine night's work. Inside the cutoff window it is twenty people with a wrong payslip. The job should treat any dead-lettered record inside the window as a paging event.</p>
+
+        <p><strong>Ordering matters.</strong> The February incident happened partly because the job processed dates ascending and failed on the last chunk. Process the oldest-and-most-at-risk data first, or better, process everything in one transaction boundary per pay period so a partial run is visible as a partial run rather than as a successful run with a gap.</p>
+
+        <p>The alert that would have prevented the whole thing is embarrassingly simple: at cutoff minus four hours, count the hours recorded in the source system for the current period against the hours successfully delivered to ADP, and page somebody if the gap is non-zero. That is a query and a cron entry. It is now the first thing I build on these projects rather than the last.</p>
+
+        <h2>8. Reading Workers, And The Identity Problem</h2>
+
+        <p>ADP's worker identifier is the Associate OID, a stable opaque string. It is a good identifier and it is not the only one in play, which is the source of most of the joining pain.</p>
+
+        <p>Also present in a typical enterprise: an employee number from the HR system, a badge or clock number from time and attendance, a network username from the directory, and a warehouse management system operator ID. On the fulfilment operator, one person had five identifiers and two of them had been reused after previous holders left.</p>
+
+        <p>The reuse case is the dangerous one. A clock number recycled to a new starter eighteen months after the previous holder left means your historical labour cost data attributes one person's hours to another. That is a reporting error, and if anyone ever queries a historical payslip against it, a much more awkward one.</p>
+
+        <p>The defence is to make every join key temporal. A mapping row has a valid-from and a valid-to, and every lookup passes a date. This is more work than a dictionary and it is the difference between correct history and plausible history.</p>
+
+        <pre><code class="language-sql">-- Temporal identity mapping. The uniqueness constraint is on the identifier
+-- plus the period, not on the identifier alone, because badge numbers get
+-- reissued and a naive unique index will reject the new starter.
+CREATE TABLE worker_identity (
+    id              BIGSERIAL PRIMARY KEY,
+    pseudonym       CHAR(32)    NOT NULL,      -- keyed hash of the AOID
+    source_system   TEXT        NOT NULL,      -- 'wms', 'timeclock', 'ad'
+    source_id       TEXT        NOT NULL,
+    valid_from      DATE        NOT NULL,
+    valid_to        DATE,                      -- NULL = current
+    CONSTRAINT no_overlap EXCLUDE USING gist (
+        source_system WITH =,
+        source_id     WITH =,
+        daterange(valid_from, COALESCE(valid_to, DATE '9999-12-31')) WITH &amp;&amp;
+    )
+);
+
+-- Lookup always carries a date. A lookup without one is a bug.
+SELECT pseudonym
+FROM worker_identity
+WHERE source_system = 'timeclock'
+  AND source_id = :clock_number
+  AND :work_date &gt;= valid_from
+  AND (valid_to IS NULL OR :work_date &lt; valid_to);</code></pre>
+
+        <p>Two other worker-model realities worth designing for from the start.</p>
+
+        <p><strong>Rehires.</strong> A seasonal picker who works three Christmases is one person with one Associate OID and three employment periods, or in some configurations three worker records. Which of those you get depends on how the HR team processes rehires, and the answer will differ between sites. Ask, do not assume, and handle both.</p>
+
+        <p><strong>Multiple concurrent positions.</strong> Someone who works twenty hours in the warehouse and eight in customer service has two positions with different cost centres and possibly different rates. A model that assumes one position per worker will silently allocate all their hours to whichever position the code happened to read first. This is common in fulfilment operations and it is almost always missed in the first design pass.</p>
+
+        <h2>9. Time, Hours And Turning Them Into Cost</h2>
+
+        <p>Time and attendance data is where the operational value is, and it is messier than it looks.</p>
+
+        <p>Hours arrive as time card entries with pay codes. A pay code distinguishes regular from overtime, from premium shift, from holiday, from sickness, from training, from a bank holiday uplift. The set is configured per employer and the codes are not self-describing — you will get something like <code>REG</code>, <code>OT1</code>, <code>OT2</code>, <code>SHFT</code>, <code>HOL</code>, and a handful of employer-specific ones whose meaning lives in a spreadsheet somebody maintains.</p>
+
+        <p>Get that mapping from payroll in writing, store it as configuration rather than code, and fail loudly on an unknown code rather than defaulting it to regular. An unknown code silently treated as regular hours understates cost and, if you ever write back, underpays.</p>
+
+        <p>The cost calculation itself has three traps.</p>
+
+        <p><strong>Rates change mid-period.</strong> A pay rise effective the 15th means hours before and after are costed differently. If you hold a single current rate, every historical recalculation drifts. Hold rates temporally, the same way as identities.</p>
+
+        <p><strong>Employer costs are not the rate.</strong> The number operations wants for cost per order is fully loaded — employer national insurance, pension contribution, holiday accrual, and often an apportionment of agency margin for temporary staff. Quoting a gross-pay-only figure gives a number that is roughly 15-25% too low depending on jurisdiction and makes the entire analysis wrong in a consistent direction.</p>
+
+        <p><strong>Approval state matters.</strong> Time card entries have a status. Pulling unapproved hours into a cost report gives numbers that change retroactively as supervisors approve or amend, which destroys trust in the dashboard within about two weeks. Read approved entries for reporting; read all entries only for the operational view that is explicitly labelled provisional.</p>
+
+        <p>Once cost per hour and hours per shift exist, joining them to fulfilment volume is the easy part, and it is the part that produces the number the business actually asked for. On the fulfilment operator, cost per order varied between £1.31 and £2.94 across sites for comparable order profiles, and the gap turned out to be almost entirely about how much agency labour each site used on Mondays.</p>
+
+        <h2>10. Writing Back, And Why I Do It Rarely</h2>
+
+        <p>Reading from ADP is a bounded risk. Writing to it is a different proposition, and my default position is to write as little as possible.</p>
+
+        <p>The write paths that come up: pushing approved hours as payroll input, pushing new starters from a recruitment or onboarding system, and pushing terminations. All three are technically possible and all three are places where an integration bug becomes a payroll error.</p>
+
+        <p>Where I will write: approved hours, from a time and attendance system that is the recognised source of truth for hours, with a human approval step upstream that is recorded, and with a reconciliation that compares what was sent against what payroll shows before the cutoff.</p>
+
+        <p>Where I will not write without a very good reason: anything touching rates, bank details, tax codes, or employment status. The failure modes are severe and the efficiency gain is small — a company hiring forty people a month does not need an automated joiner process badly enough to accept the risk of an automated leaver process misfiring.</p>
+
+        <p>If you do write, three properties matter more than usual.</p>
+
+        <p><strong>Idempotency with a key that includes the pay period.</strong> Not just the worker and the date. A resubmission for a corrected period must be distinguishable from a duplicate of the original, and a key of worker-plus-date collapses them.</p>
+
+        <p><strong>An explicit submitted state on your side.</strong> Records move from collected, to approved, to submitted, to confirmed. Confirmed means payroll acknowledged it, not that the HTTP call returned 200. Anything stuck in submitted past a threshold is an alert.</p>
+
+        <p><strong>A dry-run mode that produces the exact payload and a diff.</strong> Before every real submission during the first few cycles, and permanently for any change to the mapping. The diff goes to a payroll administrator who eyeballs it. This is slow, it is manual, and after the February incident nobody on that project ever argued against it again.</p>
+
+        <pre><code class="language-python">def submit_period(client, period, entries, dry_run=False):
+    payload = build_payroll_input(period, entries)
+    # The idempotency key must identify the period AND the revision, so a
+    # corrected resubmission is accepted while a duplicate of the same
+    # revision is rejected by the receiving side.
+    key = f"{period['code']}:{period['revision']}:{checksum(payload)}"
+
+    if dry_run:
+        return render_diff(previous_submission(period), payload)
+
+    resp = client.post("/payroll/v1/payroll-input", json=payload,
+                       headers={"Idempotency-Key": key})
+    if resp.status_code == 409:
+        # Already accepted with this exact key: not an error, do not retry.
+        return "already-submitted"
+    resp.raise_for_status()
+    mark_submitted(period, key, resp.json()["confirmationId"])
+    return "submitted"</code></pre>
+
+        <h2>11. Events, And ADP's Pull Queue</h2>
+
+        <p>ADP does not push webhooks in the way Shopify or Stripe do. The event mechanism is a queue you poll: you retrieve pending event notification messages, process them, and then explicitly confirm each one so it is removed. Unconfirmed messages come back.</p>
+
+        <p>That model is actually well suited to this domain, because it makes at-least-once delivery explicit and makes it very hard to lose an event through a failed HTTP endpoint. It has two consequences for how you build.</p>
+
+        <p>First, processing must be idempotent, because you will see the same message twice whenever a confirmation fails after processing succeeded. Standard, and worth stating because the pull model makes it more frequent than a webhook model does.</p>
+
+        <p>Second, the poll loop is a piece of infrastructure that can die quietly. A stopped poller produces no errors — it produces an absence, and events accumulate on ADP's side. Alert on time since last successful poll and on time since last confirmed message, not on error rate. This is the same argument I made about queue age on ERP integrations and it applies with more force here because the consequence of a missed worker-terminated event is that somebody who left the business is still in your systems.</p>
+
+        <pre><code class="language-python">def drain_events(client, handler, max_batches=50):
+    processed = 0
+    for _ in range(max_batches):
+        msgs = client.get("/core/v1/event-notification-messages").json()
+        if not msgs.get("events"):
+            break
+        for ev in msgs["events"]:
+            # Deduplicate on the event id before doing any work: a redelivery
+            # after a failed confirmation is normal, not exceptional.
+            if seen(ev["eventID"]):
+                confirm(client, ev)
+                continue
+            handler(ev)
+            mark_seen(ev["eventID"])
+            confirm(client, ev)     # confirm only after the work is durable
+            processed += 1
+    heartbeat("adp-event-poller")   # the metric that proves this ran at all
+    return processed</code></pre>
+
+        <h2>12. The Audit Trail</h2>
+
+        <p>On a commerce integration, logs exist so engineers can debug. Here they exist so the organisation can answer questions from an auditor, from HR, and occasionally from an employment tribunal. That changes what they contain and how long they live.</p>
+
+        <p>What the trail needs to record, for every submission that affects pay:</p>
+
+        <p>Which period it belongs to. What revision. A checksum of the exact payload sent. Who or what approved it, with a timestamp. When it was submitted and what confirmation came back. And, if it was a correction, what it superseded and why.</p>
+
+        <p>What it must not record: the payload itself, in the clear, in a general-purpose log store. Store the payload encrypted in the integration's own datastore with the retention policy that applies to payroll records, and put the checksum in the log. Then "was the file we sent on the 24th the same as the one in the archive" is answerable without the log system holding pay data.</p>
+
+        <p>Access reads need logging too, and this is the part most builds miss entirely. Every time a human retrieves individual-level data through the pseudonym reverse map, that lookup is logged with the requester, the purpose, and the approval reference. Review those logs quarterly. On the fulfilment operator, the first quarterly review found two lookups by an analyst who had been curious about a colleague's shift pattern, which was exactly the behaviour the control existed to detect, and the conversation that followed did more for the organisation's data culture than any policy document.</p>
+
+        <p>Retention is its own question with a legal answer rather than an engineering one. Payroll records have statutory minimum retention periods that vary by jurisdiction — commonly three to six years — and your derived analytics data does not automatically inherit them. Aggregated cost data with no personal identifiers can generally be kept indefinitely; the pseudonym map cannot. Get the periods from whoever owns compliance, implement them as an automated deletion job, and test that the job actually deletes, because an untested retention policy is a policy you do not have.</p>
+
+        <h2>13. Failing Safely When Money Is Involved</h2>
+
+        <p>The general shape of failure handling — retry, backoff, dead-letter, alert — I take as read. Four things specific to payroll change how you apply it.</p>
+
+        <p><strong>Fail closed on ambiguity.</strong> If the integration cannot determine whether hours are approved, or which position they belong to, or which rate applies, it must not guess. Quarantine the record and raise it. A guessed value that turns out right nine times in ten is worse than a stop, because the tenth is a wrong payslip and nobody was watching.</p>
+
+        <p><strong>Distinguish "late" from "failed" and escalate them differently.</strong> A failed submission with a clear error goes to engineering. A submission that has not completed with three hours until cutoff goes to payroll, because the remedy is a human decision about whether to hold the run, not a bug fix.</p>
+
+        <p><strong>Have a manual path and rehearse it.</strong> There will be a cycle where the integration cannot deliver and payroll needs the numbers anyway. That means an export that produces the same figures in a format a payroll administrator can import or key in, tested at least once when nothing is wrong. On the fulfilment operator we tested it twice a year and used it once for real, during an ADP-side incident, and it took forty minutes instead of a panic.</p>
+
+        <p><strong>Correction is a first-class workflow, not an exception path.</strong> Hours get amended after approval. Somebody's timesheet was wrong. A supervisor changes a shift retrospectively. Design for it: a correction carries a reason, references the original, requires approval at a higher level than the original, and is visible in the audit trail as a correction rather than as a second submission. If corrections are handled by "just re-run the job", you will eventually re-run it against a closed period and produce a duplicate payment.</p>
+
+        <h2>14. Testing Without Using Real People</h2>
+
+        <p>This constrains the project more than any other single decision and it is worth planning around explicitly.</p>
+
+        <p>ADP provides sandbox environments for API development, and they are adequate for exercising the mechanics — auth, endpoints, payload shapes. They will not contain your employer's pay codes, your cost centres, your shift patterns, or the specific worker configurations that break things.</p>
+
+        <p>So the test strategy has three layers. Contract tests against the sandbox, which prove the integration speaks ADP correctly. Fixture-based tests against a synthetic workforce, which prove the business logic — and this is where the edge cases live, so invest here. And a shadow run against production, which is the interesting one: pull real data, compute real outputs, write nothing, and compare your computed hours and cost against what payroll actually produced for a completed period.</p>
+
+        <p>That third layer is how you find out that your understanding of a pay code is wrong, and it is safe because it writes nothing. Run it for two full pay cycles before going live. On the fulfilment operator, the shadow run for January differed from actual payroll by 0.4% in aggregate and by more than 5% for eleven individuals, every one of which turned out to be a person with two concurrent positions. That is a bug we would otherwise have shipped.</p>
+
+        <p>The related discipline: build the synthetic fixture set from the shadow run's findings rather than from imagination. Real edge cases, anonymised, in version control.</p>
+
+        <h2>15. Worked Example: The Fulfilment Operator</h2>
+
+        <p>Four distribution centres, around 1,900 staff at peak and 1,100 in a quiet month, a mixture of direct employees and two agency suppliers, ADP Workforce Now, a separate workforce management system for scheduling and clocking, and a commerce platform doing roughly 34,000 orders a day across three client brands.</p>
+
+        <p><strong>The requirement.</strong> Fully loaded labour cost per order, by site, by shift, by day, visible to operations the next morning. Plus the overtime submission path that caused the February incident.</p>
+
+        <p><strong>What we built.</strong> A single isolated service holding the ADP certificate, egressing only to ADP, reading approved time cards and worker position data, computing fully loaded cost internally, and emitting only pseudonymised, aggregated rows to the analytics warehouse. Minimum group size of five enforced in the query layer. Temporal identity mapping across four source systems. A deadline-aware scheduler driven by a pay calendar reviewed with payroll each December.</p>
+
+        <p><strong>What the shadow run found.</strong> Eleven workers with concurrent positions, as above. A shift premium code, <code>SHFT2</code>, that we had mapped as a flat uplift and which was actually percentage-based on the underlying rate. And about 3% of clock entries with no matching worker, which turned out to be agency staff whose records lived only in the agency's system and never reached ADP at all — a genuine gap in the requirement that we had to go back and solve with a separate agency feed.</p>
+
+        <p><strong>Numbers after the first quarter.</strong> Cost per order by site ranged from £1.31 to £2.94. The gap drove a change to Monday agency booking at two sites and about £41,000 a quarter in reduced agency spend, which was the entire business case. Unprocessed-hours alerts fired four times in the first six months, twice for real problems and twice for a slow upstream export, and no pay period was missed.</p>
+
+        <p><strong>What went wrong, apart from February.</strong> We under-scoped retention. The pseudonym map was built with no deletion policy because the question had not been asked, and eight months in, a data protection review found we were holding identity mappings for leavers indefinitely. Implementing the deletion was straightforward; explaining why it had not been there from the start was not, and it was a fair criticism.</p>
+
+        <p><strong>What I would do differently.</strong> Two things. Build the cutoff-minus-four-hours completeness alert on day one, before any of the reporting. And insist on a written data processing note signed by HR before writing a line of code, rather than producing one retrospectively when the review asked for it. Both are cheap at the start and expensive to retrofit.</p>
+
+        <h2>16. Failure Modes To Design For</h2>
+
+        <p><strong>Certificate expiry.</strong> Total, sudden, and entirely predictable. Alert months out.</p>
+
+        <p><strong>The silent poller.</strong> Event queue stops draining, nothing errors, worker changes accumulate. Alert on time since last successful poll.</p>
+
+        <p><strong>Pay code added without telling you.</strong> Payroll configures a new code for a new shift pattern. Your mapping does not have it. Fail loudly rather than defaulting, and route the alert to payroll rather than engineering, since they are the ones who can answer it.</p>
+
+        <p><strong>Bank holiday moves the cutoff.</strong> The pay calendar shifts and your scheduler does not know. Review the calendar annually with payroll and load it as data, never as a hard-coded day-of-week rule.</p>
+
+        <p><strong>Recycled identifiers.</strong> Covered above. Temporal mapping, dated lookups.</p>
+
+        <p><strong>Retroactive amendment of a closed period.</strong> Somebody amends a timesheet for a period already paid. Your recalculation now disagrees with the payslip issued. Decide the policy: I freeze reporting figures at period close and record amendments as a separate adjustment line rather than restating history, because a labour cost report that changes retroactively is a report nobody trusts.</p>
+
+        <p><strong>Agency staff outside the HR system.</strong> A large share of warehouse labour in peak season may never appear in ADP at all. If the requirement is total labour cost, an ADP-only integration answers a different question than the one that was asked. Establish this in discovery.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"Can we just pull the whole worker object and filter later?"</strong> Technically yes and I would push back hard. Retrieval is processing. Once the data is in your system you are responsible for it, and "we didn't use those fields" is not a defence anyone finds persuasive after an incident. Select fields at the API call.</p>
+
+        <p><strong>"Should the integration write payroll input directly?"</strong> Only for hours, only from an approved source, only with a dry-run diff reviewed by a human for the first several cycles, and never for rates or bank details. The efficiency case for automating more than that is weak relative to the downside.</p>
+
+        <p><strong>"How do we handle multiple countries?"</strong> Badly, if you assume one model. Pay frequencies, statutory deductions, cutoff conventions and retention periods all differ, and ADP's product footprint differs by country too. Treat each country as a separate integration sharing code rather than one integration with a country field. Related ground is covered in the piece on <a href="/blog/zoho-people-hrms-ecommerce-operations/">running HR systems alongside ecommerce operations</a>, which deals with the multi-entity problem from the HR platform side.</p>
+
+        <p><strong>"Can operations see individual productivity?"</strong> This is the question that turns up about three months in, phrased as a performance management need. It is a policy question, not a technical one, and it needs consultation with whoever represents staff before it is built. Building it first and asking later is how a labour cost project turns into an industrial relations problem. My advice is to build the aggregate view, let it prove its value, and treat individual-level anything as a separate conversation with its own approval.</p>
+
+        <p><strong>"How much of this is ADP-specific?"</strong> The mutual TLS auth and the pull-based event queue are. The minimisation discipline, the deadline-aware scheduling, the temporal identity mapping, the audit requirements and the fail-closed posture apply to any payroll or HR integration, including the ones you build against Workday, SAP SuccessFactors or a mid-market platform.</p>
+
+        <p><strong>"What does the internal-facing side of this look like?"</strong> Usually a portal where supervisors approve hours and managers see cost. The access control patterns there matter as much as the integration's, and I have written about that separately under <a href="/blog/intranet-employee-portal-ecommerce/">employee portals for ecommerce operations</a>.</p>
+
+        <h2>18. What I Would Do First</h2>
+
+        <p>If you are starting an ADP integration next week, in this order.</p>
+
+        <p>One. Get the pay calendar. Period ends, input cutoffs, payment dates, for the next twelve months, including how bank holidays move them. Everything about the scheduling design comes from that document and you cannot design without it.</p>
+
+        <p>Two. Write the field list, with a justification per field, and get it signed off by whoever is accountable for HR data. Half a page. It will shorten your field list by a third and it is the artefact that protects everyone later.</p>
+
+        <p>Three. Build the completeness alert before the feature. Hours in the source for the open period versus hours delivered, checked at cutoff minus four hours, paging a human. It is a query and a cron entry and it is the single highest-value thing in the whole build.</p>
+
+        <p>Four. Sort out certificates and environment isolation before any code. Separate consumer applications for production and non-production, keys in a secrets manager, expiry alerts on a team calendar.</p>
+
+        <p>Five. Run a shadow cycle against production data, writing nothing, and reconcile your computed figures against actual payroll for a completed period. Then a second one. Only after two clean cycles does anything go live.</p>
+
+        <p>Six. Build the redaction test and the retention job at the same time as the feature, not afterwards. Both are the kind of thing that never gets prioritised once the dashboard is working.</p>
+
+        <p>The thirty-one people who were paid short in February were not the victim of a hard technical problem. They were the victim of a scheduler that understood frequency and did not understand deadlines, in a system where being a few hours late has a consequence that no amount of retrying can undo. That is the mental shift the whole domain requires. Everywhere else in integration work, eventual consistency is a reasonable goal. Here, eventual is not good enough, because payday does not wait.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/zoho-people-hrms-ecommerce-operations/">Zoho People HRMS & Operations Management for E-Commerce</a></strong>
+              <strong><a href="/blog/zoho-people-hrms-ecommerce-operations/">Zoho People HRMS &amp; Operations Management for E-Commerce</a></strong>
               <p>Warehouse workforce shift tracking.</p>
             </li>
             <li>
@@ -240,7 +677,6 @@ async function getADPWorker(associateId, accessToken) {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -274,6 +710,6 @@ async function getADPWorker(associateId, accessToken) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

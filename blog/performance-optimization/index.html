@@ -66,10 +66,12 @@
     <link rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" />
   </noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Performance Optimization for Magento & Shopify: The Engineering Blueprint | MODRACX</title>
   <meta name="description"
-    content="An exhaustive technical guide to accelerating Magento 2 and Shopify Plus store speed. Covers Varnish VCL configuration, Redis caching clusters, HTTP/3, and image compression pipelines." />
+    content="Platform performance for Magento and Shopify: Varnish hit ratio and what breaks it, Redis session and cache split, indexers and cron, Liquid render cost, and auditing the app and extension estate." />
   <meta property="og:title"
     content="Performance Optimization for Magento & Shopify: The Engineering Blueprint | MODRACX" />
   <meta property="og:description"
@@ -206,14 +208,13 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Performance Optimization for Magento & Shopify: The Engineering Blueprint</h1>
-        <p class="lede">A deep-dive technical engineering handbook on Varnish VCL customization, Redis session
-          clustering, image optimization pipelines, and sub-100ms TTFB tuning.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Performance Optimization for Magento &amp; Shopify: The Engineering Blueprint</h1>
+        <p class="lede">A distributor's Varnish hit ratio went from 91% to 4% overnight because a widget set a cookie. Their host recommended more CPU. Nine lines of VCL fixed it. Platform performance on Magento and Shopify, in the order it actually matters.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -242,240 +243,553 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        <h2>1. The Physics of Web Latency and Revenue</h2>
-        <p>In modern e-commerce engineering, web performance is a crucial economic lever directly tied to financial conversion rates and gross merchandise value. Retail giants have repeatedly published data showing that for every 100 milliseconds of page load speed improvement, incremental revenue increases by roughly 1%. Conversely, a mere 100ms increase in latency can drop conversion rates significantly. Every extra kilobyte transferred and every unoptimized query represents lost revenue.</p>
+        <h2>1. The Hit Ratio That Fell Off A Cliff</h2>
 
-        <p>For high-concurrency stores built on robust platforms like Magento 2 (Adobe Commerce) or Shopify Plus, achieving consistent sub-second page rendering requires optimizing every single layer of the stack. This demands a holistic architectural review encompassing DNS lookup resolution, TLS handshake negotiation, reverse proxy caching strategies, PHP execution profiling, database query optimization, and client-side asset delivery pipelines.</p>
+        <p>A distributor of industrial fasteners called me on a Saturday. Their Magento 2.4.5 store had been fine on Friday and was now taking eleven seconds to serve a category page. Their host had already doubled the CPU allocation, which had not helped, and was recommending they double it again.</p>
 
-        <p>When analyzing performance bottlenecks, practitioners must differentiate between Time to First Byte (TTFB), First Contentful Paint (FCP), and Largest Contentful Paint (LCP). A slow TTFB usually indicates backend inefficiency. On the other hand, poor FCP and LCP metrics point to frontend issues like render-blocking JavaScript or unoptimized images. By adopting a performance-first mindset, engineering teams can build resilient architectures. See our guide on <a href="/blog/why-seo-matters/">Why SEO Matters for Technical Architecture</a> for more depth.</p>
+        <p>The Varnish hit ratio was 4%. It had been 91% the day before.</p>
 
-        <hr />
+        <p>What changed was a marketing deploy. Somebody had added a currency-switcher widget that set a cookie named <code>display_currency</code> on every page view, including the first one. Magento's default VCL passes any request carrying an unrecognised cookie straight through to the backend. Every single anonymous visitor was now generating an uncached PHP request against a catalogue of 240,000 SKUs. The extra CPU was helping the backend chew through requests it should never have received.</p>
 
-        <h2>2. Advanced Varnish Cache VCL Configuration for Magento 2</h2>
-        <p>Varnish Cache is an HTTP accelerator specifically designed for content-heavy dynamic websites. It acts as a highly efficient reverse proxy, sitting in front of the web application server and caching the rendered HTML responses in RAM. By serving these cached payloads directly from memory, Varnish satisfies incoming GET requests in under 50 milliseconds, entirely bypassing the expensive PHP execution and MySQL database query overhead.</p>
-        
-        <p>One of the most critical aspects of Varnish configuration is handling cache invalidation (purging). When a product price changes, inventory updates, or CMS content is modified, Varnish must instantly invalidate the stale cache to prevent serving outdated information. This is typically achieved using HTTP PURGE requests originating from the backend. We must explicitly authorize these requests in the VCL using Access Control Lists (ACLs) to prevent malicious actors from flushing the cache.</p>
+        <p>The fix was nine lines of VCL to strip the cookie from the cache key and set the currency at the edge instead. Hit ratio back to 89% within an hour of the cache refilling. Page time back to 340ms. Total infrastructure cost of the incident: two days of doubled instance size, plus a Saturday.</p>
 
-        <pre><code class="language-vcl"># Advanced Varnish 6.0 VCL Snippet for Magento 2
-vcl 4.0;
+        <p>I lead with that because it is the most important thing I know about platform performance, and it applies to Magento and Shopify equally in different clothes: <strong>almost all of your speed is determined by whether a request touches the application at all.</strong> Everything else — query tuning, OPcache settings, image formats — operates on the requests that get through. If 40% of your traffic is missing the cache, no amount of backend optimisation will save you, and if 95% is hitting it, most backend optimisation is irrelevant.</p>
 
-import std;
+        <p>This article is about the platform layer specifically: Magento 2 and Shopify, what is slow about each of them, and what you can actually do. It does not cover the browser-side metrics — that is the <a href="/blog/core-web-vitals/">Core Web Vitals remediation guide</a> — nor how to measure any of it, which is <a href="/blog/core-web-vitals-optimization/">its own discipline</a>. This is the part underneath.</p>
 
-backend default {
-    .host = "127.0.0.1";
-    .port = "8080";
-    .first_byte_timeout = 600s;
-    .connect_timeout = 5s;
-    .between_bytes_timeout = 600s;
-}
+        <h2>2. Two Platforms, Two Entirely Different Problems</h2>
 
-acl purge {
-    "localhost";
-    "127.0.0.1";
-    "10.0.0.0"/8; # Internal network
-}
+        <p>People ask me which platform is faster. It is the wrong question, because the constraint is in a different place on each.</p>
 
-sub vcl_recv {
-    # Handle PURGE requests securely
-    if (req.method == "PURGE") {
-        if (!client.ip ~ purge) {
-            return (synth(405, "Method not allowed"));
+        <p>On <strong>Magento</strong>, you own everything from the kernel up. The server is yours, the database is yours, the cache configuration is yours, and so is every millisecond of PHP execution. That means your performance ceiling is very high and your floor is very low. A well-run Magento store serves a category page from Varnish in 40ms. A badly-run one takes eight seconds. The difference is entirely configuration and discipline, and the platform will not stop you doing anything stupid.</p>
+
+        <p>On <strong>Shopify</strong>, the backend is not yours. You cannot tune the database, you cannot configure the cache, you cannot see the query plan. Shopify's infrastructure is genuinely excellent and their TTFB is typically 150–350ms globally without you doing anything. Your entire leverage is the theme and the apps — which is a much smaller surface, and on most Shopify stores that surface is a catastrophe. I have audited Shopify Plus stores shipping 2.4MB of JavaScript from eighteen apps onto a page that Shopify served in 180ms.</p>
+
+        <p>So: Magento performance work is mostly infrastructure and caching. Shopify performance work is mostly deleting things. Both require the same discipline, applied to opposite ends of the stack.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Layer</th><th>Magento 2</th><th>Shopify / Plus</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Full-page cache</td><td>Yours to configure and break</td><td>Platform-managed, invisible</td></tr>
+            <tr><td>TTFB on a cache hit</td><td>30–80ms with Varnish</td><td>150–350ms, not tunable</td></tr>
+            <tr><td>TTFB on a miss</td><td>400ms–8s, entirely your problem</td><td>Liquid render time, partly yours</td></tr>
+            <tr><td>Database</td><td>Yours: indexers, EAV, buffer pool</td><td>Not exposed</td></tr>
+            <tr><td>Image pipeline</td><td>Yours to build; default is poor</td><td>Good by default, easy to misuse</td></tr>
+            <tr><td>Third-party code</td><td>PHP modules: backend cost</td><td>Apps: frontend cost</td></tr>
+            <tr><td>Biggest single lever</td><td>Cache hit ratio</td><td>App and theme JavaScript</td></tr>
+          </tbody>
+        </table>
+
+        <h2>3. Magento: The Hit Ratio Is The Only Number That Matters</h2>
+
+        <p>If you run Magento and you can only monitor one thing, monitor the Varnish hit ratio. Not average response time, not CPU, not the Lighthouse score. The hit ratio.</p>
+
+        <pre><code class="language-bash"># Live hit/miss. Watch this for sixty seconds on production.
+varnishstat -1 -f MAIN.cache_hit -f MAIN.cache_miss -f MAIN.cache_hitpass
+
+# Or continuously, as a percentage
+varnishstat -1 -f MAIN.cache_hit -f MAIN.cache_miss | awk \
+  '/cache_hit /{h=$2} /cache_miss/{m=$2} END{printf "hit ratio: %.1f%%\n", 100*h/(h+m)}'
+
+# Which URLs are missing? This is the list you actually work from.
+varnishlog -g request -q 'VCL_call eq "MISS"' -i ReqURL | head -50</code></pre>
+
+        <p>A healthy anonymous-traffic hit ratio on a content-heavy store is 85–95%. Below 70% something is wrong. Below 40% something is badly wrong and you are almost certainly paying for infrastructure to compensate.</p>
+
+        <p>The <code>hitpass</code> counter is the one people ignore and it is diagnostic gold. A hitpass means Varnish looked up the object, found a cached decision to <em>not</em> cache this URL, and passed it through. A high hitpass count means your backend is actively telling Varnish not to cache things, which is a configuration problem rather than a warming problem.</p>
+
+        <h3>What breaks the hit ratio</h3>
+
+        <p>Four causes, in the order I check them.</p>
+
+        <p><strong>Cookies.</strong> This is the fastener distributor's problem and it is the most common by a wide margin. Any cookie Magento's VCL does not recognise causes a pass. Marketing tools set cookies casually. So do consent banners, affiliate trackers, and A/B testing tools. The fix is to explicitly strip everything you do not need from the cache key:</p>
+
+        <pre><code class="language-vcl">sub vcl_recv {
+    # Strip marketing and analytics cookies before the cache lookup. These
+    # never affect the rendered HTML, so they must not affect the cache key.
+    if (req.http.Cookie) {
+        set req.http.Cookie = regsuball(req.http.Cookie,
+            "(^|; ) *(_ga|_gid|_gcl_au|_fbp|_fbc|_hj[^=]*|__utm[a-z]|display_currency|cookie_consent)=[^;]*", "");
+        # Collapse whatever separators the removals left behind
+        set req.http.Cookie = regsuball(req.http.Cookie, "^;\s*", "");
+        if (req.http.Cookie ~ "^\s*$") {
+            unset req.http.Cookie;
         }
-        return (purge);
-    }
-    
-    # Strip tracking query parameters to improve cache hit rates
-    if (req.url ~ "(\?|&)(gclid|utm_[a-z]+|fbclid)=") {
-        set req.url = regsuball(req.url, "(gclid|utm_[a-z]+|fbclid)=[-_A-z0-9+()%.]+&?", "");
-        set req.url = regsub(req.url, "[?&]+$", "");
     }
 
-    # Bypass Varnish cache for customer-specific, checkout, and admin routes
-    if (req.url ~ "^/(checkout|customer|admin|rest|graphql)") {
-        return (pass);
+    # Strip tracking query parameters. /category?gclid=abc and /category are
+    # the same page; without this, every ad click is a guaranteed cache miss.
+    if (req.url ~ "[?&amp;](gclid|fbclid|msclkid|utm_[a-z]+|mc_[a-z]+)=") {
+        set req.url = regsuball(req.url, "[?&amp;](gclid|fbclid|msclkid|utm_[a-z]+|mc_[a-z]+)=[^&amp;]*", "");
+        set req.url = regsub(req.url, "[?&amp;]+$", "");
     }
-    
-    # Handle health checks
-    if (req.url == "/health_check.php") {
-        return (synth(200, "OK"));
-    }
-}
+}</code></pre>
 
-sub vcl_deliver {
-    # Add debug headers for cache analysis
-    if (obj.hits > 0) {
-        set resp.http.X-Cache = "HIT";
-        set resp.http.X-Cache-Hits = obj.hits;
-    } else {
-        set resp.http.X-Cache = "MISS";
-    }
-}
-</code></pre>
+        <p>The query-parameter stripping is worth as much as the cookie stripping on any store that runs paid advertising. Every distinct <code>gclid</code> is a unique URL and therefore a unique cache object. A campaign sending 50,000 clicks generates 50,000 uncacheable requests to your most expensive templates. I have seen this take a store down on the first day of a Black Friday campaign, which is a memorable way to learn it.</p>
 
-        <p>Edge Side Includes (ESI) is another crucial mechanism managed by Varnish in the Magento ecosystem. ESI allows developers to cache the majority of a page while leaving specific blocks dynamic. Varnish stitches these dynamic blocks into the cached skeleton before delivering the final response to the client. Misconfiguring ESI tags can lead to cascading cache misses. For those exploring edge architectures, review our analysis on <a href="/blog/cdn-speed-seo/">CDN Speed Optimization & Edge Caching for Global Stores</a>.</p>
+        <p><strong>Vary headers.</strong> Varnish stores a separate object per distinct value of every header named in <code>Vary</code>. If your backend emits <code>Vary: User-Agent</code> — and some device-detection modules do — you have effectively disabled caching, because there are thousands of distinct user agent strings. Check with <code>curl -I</code> and remove anything beyond <code>Accept-Encoding</code> and, if you genuinely serve different markup, a normalised device class.</p>
 
-        <hr />
+        <p><strong>Overly broad no-cache rules.</strong> Magento marks blocks uncacheable via layout XML, and a single <code>cacheable="false"</code> on a block makes the <em>entire page</em> uncacheable. One badly-written extension putting a non-cacheable block in the default layout will take your whole site to zero hit ratio. Find them:</p>
 
-        <h2>3. Redis Caching Clusters and Session Management Offloading</h2>
-        <p>In a monolithic e-commerce application, session data and application cache are frequently read and written. By default, Magento stores this data on the server's local file system. Under heavy concurrent load, the disk I/O operations required to read and write thousands of small files become a catastrophic bottleneck.</p>
+        <pre><code class="language-bash"># Every block that disables full-page caching for the page it appears on.
+grep -rn 'cacheable="false"' app/code/ vendor/*/module-*/view/ \
+     app/design/frontend/ 2>/dev/null | grep -v '/adminhtml/'</code></pre>
 
-        <p>Redis solves this problem by offloading these operations to RAM. By storing PHP sessions and Magento cache tags in Redis memory structures, read and write I/O latency drops from milliseconds to single-digit microseconds. A robust architecture separates session storage from application cache into distinct Redis instances, preventing cache evictions from deleting active user sessions.</p>
+        <p>There should be almost none. In a default installation the customer-specific blocks handle this correctly through private content instead. Anything else on that list is a bug in someone's module, and the honest answer is often to fork the module and fix it.</p>
 
-        <pre><code class="language-php">// Advanced Magento 2 env.php Redis Configuration
-'session' => [
-    'save' => 'redis',
-    'redis' => [
-        'host' => 'redis-session.internal.cluster',
-        'port' => '6379',
-        'database' => '2',
-        'password' => 'secure_redis_password',
-        'timeout' => '2.5',
-        'persistent_identifier' => '',
-        'compression_threshold' => '2048',
-        'compression_library' => 'gzip',
-        'log_level' => '4',
-        'max_concurrency' => '6',
-        'break_after_frontend' => '5',
-        'break_after_adminhtml' => '30',
-        'first_lifetime' => '600',
-        'bot_first_lifetime' => '60',
-        'bot_lifetime' => '7200',
-        'disable_locking' => '0',
-        'min_lifetime' => '60',
-        'max_lifetime' => '2592000'
-    ]
+        <p><strong>Cold cache after deploy.</strong> Every deployment flushes the cache. On a large catalogue, the first visitor to each category page pays full generation cost, and if you deploy at 9am you have handed that cost to real customers. Warm the important pages before switching traffic — this is a deployment concern more than a caching one, and it is covered further in the <a href="/blog/zero-downtime-deployment/">zero-downtime deployment guide</a>.</p>
+
+        <h3>Private content and ESI</h3>
+
+        <p>The obvious objection to caching everything is the mini-cart. If the page is cached, how does it show the right cart?</p>
+
+        <p>Magento's answer is the customer data section mechanism: the page is fully cached and identical for everyone, and a JavaScript request to <code>/customer/section/load/</code> fetches the personal bits after load. This is the right design and it mostly works. Two failure modes are worth knowing.</p>
+
+        <p>First, that section-load request is uncacheable by definition and fires on every page view. If a badly-written extension registers a section that runs an expensive query, you have created an uncached backend request on every single page load and undone most of the benefit of the cache. Check what sections you have and what they cost:</p>
+
+        <pre><code class="language-bash"># What sections are registered, and by whom?
+grep -rn '&lt;section name=' app/code/ vendor/*/module-*/etc/frontend/sections.xml
+
+# Time the actual call from the edge
+curl -s -o /dev/null -w 'section-load: %{time_total}s\n' \
+  -H 'X-Requested-With: XMLHttpRequest' \
+  'https://shop.example.com/customer/section/load/?sections=cart,customer'</code></pre>
+
+        <p>If that takes more than about 200ms you have a problem that affects every page on the site.</p>
+
+        <p>Second, the section-load response is what populates the mini-cart, which means the mini-cart renders after hydration — and if you have not reserved space for it, that is a layout shift. Platform decision, frontend consequence.</p>
+
+        <p>ESI is the other mechanism, where Varnish stitches dynamic fragments into a cached page. I use it sparingly. Every ESI fragment is a separate backend request, so a page with six ESI blocks is six PHP invocations even on a "hit", and I have seen ESI-heavy pages perform worse than uncached ones. Use it for genuinely shared fragments with their own long TTL — a store-switcher, a promotional banner — and use private content for anything per-customer.</p>
+
+        <h2>4. Redis, And The Mistake Everyone Makes Once</h2>
+
+        <p>Magento stores sessions and application cache in Redis. Both should be Redis, and they should be <em>different Redis instances</em>, and this is the part people get wrong.</p>
+
+        <p>If sessions and cache share an instance, then when the cache fills memory and the eviction policy kicks in, Redis evicts by its own rules and does not know that some of those keys are shopping sessions. Customers get logged out at random, carts empty, and the pattern is maddening to reproduce because it only happens under load.</p>
+
+        <pre><code class="language-php">// app/etc/env.php — sessions and cache on separate databases, ideally
+// separate instances, with different eviction policies.
+'session' =&gt; [
+    'save' =&gt; 'redis',
+    'redis' =&gt; [
+        'host' =&gt; '127.0.0.1',
+        'port' =&gt; '6379',
+        'database' =&gt; '2',
+        'disable_locking' =&gt; '1',   // see below — this matters
+        'max_concurrency' =&gt; '20',
+        'compression_threshold' =&gt; '2048',
+    ],
 ],
-'cache' => [
-    'frontend' => [
-        'default' => [
-            'id_prefix' => '9f0_',
-            'backend' => 'Cm_Cache_Backend_Redis',
-            'backend_options' => [
-                'server' => 'redis-cache.internal.cluster',
-                'database' => '1',
-                'port' => '6379',
-                'password' => 'secure_redis_password',
-                'compress_data' => '1',
-                'compression_lib' => 'l4z'
-            ]
+'cache' =&gt; [
+    'frontend' =&gt; [
+        'default' =&gt; [
+            'backend' =&gt; 'Cm_Cache_Backend_Redis',
+            'backend_options' =&gt; [
+                'server' =&gt; '127.0.0.1',
+                'port' =&gt; '6379',
+                'database' =&gt; '0',
+                'compress_data' =&gt; '1',
+            ],
         ],
-        'page_cache' => [
-            'id_prefix' => '9f0_',
-            'backend' => 'Cm_Cache_Backend_Redis',
-            'backend_options' => [
-                'server' => 'redis-fpc.internal.cluster',
-                'database' => '0',
-                'port' => '6379',
-                'password' => 'secure_redis_password',
-                'compress_data' => '0'
-            ]
-        ]
-    ]
+        'page_cache' =&gt; [
+            'backend' =&gt; 'Cm_Cache_Backend_Redis',
+            'backend_options' =&gt; [
+                'server' =&gt; '127.0.0.1',
+                'port' =&gt; '6379',
+                'database' =&gt; '1',
+                'compress_data' =&gt; '0',   // Varnish holds these; do not double-compress
+            ],
+        ],
+    ],
 ],</code></pre>
 
-        <p>Managing Redis memory requires diligent monitoring. If a Redis instance reaches its `maxmemory` limit, it will begin evicting keys based on its configured eviction policy. If session keys are evicted prematurely, users will experience spontaneous logouts and abandoned carts. Proper capacity planning ensures ample memory headroom is maintained to accommodate traffic surges.</p>
+        <p>The session instance should be configured with <code>maxmemory-policy noeviction</code> so it errors rather than silently dropping carts. The cache instance should be <code>allkeys-lru</code>, because evicting a cache entry is harmless.</p>
 
-        <hr />
+        <p><code>disable_locking</code> deserves a note because it is contentious. Magento's Redis session handler takes a lock per session to prevent concurrent writes clobbering each other. Under concurrency — a customer whose browser is making four parallel AJAX requests, which is normal — those requests serialise on the lock, and if one hangs, the others wait. I have watched a store with a slow section-load handler produce 8-second page loads entirely from session lock contention. Disabling locking risks lost writes on genuinely concurrent session updates, which in practice is rare and low-consequence. I disable it, and I would tell you that is a considered trade rather than a free win.</p>
 
-        <h2>4. Database Query Optimization and MySQL Tuning</h2>
-        <p>While Varnish and Redis mask underlying application slowness for cached requests, uncacheable requests expose the raw performance of the database layer. Optimizing this database tier is non-negotiable for achieving sub-second dynamic responses.</p>
-        
-        <p>The first line of defense is optimizing the MySQL configuration (my.cnf) specifically for InnoDB, the storage engine used by Magento. The `innodb_buffer_pool_size` is the most critical parameter; it dictates how much RAM is allocated for caching database tables and indexes.</p>
+        <h2>5. Indexers: The Subsystem That Silently Stops</h2>
 
-        <pre><code class="language-ini"># Optimized MySQL / MariaDB Configuration for Magento 2
-[mysqld]
-# InnoDB Settings
-innodb_buffer_pool_size = 32G
-innodb_buffer_pool_instances = 16
-innodb_log_file_size = 1G
+        <p>Magento precomputes price, stock, category membership and search data into flat index tables. When those indexes are stale or invalid, the frontend either serves wrong data or falls back to computing it live, which is enormously slower.</p>
+
+        <p>Every indexer should be in <code>Update by Schedule</code> mode. <code>Update on Save</code> means that saving one product triggers a full reindex synchronously, which on a large catalogue locks the admin for minutes and, if it happens during an import, can lock the frontend too.</p>
+
+        <pre><code class="language-bash"># Every indexer, its mode and its status. Run this first on any store you inherit.
+bin/magento indexer:status
+bin/magento indexer:show-mode
+
+# Everything to schedule mode
+bin/magento indexer:set-mode schedule
+
+# The changelog backlog — this is the number that tells you if cron is alive.
+mysql -e "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE '%_cl'
+          ORDER BY TABLE_ROWS DESC LIMIT 10;" magento</code></pre>
+
+        <p>Those <code>_cl</code> changelog tables are where Magento records what changed since the last index run. On a healthy store they stay small — hundreds of rows, cleared continuously. If one has four million rows, cron has not processed it in weeks, your prices are stale, and the mview process will take hours when it finally runs. I check this on every store I am handed and it is broken perhaps a third of the time.</p>
+
+        <p>Which leads to cron, the most reliably broken subsystem in Magento. Cron drives indexing, cache invalidation, email, currency rates, sitemap generation and half of everything else. When it stops — and it stops silently — the symptoms appear days later and look like anything but cron.</p>
+
+        <pre><code class="language-sql">-- Is cron running at all? Anything older than a few minutes is a problem.
+SELECT job_code, status, COUNT(*) AS n, MAX(executed_at) AS last_run
+FROM cron_schedule
+WHERE scheduled_at &gt; NOW() - INTERVAL 1 DAY
+GROUP BY job_code, status
+ORDER BY n DESC;
+
+-- The classic failure: thousands of rows stuck in 'pending' with a
+-- scheduled_at in the past means the queue is not being consumed.
+SELECT COUNT(*) FROM cron_schedule
+WHERE status = 'pending' AND scheduled_at &lt; NOW() - INTERVAL 30 MINUTE;</code></pre>
+
+        <p>Monitor that second query. An alert on "pending cron jobs older than 30 minutes exceeds 100" would have caught, by my count, four separate incidents I have been called in to diagnose after the fact.</p>
+
+        <h2>6. The Database, And Why It Is Usually Not Your Problem</h2>
+
+        <p>Database tuning gets disproportionate attention because it feels like real engineering. On a store with a 90% cache hit ratio it is close to irrelevant. On a store with a 40% hit ratio it is urgent — but so is fixing the hit ratio, and that is the better use of the afternoon.</p>
+
+        <p>That said, when you do need it, there are three settings that matter and a lot of noise around them.</p>
+
+        <pre><code class="language-ini">[mysqld]
+# The single most important setting. The working set should fit in here.
+# 60-70% of RAM on a dedicated DB server. Check your actual data size first:
+#   SELECT SUM(data_length+index_length)/1024/1024/1024 FROM information_schema.tables;
+innodb_buffer_pool_size = 24G
+innodb_buffer_pool_instances = 12       # roughly one per 2GB, capped around 16
+
+# 2 = flush to OS cache each commit, fsync once a second. Trades up to one
+# second of committed transactions on a host crash for a large write speedup.
+# Acceptable for a catalogue. NOT acceptable if this box also holds the ledger.
 innodb_flush_log_at_trx_commit = 2
-innodb_flush_method = O_DIRECT
 
-# Connection Settings
-max_connections = 500
-wait_timeout = 600
+innodb_log_file_size = 2G               # large enough that checkpoints are rare
+innodb_flush_method = O_DIRECT          # do not double-buffer in the page cache
+innodb_io_capacity = 2000               # for NVMe; 200 is the HDD-era default
+tmp_table_size = 256M
+max_heap_table_size = 256M              # these two must match or the smaller wins</code></pre>
 
-# Thread Cache
-thread_cache_size = 128
-</code></pre>
+        <p>Be honest about <code>innodb_flush_log_at_trx_commit = 2</code>. It is a durability trade. On a crash you lose up to a second of committed transactions. For a catalogue that is fine; the data can be recomputed or re-imported. For an order table it is a conversation with the business, not a decision for the ops engineer, and I have been in rooms where that distinction was not made and should have been.</p>
 
-        <p>Setting `innodb_flush_log_at_trx_commit` to `2` significantly improves write performance by flushing transaction logs to the operating system cache rather than forcing a disk sync on every commit.</p>
-        
-        <p>Beyond server configuration, query optimization requires deep profiling. Developers must leverage tools to identify long-running, unindexed queries. In Magento, identifying and rewriting these queries is vital.</p>
-        
-        <p>For extreme scale, monolithic database architectures eventually hit a vertical scaling limit. Migrating to distributed database services like Amazon Aurora offers significant advantages by routing read-heavy operations to Aurora Read Replicas.</p>
+        <p>The Magento-specific pathology is EAV. Product attributes live in separate tables per data type, so fetching a product with forty attributes means a join across six tables, and a category listing means that multiplied by the page size. The mitigations are the flat catalogue tables — which Adobe has been ambivalent about and which have genuine correctness edge cases on large multi-store setups — and, more reliably, keeping your attribute count down and marking attributes <code>used_in_product_listing</code> only when they genuinely are.</p>
 
-        <hr />
+        <p>Find your actual slow queries rather than guessing:</p>
 
-        <h2>5. The Next Generation: HTTP/3 and QUIC Protocol</h2>
-        <p>As we optimize the backend infrastructure, we must simultaneously modernize the network layer. HTTP/2 brought significant improvements through multiplexing and header compression, but it still suffers from Head-of-Line (HOL) blocking at the TCP layer.</p>
+        <pre><code class="language-sql">-- Requires performance_schema. The real top-ten, by total time not by count.
+SELECT
+  LEFT(DIGEST_TEXT, 120)                        AS query,
+  COUNT_STAR                                    AS calls,
+  ROUND(SUM_TIMER_WAIT/1e12, 1)                 AS total_sec,
+  ROUND(AVG_TIMER_WAIT/1e9, 1)                  AS avg_ms,
+  SUM_ROWS_EXAMINED                             AS rows_examined
+FROM performance_schema.events_statements_summary_by_digest
+WHERE SCHEMA_NAME = 'magento'
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT 10;</code></pre>
 
-        <p>HTTP/3, built on top of the QUIC transport protocol, resolves this fundamental flaw. QUIC operates over UDP rather than TCP, implementing its own congestion control and loss recovery mechanisms. This is particularly crucial for mobile users on unstable cellular networks.</p>
-        
-        <p>Implementing HTTP/3 requires support at the web server layer or at the CDN edge. Beyond solving HOL blocking, HTTP/3 introduces 0-RTT (Zero Round Trip Time) connection resumption. For repeat visitors, this shaves hundreds of milliseconds off the initial connection phase, directly improving TTFB metrics. Review our guide on <a href="/blog/core-web-vitals/">Optimizing Core Web Vitals for Ecommerce Success</a>.</p>
+        <p>Sort by total time, not average. A query taking 4ms and running 200,000 times an hour costs you far more than one taking 900ms and running twice, and the 900ms one is the one everybody optimises because it looks alarming in the slow log.</p>
 
-        <hr />
+        <h2>7. PHP: OPcache, Preloading, And FPM Sizing</h2>
 
-        <h2>6. PHP OPcache and Execution Engine Tuning</h2>
-        <p>For any PHP-based application, the PHP execution engine is a primary CPU consumer. PHP OPcache eliminates this overhead by storing the precompiled script bytecode in shared memory, resulting in a massive reduction in CPU utilization and significantly faster execution times.</p>
-        
-        <pre><code class="language-ini"># Optimized PHP OPcache Configuration (php.ini)
-opcache.enable=1
-opcache.enable_cli=1
-opcache.memory_consumption=2048
+        <p>PHP configuration is a short section because there are only a few settings and everyone gets them mostly right.</p>
+
+        <pre><code class="language-ini">opcache.enable=1
+opcache.memory_consumption=768          ; Magento 2 needs a lot; check for restarts
+opcache.max_accelerated_files=130000    ; Magento has ~110k files after compilation
+opcache.validate_timestamps=0           ; production only — requires a reset on deploy
+opcache.save_comments=1                 ; REQUIRED. Magento reads annotations.
 opcache.interned_strings_buffer=64
-opcache.max_accelerated_files=130000
-opcache.max_wasted_percentage=10
-opcache.validate_timestamps=0
-opcache.save_comments=1
-opcache.fast_shutdown=1
-</code></pre>
+opcache.jit=tracing
+opcache.jit_buffer_size=128M            ; modest gains on Magento; measure before keeping</code></pre>
 
-        <p>In production environments, setting `opcache.validate_timestamps=0` is critical for maximum performance, requiring manual OPcache resets on deployments. Beyond OPcache, the configuration of the PHP-FPM pool dictates how the server handles concurrent requests. Tuning parameters requires load testing to find the optimal balance between memory usage and concurrency handling.</p>
+        <p><code>opcache.save_comments=1</code> is the one that catches people. The instinct is to disable comments to save memory; Magento's dependency injection reads docblock annotations, and disabling it produces bizarre, hard-to-trace failures. Leave it on.</p>
 
-        <hr />
+        <p><code>validate_timestamps=0</code> means PHP never checks whether files changed, which is the correct production setting and requires your deployment to restart FPM or reset OPcache. If you set this without wiring the reset, your next deploy will appear to do nothing and you will spend an hour confused.</p>
 
-        <h2>7. Next-Generation Image Optimization Pipelines (WebP, AVIF)</h2>
-        <p>Images often constitute the majority of a webpage's payload. A modern e-commerce performance architecture mandates an automated, dynamic image optimization pipeline.</p>
-        
-        <p>Formats like WebP and AVIF provide superior compression ratios compared to traditional formats, often reducing file sizes by 30-50% while maintaining visual fidelity. Implementing these formats requires content negotiation at the server or edge layer to serve the optimal format dynamically.</p>
-        
-        <p>The industry best practice is to offload image transformation to a dedicated microservice or a specialized CDN, applying resizing and compression on the fly. Furthermore, implementing native browser lazy loading prevents layout shifts and defers the loading of off-screen images until they enter the viewport.</p>
+        <p>On JIT: I have measured it on several Magento installations and the result is a few percent on uncached requests, which on a store with a good cache hit ratio is nearly invisible. It is not the win the version notes imply for a workload dominated by I/O and database waits. Enable it, measure it, and do not be surprised if it does nothing.</p>
 
-        <hr />
+        <p>FPM sizing is simple arithmetic that people do by vibes. Measure real memory per worker, divide available RAM by it, and leave headroom:</p>
 
-        <h2>8. Frontend Delivery: Bundling, Minification, and CDNs</h2>
-        <p>The client-side rendering pipeline is just as critical as backend processing. E-commerce platforms notoriously suffer from bloated JavaScript bundles and complex CSS structures that block the main thread and delay interactivity.</p>
+        <pre><code class="language-bash"># Actual average RSS per FPM worker, in MB
+ps --no-headers -o rss= -C php-fpm | awk '{s+=$1; n++} END {print s/n/1024 " MB avg, " n " workers"}'</code></pre>
 
-        <p>Advanced bundlers segment the application into smaller chunks. Utilizing the `defer` or `async` attributes on script tags prevents JavaScript from blocking the HTML parser. Critical CSS should be inlined directly into the HTML head, allowing the browser to paint the initial view immediately.</p>
-        
-        <p>Delivery through a robust Content Delivery Network (CDN) is non-negotiable. Modern CDNs implement advanced compression algorithms like Brotli, which significantly outperforms Gzip for text-based assets. Read our detailed benchmarking in <a href="/blog/brotli-compression/">Brotli vs Gzip Compression for E-Commerce</a>.</p>
+        <p>Magento workers commonly sit at 80–140MB. On a 32GB application server with 8GB reserved for the OS and Redis, that is roughly 170 workers at 140MB. Setting <code>pm.max_children</code> to 400 because it sounds generous means that under a traffic spike you swap, and a swapping application server is slower than one that queues.</p>
 
-        <hr />
+        <h2>8. What Your Extensions Actually Cost</h2>
 
-        <h2>9. The Architectural Shift: Headless Commerce Considerations</h2>
-        <p>As monolithic platforms reach their limits, many enterprise retailers adopt headless commerce architectures. In a headless setup, the frontend presentation layer is entirely decoupled from the backend e-commerce engine, communicating exclusively via APIs.</p>
+        <p>The average Magento store I audit has between 30 and 60 third-party modules. Some cost nothing. Some cost 400ms on every uncached request. Nobody has ever measured which is which.</p>
 
-        <p>While headless commerce offers unparalleled performance by leveraging edge-native platforms, it introduces significant architectural complexity. Developers must construct a robust middleware layer to orchestrate API calls and handle routing. Understanding the foundation of these strategies is detailed in <a href="/blog/why-seo-matters/">Why SEO Matters for Technical Architecture</a>.</p>
-        
-        <hr />
+        <p>The blunt instrument is to disable and compare. Better is to profile properly — Blackfire or XHProf on a staging copy with production data, one request, and read the call tree by inclusive time. The pattern to look for is a module with an observer or a plugin on a hot event.</p>
 
-        <h2>10. Edge Caching Strategies for Global Audiences</h2>
-        <p>For merchants operating internationally, managing latency requires advanced edge caching methodologies. Content Delivery Networks must be pushed into full-page HTML caching at the edge to reduce TTFB globally.</p>
+        <pre><code class="language-bash"># Every plugin and observer registered, grouped by vendor. A vendor with
+# 40 plugins on core classes is a vendor that will cost you.
+grep -rho 'class="[^"]*"' vendor/*/module-*/etc/*.xml app/code/*/*/etc/*.xml 2>/dev/null \
+  | sort | uniq -c | sort -rn | head -30
 
-        <p>However, global cache invalidation becomes immensely complex. Integrating native purge mechanisms with a global CDN requires custom modules to issue API calls to the CDN provider whenever a product or category updates.</p>
+# Plugins on the most expensive classes to intercept
+grep -rn 'Magento\\Catalog\\Model\\Product\b' --include=di.xml vendor/ app/code/ \
+  | grep -c 'type name'</code></pre>
 
-        <hr />
+        <p>A plugin on <code>Magento\Catalog\Model\Product</code> runs for every product object instantiated, which on a 48-product category page is 48 times, each with the interception overhead. Three modules each doing that is 144 extra method calls per page and a surprising amount of time.</p>
 
-        <h2>11. Conclusion and Continuous Engineering</h2>
-        <p>Performance optimization in high-stakes e-commerce environments is an intricate discipline. From the low-level kernel tuning of MySQL servers to the nuanced configuration of Varnish VCL, every millisecond saved translates directly to improved user experience and increased revenue.</p>
+        <p>My rule when I take on a store: any module that has not been used in six months gets removed, not disabled. Disabled modules still participate in dependency injection compilation and still bloat the generated code. And any module whose vendor has not shipped a release in two years is a security problem regardless of what it costs in milliseconds.</p>
 
-        <p>The strategies outlined in this blueprint form the foundation of a resilient, high-speed architecture. However, the most successful engineering teams adopt a culture of continuous performance monitoring and iterative improvement. They bake performance budgets into their CI/CD pipelines, rejecting code changes that degrade critical metrics.</p>
-        
-        <p>The pursuit of speed is the pursuit of operational excellence. It demands rigorous analysis, precise configuration, and an unwavering commitment to architectural integrity.</p>
+        <h2>9. Faceted Navigation And The Infinite URL Problem</h2>
+
+        <p>This one is worth its own section because it is a performance problem that looks like a traffic problem, and because it is unique to ecommerce.</p>
+
+        <p>A category with six filters — size, colour, material, brand, price band, availability — where each can hold multiple values, produces a combinatorial explosion of valid URLs. Tens of thousands of them, all distinct cache objects, most requested exactly once. Your cache cannot hold them, so effectively none of them are cached, and every one is a full uncached render against the most expensive query in the application.</p>
+
+        <p>Now point a crawler at it. Googlebot, a price-comparison scraper, an SEO tool somebody in marketing signed up for. The crawler follows every filter link it finds, generating thousands of uncached requests an hour. From the outside this looks like organic traffic growth. From inside the application it is a sustained load test against your worst-performing endpoint.</p>
+
+        <pre><code class="language-bash"># What proportion of your backend traffic is bots hitting filtered URLs?
+awk '$7 ~ /\?/ {q++} {t++} END {printf "%.1f%% of requests carry a query string\n", 100*q/t}' \
+  /var/log/nginx/access.log
+
+# Top user agents hitting parameterised URLs
+awk '$7 ~ /\?(cat|price|color|size|manufacturer)/' /var/log/nginx/access.log \
+  | grep -oE '"[^"]*(bot|spider|crawl|Bot)[^"]*"' | sort | uniq -c | sort -rn | head</code></pre>
+
+        <p>Three defences, and I would apply all three.</p>
+
+        <p>First, restrict what is crawlable. <code>robots.txt</code> disallowing filter parameters, plus <code>rel="canonical"</code> on filtered pages pointing at the unfiltered category, plus <code>noindex</code> on combinations beyond one or two facets. This is SEO hygiene that happens to be a performance fix.</p>
+
+        <p>Second, rate-limit at the edge. Cloudflare or your CDN can throttle requests carrying filter parameters from any single source, which stops a rogue scraper without affecting customers.</p>
+
+        <p>Third, and most effective, normalise the URL before the cache key. Filter parameters in a canonical order — <code>?color=blue&amp;size=m</code> and <code>?size=m&amp;color=blue</code> are the same page and should be one cache object, not two.</p>
+
+        <pre><code class="language-vcl">sub vcl_hash {
+    # Normalise filter parameter order so permutations share a cache object.
+    # std.querysort requires the std vmod, which ships with Varnish.
+    hash_data(std.querysort(req.url));
+    if (req.http.host) {
+        hash_data(req.http.host);
+    }
+    # Store view matters for the rendered HTML; include it deliberately
+    # rather than letting the store cookie force a pass.
+    if (req.http.X-Magento-Store) {
+        hash_data(req.http.X-Magento-Store);
+    }
+    return (lookup);
+}</code></pre>
+
+        <p>On one store, query sorting alone lifted the hit ratio on category pages by eleven points, because their own front-end was generating parameters in the order the customer clicked the filters rather than in a fixed order. Nobody had noticed because the pages looked identical.</p>
+
+        <h2>10. Compression And The Protocol Layer</h2>
+
+        <p>Two settings that take an afternoon and that a surprising number of stores have wrong.</p>
+
+        <p><strong>Brotli</strong> compresses text assets roughly 15–20% smaller than gzip at equivalent CPU cost for static content, because you can pre-compress at maximum quality once and serve the result forever. For dynamic HTML the calculus is different — Brotli at quality 11 is far too slow to run per-request — so use a low quality level for dynamic responses and a high one for static files.</p>
+
+        <pre><code class="language-nginx"># Static assets: pre-compressed at build time, served directly.
+brotli_static on;
+gzip_static on;
+
+# Dynamic HTML: compress on the fly, but at a level that is cheap.
+brotli on;
+brotli_comp_level 4;          # 11 for dynamic content is a CPU trap
+brotli_types text/html text/css application/javascript application/json
+             image/svg+xml application/xml;
+
+gzip on;
+gzip_comp_level 5;
+gzip_vary on;                 # required, or shared caches serve the wrong encoding
+gzip_min_length 1024;         # below this the header overhead exceeds the saving</code></pre>
+
+        <p>Note that Varnish sits between Nginx and the client on a Magento stack, which means the compression has to happen somewhere that survives the cache. The usual arrangement is that Varnish stores the uncompressed object and the edge or the front-end Nginx compresses on the way out. Getting this wrong produces the situation where you have configured Brotli everywhere and are still serving uncompressed HTML, which is worth checking directly rather than assuming. There is a fuller treatment of the trade-offs in the <a href="/blog/brotli-compression/">Brotli versus gzip comparison</a>.</p>
+
+        <pre><code class="language-bash"># What are you actually serving? Ask for brotli and see what comes back.
+curl -sI -H 'Accept-Encoding: br, gzip' https://shop.example.com/ \
+  | grep -i 'content-encoding\|vary'</code></pre>
+
+        <p><strong>HTTP/3</strong> is worth enabling and is not worth agonising over. QUIC removes transport-level head-of-line blocking and resumes connections in zero round trips, which matters on lossy mobile networks and matters very little on a good connection. Enable it at your CDN, where it is usually a toggle, and move on. It will not fix a 4-second LCP caused by a lazy-loaded hero image, and I have watched a team spend two weeks on protocol configuration while the actual problem sat untouched in a template.</p>
+
+        <h2>11. Shopify: A Completely Different Set Of Problems</h2>
+
+        <p>Everything above is inapplicable on Shopify. There is no Varnish to configure, no Redis, no indexers, no cron, no MySQL. Shopify serves your page from their edge and the TTFB is usually fine.</p>
+
+        <p>The trouble is entirely above that line, and it comes from two places: the theme and the apps.</p>
+
+        <h3>Liquid render cost is real and measurable</h3>
+
+        <p>Shopify's server-side render time is not infinite. Liquid loops that hit the API, nested <code>for</code> loops over collections, and the notorious pattern of iterating all variants of all products to build a filter, all add server time before a byte reaches the customer.</p>
+
+        <pre><code class="language-liquid">{%- comment -%}
+  Slow: iterates every product in the collection to build a swatch list,
+  and touches every variant of every product. On a 250-product collection
+  this measurably adds to render time.
+{%- endcomment -%}
+{%- for product in collection.products -%}
+  {%- for variant in product.variants -%}
+    {%- if variant.available -%}{{ variant.option1 }}{%- endif -%}
+  {%- endfor -%}
+{%- endfor -%}
+
+{%- comment -%}
+  Faster: the platform already aggregates this. Use the filter data
+  Shopify computes for you rather than recomputing it in Liquid.
+{%- endcomment -%}
+{%- for filter in collection.filters -%}
+  {%- for value in filter.values -%}
+    {{ value.label }} ({{ value.count }})
+  {%- endfor -%}
+{%- endfor -%}</code></pre>
+
+        <p>You can see the server render time directly. The <code>x-request-id</code> and Server-Timing headers on a Shopify response tell you what the platform spent:</p>
+
+        <pre><code class="language-bash"># Shopify exposes render timing. Compare across templates to find the slow one.
+curl -sI 'https://shop.example.com/collections/all' | grep -i 'server-timing\|x-request-id'
+
+# TTFB across your key templates, five samples each, median
+for u in / /collections/all /products/example /cart /search?q=table; do
+  echo -n "$u  "
+  for i in 1 2 3 4 5; do
+    curl -s -o /dev/null -w '%{time_starttransfer} ' "https://shop.example.com$u"
+  done; echo
+done</code></pre>
+
+        <p>If one template's TTFB is 900ms while the others are 200ms, the difference is Liquid, and it is worth an hour with the theme's section files.</p>
+
+        <h3>Apps are the actual problem</h3>
+
+        <p>Here is the number that matters on Shopify. Open a product page, filter the Network panel to scripts, sort by transfer size, and count how many of them are on a domain you do not own.</p>
+
+        <p>The typical mid-market Shopify store I audit has: a reviews app, an upsell app, a loyalty app, a live chat, a wishlist, a size guide, a back-in-stock notifier, a currency converter, a cookie banner, a pop-up builder, an analytics suite, and two apps nobody in the company can identify. Every one of them injects a script tag. Several of them inject a script tag that injects further script tags. Aggregate main-thread cost of 3–6 seconds on a mid-range Android is normal.</p>
+
+        <pre><code class="language-javascript">// Paste into the console on a live storefront: third-party script weight
+// and, more importantly, main-thread time, grouped by origin.
+const own = location.host;
+const rows = performance.getEntriesByType('resource')
+  .filter(r =&gt; r.initiatorType === 'script')
+  .reduce((acc, r) =&gt; {
+    const host = new URL(r.name).host;
+    if (host === own || host.endsWith('.shopifycdn.com')) return acc;
+    acc[host] = acc[host] || { kb: 0, count: 0 };
+    acc[host].kb += Math.round((r.transferSize || 0) / 1024);
+    acc[host].count++;
+    return acc;
+  }, {});
+console.table(rows);
+console.log('third-party script origins:', Object.keys(rows).length);</code></pre>
+
+        <p>Take that table to the person who installed the apps. My experience is that roughly a third of installed apps on any given store are not being used by anyone — trialled once, forgotten, still loading on every page view. Uninstalling them is free performance and requires no engineering at all.</p>
+
+        <p>Critically: uninstalling a Shopify app does not always remove its script tag. Apps that inject via the theme rather than the ScriptTag API leave code behind. After uninstalling, search the theme for the vendor's domain and remove what remains.</p>
+
+        <pre><code class="language-bash"># Against a downloaded theme: what third-party domains does it reference?
+grep -rhoE 'https?://[a-z0-9.-]+\.[a-z]{2,}' assets/ layout/ sections/ snippets/ \
+  | sed -E 's|https?://||; s|/.*||' | sort | uniq -c | sort -rn</code></pre>
+
+        <p>For the apps you genuinely need, Shopify's Web Pixels sandbox and the <code>defer</code> attribute help, and lazily initialising a chat widget on first interaction rather than on load is usually a 200–400ms INP improvement on its own. But the biggest wins here are removals, and I would spend the first day of any Shopify performance engagement doing nothing but an app audit.</p>
+
+        <h3>Theme bloat</h3>
+
+        <p>Most Shopify themes ship a single JavaScript bundle and a single stylesheet covering every feature the theme supports, including the ones you do not use. A theme with a mega-menu, a quick-view modal, a product comparison tool, an age gate and four slider variants ships all of it to every page.</p>
+
+        <p>Dawn and its derivatives are much better about this than the older generation, because they load section-level JavaScript as web components only where the section appears. If you are on an older theme built as one bundle, the honest advice is that migrating to a modern architecture will do more for you than optimising the old one. On Magento the equivalent conversation is about <a href="/blog/magento-hyva-themes/">moving off Luma to a modern frontend</a>, and the reasoning is the same on both platforms: at some point the theme's architecture is the ceiling.</p>
+
+        <h2>12. Images: The Same Problem, Two Different Defaults</h2>
+
+        <p>Shopify's image CDN is good and the failure mode is not using it properly. Every image URL accepts sizing and format parameters, and the theme should be emitting a full <code>srcset</code>:</p>
+
+        <pre><code class="language-liquid">{%- comment -%} Let the CDN do the work. Never emit a bare product.featured_image {%- endcomment -%}
+&lt;img
+  src="{{ product.featured_image | image_url: width: 800 }}"
+  srcset="{{ product.featured_image | image_url: width: 400 }} 400w,
+          {{ product.featured_image | image_url: width: 800 }} 800w,
+          {{ product.featured_image | image_url: width: 1200 }} 1200w"
+  sizes="(max-width: 767px) 100vw, 600px"
+  width="{{ product.featured_image.width }}"
+  height="{{ product.featured_image.height }}"
+  alt="{{ product.featured_image.alt | escape }}"
+  fetchpriority="high"&gt;</code></pre>
+
+        <p>Shopify negotiates WebP automatically based on the Accept header, so you do not need to specify a format. The <code>width</code> and <code>height</code> attributes are what prevent layout shift and are omitted by a startling number of themes.</p>
+
+        <p>Magento's default image handling is worse. It generates resized cache variants on first request, stores them under <code>pub/media/catalog/product/cache/</code>, and produces JPEG. There is no WebP or AVIF out of the box before 2.4.7, the resize dimensions come from <code>view.xml</code> and are frequently wrong, and the cache directory grows without bound — I have seen a 400GB media cache on a store with 12GB of source images.</p>
+
+        <p>My default recommendation on Magento is to bypass the built-in pipeline entirely and put an image transformation CDN in front — Cloudflare Images, Fastly IO, imgix, whichever. It removes the resize logic from PHP, it handles format negotiation, and it makes the media cache a non-problem. The alternative is one of the WebP extensions, which work but add another module to the pile.</p>
+
+        <p>One Magento-specific trap: the CDN rule frequently covers <code>/static/</code> and misses <code>/media/</code>, because those are separate path prefixes and whoever wrote the rule only tested a stylesheet. Check both.</p>
+
+        <pre><code class="language-bash"># Are both static and media coming from the edge?
+for p in /static/version1/frontend/Vendor/theme/en_GB/css/styles.css \
+         /media/catalog/product/cache/abc/e/x/example.jpg; do
+  echo -n "$p  "
+  curl -sI "https://shop.example.com$p" | grep -i 'cf-cache-status\|x-cache\|age' | tr '\n' ' '
+  echo
+done</code></pre>
+
+        <h2>13. A Worked Example</h2>
+
+        <p>A UK-based supplier of catering equipment. Magento 2.4.6, roughly 38,000 SKUs, three store views, about 400,000 sessions a month, 58% mobile. They came to me because their hosting bill had tripled over eighteen months while the site had got slower.</p>
+
+        <p><strong>What I found on day one.</strong> Varnish hit ratio 51%. Cron had not completed a full run in nine days; the <code>catalog_product_price_cl</code> changelog had 2.1 million rows. Sessions and cache shared a single Redis instance with <code>allkeys-lru</code>. Forty-one third-party modules, of which eleven were disabled but still installed. Media served from origin while static was on the CDN. TTFB on an uncached category page: 4.2 seconds.</p>
+
+        <p><strong>The cache hit ratio first,</strong> because it was worth more than everything else combined. Two causes: a consent-management module setting a cookie on first paint, and no query-parameter stripping, so every one of their considerable paid-search clicks was a miss. Nine lines of VCL. <strong>Hit ratio 51% to 88% over two days as the cache filled.</strong> Median TTFB across all traffic went from 1,400ms to 210ms without touching PHP, MySQL or the theme.</p>
+
+        <p><strong>Cron next.</strong> It had been killed by an OOM during a large price import and never restarted, and nothing was monitoring it. Restarting it and letting the backlog drain took six hours of elevated database load, scheduled overnight. Prices had been stale for nine days, which was a commercial problem considerably more serious than the performance one, and which nobody had noticed.</p>
+
+        <p><strong>Redis split</strong> onto separate instances with appropriate eviction policies. This fixed a long-running complaint about customers being logged out that had been in their bug tracker for a year, attributed to "browser issues".</p>
+
+        <p><strong>Module cull.</strong> Removed the eleven disabled modules and, after profiling, four more that were unused. One of them — a stock-notification module — had a plugin on the product collection that added 240ms to every uncached category render. <strong>Uncached category TTFB 4.2s to 1.6s.</strong></p>
+
+        <p><strong>Images.</strong> Cloudflare in front of <code>/media/</code> with automatic format negotiation and resizing. Median product page image payload from 1.1MB to 280KB. This is also where their bandwidth bill went.</p>
+
+        <p><strong>Where it landed.</strong> Median TTFB 190ms. Uncached worst case 1.6s. Mobile LCP p75 from 4.9s to 2.6s over the following month. Hosting bill reduced by about 45% by dropping back to the previous instance size, which more than paid for the engagement.</p>
+
+        <p><strong>What went wrong.</strong> The VCL cookie-stripping regex I wrote initially was too aggressive and stripped a cookie their B2B pricing depended on, so trade customers saw retail prices for about forty minutes on a Tuesday morning. It was caught by a customer phoning the sales desk, not by any monitoring. That is a genuinely serious mistake with commercial consequences and it happened because I tested the VCL against anonymous traffic only. Now I always test cache changes against a logged-in trade session as well, and I ship VCL changes at 7am rather than 10am.</p>
+
+        <p><strong>What I would do differently.</strong> I would have put the cron monitoring in on day one rather than day four. The nine days of stale prices predated my involvement, but it was found by accident during the indexer work rather than by looking, and it was worth more to the business than any of the performance work.</p>
+
+        <h2>14. Where The Time Actually Goes</h2>
+
+        <p>A rough allocation of where I have found the time on the stores I have worked on, offered as a prior rather than a measurement of your site.</p>
+
+        <p>On Magento: roughly half of all recoverable time is cache hit ratio. A quarter is third-party module cost on the requests that do reach PHP. Perhaps 15% is images and asset delivery. The remainder is genuine database and PHP tuning, which is the part everyone starts with.</p>
+
+        <p>On Shopify: roughly two-thirds is apps and third-party scripts. A fifth is theme JavaScript that ships regardless of use. Ten percent is images used without the CDN's sizing parameters. The rest is Liquid render cost, which matters on a handful of templates and nowhere else.</p>
+
+        <p>The practical implication is the same on both: start with what you can delete. Deleting an app, a module, a script tag or a cache-busting cookie is faster, cheaper, and lower-risk than any amount of tuning, and it is the work that most reliably survives the next three deploys.</p>
+
+        <h2>15. Questions That Come Up</h2>
+
+        <p><strong>"Should we move from Magento to Shopify for performance?"</strong> Not for performance alone. A well-configured Magento store is faster than a typical Shopify store, because Varnish serving from RAM beats anything with a render step. Migrate for operational cost, for not employing a DevOps engineer, for the checkout — those are good reasons. "It will be faster" is usually not true, and the Shopify stores that are genuinely fast got that way through app discipline that would have worked on Magento too.</p>
+
+        <p><strong>"Is Varnish still worth it, or should the CDN do full-page caching?"</strong> Doing it at the CDN is better if you can, because you also remove the network hop. Cloudflare's cache-everything with careful bypass rules for cart, checkout and customer sections works well and I have deployed it several times. Keep Varnish behind it as a second tier; the origin still benefits, and the invalidation story is simpler when the application only has to talk to one purge mechanism.</p>
+
+        <p><strong>"How many Magento modules is too many?"</strong> There is no number. I have seen a store with 70 modules run beautifully and one with 18 run terribly, because one of the 18 had a plugin on the product repository. Profile, do not count.</p>
+
+        <p><strong>"Our host says we need more CPU."</strong> Sometimes true. Check the cache hit ratio first, and check whether the load is coming from bots — a poorly-behaved crawler hitting every faceted URL combination will generate an unbounded number of cache misses and look exactly like organic growth in the traffic graph. Bot filtering has saved more infrastructure spend for my clients than any tuning.</p>
+
+        <p><strong>"Does Hyvä actually help?"</strong> Yes, substantially, and honestly. It replaces the Luma frontend stack with Tailwind and Alpine, and typical results are a drop from 1.5MB of JavaScript to under 100KB. It is a real rewrite of your frontend, not a config change, and the extension compatibility work is the expensive part. If you are already planning a redesign, do it at the same time; if you are not, cost it as the frontend rebuild it is.</p>
+
+        <p><strong>"We enabled every cache and it is still slow."</strong> Then either the caches are not being hit, or the slow part is not cacheable. Measure the hit ratio, then measure the uncached path separately. The two require completely different work and blending them is why "it is still slow" persists.</p>
+
+        <p><strong>"Should we go headless?"</strong> Only if you have a reason beyond speed. Headless moves the render cost around rather than removing it, adds an entire application to operate, and introduces new performance failure modes — most notably client-side rendering, which is corrosive to LCP unless you do server-side rendering properly, in which case you have reinvented the thing you left. The stores I have seen do this well had a genuine multi-channel requirement. The ones that did it for speed mostly ended up slower for a year.</p>
+
+        <p><strong>"How often should we revisit this?"</strong> Cache hit ratio and cron backlog should be monitored continuously with alerts. The app and module audit is worth doing every six months, because they accumulate. Everything else is event-driven: when something changes, or when field data says it got worse.</p>
+
+        <h2>16. What I'd Actually Do First</h2>
+
+        <p>Handed a Magento store I have never seen, in order, with rough timings.</p>
+
+        <p>Check the Varnish hit ratio. Sixty seconds, and it determines whether the next two weeks are about caching or about something else. If it is below 80%, run <code>varnishlog</code> filtered to misses and read the URLs — cookies and query parameters will account for most of it, and nine lines of VCL will be the highest-return change available to you this quarter.</p>
+
+        <p>Check <code>indexer:status</code> and the cron backlog. Two minutes. This is as much a correctness check as a performance one, and I have found stale prices, broken search and missing products this way more than once.</p>
+
+        <p>Check whether sessions and cache share a Redis instance. One minute, and if they do, fix it before you get the intermittent-logout ticket.</p>
+
+        <p>Then profile one uncached category page properly, with Blackfire or XHProf, and read the call tree by inclusive time. That will name the two or three modules costing you real money, and removing a module is faster and safer than optimising one.</p>
+
+        <p>Only then look at MySQL and PHP configuration, which is the part that feels like the real work and is usually worth the least.</p>
+
+        <p>On Shopify, the list is much shorter. Open a product page, list the third-party script origins, and find out who installed each one and whether anyone uses it. Uninstall what nobody can defend, then check the theme for leftover script tags from apps already uninstalled. Then look at whether your images are using the CDN's sizing parameters and whether they carry width and height. That is a day, and on most stores it is the majority of the available improvement.</p>
+
+        <p>The pattern underneath all of this, on both platforms, is that platform performance is mostly a housekeeping discipline rather than an engineering one. The fastener distributor did not have a hard problem; they had an unmonitored one. The catering supplier did not need a bigger server; they needed somebody to look at the hit ratio, which nobody had done in two years because nothing was graphing it. Put a number on the two or three things that actually determine your speed, alert on them, and you will spend far less of your life on Saturday phone calls.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -483,8 +797,8 @@ opcache.fast_shutdown=1
               <p>Understanding the intersection of performance and search algorithms.</p>
             </li>
             <li>
-              <strong><a href="/blog/cdn-speed-seo/">CDN Speed Optimization & Edge Caching for Global Stores</a></strong>
-              <p>Cloudflare & Fastly edge cache optimization techniques.</p>
+              <strong><a href="/blog/cdn-speed-seo/">CDN Speed Optimization &amp; Edge Caching for Global Stores</a></strong>
+              <p>Cloudflare &amp; Fastly edge cache optimization techniques.</p>
             </li>
             <li>
               <strong><a href="/blog/core-web-vitals/">Optimizing Core Web Vitals for Ecommerce Success</a></strong>
@@ -531,7 +845,7 @@ opcache.fast_shutdown=1
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 
 </html>

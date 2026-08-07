@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Serverless Architecture for E-Commerce: Scalability & Cost Optimization | MODRACX</title>
-  <meta name="description" content="Technical architectural guide on leveraging AWS Lambda, DynamoDB, and API Gateway for serverless e-commerce backends. Eliminates server idle costs during traffic spikes." />
+  <meta name="description" content="Serverless ecommerce architecture: decomposing a monolith, function boundaries, connection management, orchestration vs choreography, and the real cost model." />
   <meta property="og:title" content="Serverless Architecture for E-Commerce: Scalability & Cost Optimization | MODRACX" />
   <meta property="og:description" content="Technical architectural guide on serverless e-commerce by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Serverless Architecture for E-Commerce: Scalability & Cost Optimization</h1>
-        <p class="lede">Serverless microservices scale automatically from 0 to 100,000 concurrent requests during flash sales while incurring zero cost during idle off-peak hours.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</h1>
+        <p class="lede">One Lambda function, a switch statement, and forty-two orders stuck in pending_payment. Where to draw function boundaries, where state goes, and when serverless costs more than it saves.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 31 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,33 +205,660 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>AWS Lambda Order Handler Function</h2>
+        <h2>1. The Function That Was Secretly a Monolith</h2>
 
-        <pre><code class="language-javascript">// AWS Lambda Async Order Processor Node.js Function
-exports.handler = async (event) => {
-  const orderData = JSON.parse(event.body);
-  
-  // Asynchronously publish order to AWS SQS queue
-  await sqs.sendMessage({
-    QueueUrl: process.env.ORDER_QUEUE_URL,
-    MessageBody: JSON.stringify(orderData)
-  }).promise();
+        <p>A kitchenware distributor I worked with in 2024 had what their previous agency described as a serverless order pipeline. It was one Lambda function. Sixty-one megabytes of deployment package, a 900-line handler, and a switch statement at the top that dispatched on a <code>type</code> field in the event body. Order created, order paid, order refunded, inventory sync, the nightly ERP export, and a webhook receiver for their 3PL all went through the same entry point.</p>
 
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ message: "Order queued successfully", orderId: orderData.id })
-  };
+        <p>It worked. That is the uncomfortable part of this story. For about eighteen months it worked fine and cost them roughly $40 a month.</p>
+
+        <p>Then they onboarded a wholesale channel that pushed inventory deltas in bursts of a few thousand messages. The inventory branch of that switch statement started running at high concurrency, which was fine, except that the same function was also the webhook receiver for their payment provider. Concurrency limits are per function. The inventory burst consumed the reserved concurrency, the payment webhooks got throttled, the provider retried three times over ninety seconds and then gave up, and forty-two orders sat in <code>pending_payment</code> for two days until somebody noticed the reconciliation mismatch.</p>
+
+        <p>I have made this mistake myself, in a slightly more embarrassing form. On a pet supplies retailer's build in 2022 I put the catalogue search API and the sitemap generator in the same function because they shared a data access module and I did not want to duplicate the code. The sitemap generator ran monthly, took ninety seconds, and needed 3GB of memory. So the search API — which ran forty times a second and needed maybe 256MB — was provisioned at 3008MB for its entire life. That is roughly a twelvefold cost multiplier on the hot path, applied because of a monthly cron job. Nobody caught it for seven months.</p>
+
+        <p>Both of those are architecture failures, not performance failures. This article is about the architectural decisions serverless forces you to make, most of which have nothing to do with speed. The performance side of the story — cold starts, ISR, edge caching and what they do to Core Web Vitals — I have written up separately in <a href="/blog/serverless-seo-performance/">the piece on serverless and search performance</a>, and I would rather not repeat it here. What follows is about how you cut the system up, where state lives when your compute has none, how the pieces coordinate, and why your local development experience gets meaningfully worse.</p>
+
+        <h2>2. What Serverless Actually Changes About Architecture</h2>
+
+        <p>Strip away the marketing and serverless imposes exactly four constraints. Everything downstream of that is a consequence of one of them.</p>
+
+        <p><strong>Compute is ephemeral and horizontally unbounded.</strong> Your process might live for five minutes or five hours and you do not control which. It might be one instance or nine hundred. Anything you cache in a module-level variable is a coincidence, not a guarantee.</p>
+
+        <p><strong>Invocation is event-shaped.</strong> Something has to trigger you: an HTTP request, a queue message, a schedule, an object landing in a bucket. There is no main loop, no long-lived listener you wrote, no background thread you can rely on surviving.</p>
+
+        <p><strong>Execution is time-bounded.</strong> Fifteen minutes on Lambda, less on most edge runtimes, sometimes far less on the HTTP path where an API Gateway timeout of 29 seconds is the real limit. Any workload that legitimately takes longer has to be decomposed or moved.</p>
+
+        <p><strong>You pay per invocation and per gigabyte-second.</strong> Which sounds like a billing detail and is actually an architectural one, because it means the cost of a design is proportional to how much time your code spends waiting on other things — and ecommerce code spends most of its life waiting on other things.</p>
+
+        <p>That last point deserves more attention than it gets. In a container, a request that waits 800ms on a slow ERP call costs you nothing extra; the process handles other requests on other threads. In a function, you are billed for all 800ms at your full memory allocation while doing nothing. Synchronous chains of remote calls are the single most expensive pattern in serverless, and they are also the default way most ecommerce integrations get written.</p>
+
+        <h2>3. Decomposing a Monolith: Where the Seams Actually Are</h2>
+
+        <p>The usual advice is to find bounded contexts and split along them. That is correct and almost useless, because on a Magento or a bespoke Node monolith the bounded contexts are already tangled and you cannot see them from the code.</p>
+
+        <p>What I do instead is look for seams that already exist in the runtime, because those are the ones the application has already proven it can tolerate being asynchronous or remote.</p>
+
+        <h3>Cron jobs are free wins</h3>
+
+        <p>Anything already running on a schedule is by definition decoupled from a request. Feed generation, ERP exports, stale cart cleanup, reindexing triggers, abandoned basket emails. These move to scheduled functions with essentially no architectural risk, and they are usually the workloads eating the most memory on your app servers.</p>
+
+        <p>On the kitchenware distributor we moved eleven cron jobs first. The application servers dropped from four to three purely because the nightly spikes went away. That paid for the migration effort before we touched anything customer-facing.</p>
+
+        <h3>Webhook receivers are the next layer</h3>
+
+        <p>Every inbound webhook — payment notifications, shipping status, marketplace order pushes, ERP callbacks — is a natural function. It has one entry point, a well-defined payload, and no shared session state. It also has a hard availability requirement that your monolith often cannot meet, because a deploy that takes the app down for ninety seconds means the payment provider's retry budget starts burning.</p>
+
+        <p>Moving webhook receivers out is the change with the best availability-to-effort ratio in this whole exercise. The receiver validates the signature, writes the raw payload somewhere durable, returns 200, and something else processes it. That last part is important and I will come back to it.</p>
+
+        <h3>What I do not move early</h3>
+
+        <p>Checkout. Cart mutation. Anything that holds a transaction across multiple writes.</p>
+
+        <p>Not because it cannot be done, but because the failure modes are expensive and the payoff is small. Checkout traffic is a tiny fraction of request volume and the code is the most heavily coupled to session state, pricing rules and inventory reservation. I have seen two teams start their serverless migration with checkout because it felt like the important bit, and both spent months building distributed transaction machinery to replace a database transaction that was working fine.</p>
+
+        <p>Start at the edges. The edges are where the value is and where being wrong is survivable.</p>
+
+        <h2>4. Choosing Function Boundaries</h2>
+
+        <p>Once you have decided what moves, you have to decide how finely to cut it. This is the decision people get wrong most often, in both directions.</p>
+
+        <p>The two failure modes are the lambda-lith — one function doing everything, as above — and what I have started calling function shrapnel, where every HTTP verb on every resource is its own deployment artifact and a small storefront API becomes 140 functions nobody can reason about.</p>
+
+        <p>My rule, which I will defend: <strong>a function boundary should coincide with a scaling boundary, a failure boundary, or a permissions boundary. If it coincides with none of those, it should not be a boundary.</strong></p>
+
+        <p>Scaling boundary means the workloads have genuinely different concurrency and memory profiles. My search-plus-sitemap disaster was a scaling boundary I ignored.</p>
+
+        <p>Failure boundary means you want one to be able to fail without the other. The payment webhook and the inventory sync in the opening story shared a failure boundary they should not have shared.</p>
+
+        <p>Permissions boundary means the IAM policy differs. If one handler needs write access to the orders table and the other needs read access to a public catalogue, keeping them together means the public-facing code carries write credentials it does not need. This is the least discussed of the three and it is often the strongest argument.</p>
+
+        <p>Here is what that looks like in practice on a storefront API. Not one function, not forty.</p>
+
+        <pre><code class="language-yaml"># serverless.yml — boundaries drawn on scaling, failure and IAM,
+# not on "one function per route".
+functions:
+
+  # Read path. High concurrency, tiny memory, public, read-only IAM.
+  catalogRead:
+    handler: src/catalog/read.handler
+    memorySize: 512
+    timeout: 6
+    reservedConcurrency: 200        # protects the write paths below
+    events:
+      - httpApi: 'GET /products/{sku}'
+      - httpApi: 'GET /categories/{slug}'
+      - httpApi: 'GET /search'
+    iamRoleStatements:
+      - Effect: Allow
+        Action: [dynamodb:GetItem, dynamodb:Query]
+        Resource: !GetAtt CatalogTable.Arn
+
+  # Write path. Low concurrency, needs the order table, must not be
+  # starved by a catalogue traffic spike.
+  cartWrite:
+    handler: src/cart/write.handler
+    memorySize: 1024
+    timeout: 15
+    reservedConcurrency: 50
+    events:
+      - httpApi: 'POST /cart/{id}/items'
+      - httpApi: 'DELETE /cart/{id}/items/{lineId}'
+
+  # Payment webhook. Own concurrency, own alarm, own IAM. Never shares
+  # a function with anything that can burst.
+  pspWebhook:
+    handler: src/psp/receive.handler
+    memorySize: 256
+    timeout: 10
+    reservedConcurrency: 30
+
+  # Monthly, memory-hungry, and therefore emphatically its own thing.
+  sitemapBuild:
+    handler: src/seo/sitemap.handler
+    memorySize: 3008
+    timeout: 900
+    events:
+      - schedule: cron(0 3 1 * ? *)</code></pre>
+
+        <p>Four functions covering what a naive split would have made fifteen. Each one has a defensible reason to exist separately from the others.</p>
+
+        <p>A note on <code>reservedConcurrency</code>, because it is the most underused setting in AWS Lambda. It does two things: it guarantees that function a floor of capacity, and it caps it so it cannot consume the account-wide pool. Setting it on your write paths and your webhook receivers is the single cheapest protection against the failure that started this article. It costs nothing.</p>
+
+        <h2>5. The Lambda-lith Is Sometimes Correct</h2>
+
+        <p>Having spent a section attacking one, I should defend it in one specific case.</p>
+
+        <p>If you are running an Express or Fastify application and you want it on Lambda, wrapping the whole app in a single function behind an adapter is a perfectly reasonable transitional architecture. All routes share a deployment, share a cold start, share IAM, and you get one CloudWatch log group. That is worse in every dimension I described above.</p>
+
+        <p>It is also deployable in an afternoon, and it lets you find out whether the operational model suits you before you commit to a decomposition you cannot easily undo.</p>
+
+        <pre><code class="language-javascript">// handler.js — the whole Express app as one function.
+// Fine as a first step. Not fine as a destination.
+import serverlessExpress from '@codegenie/serverless-express';
+import { app } from './app.js';
+
+// Build the adapter once, outside the handler, so it survives
+// warm invocations. Doing this inside the handler adds ~15ms per call.
+let server;
+
+export const handler = async (event, context) => {
+  // Stop Lambda waiting on an idle keep-alive socket before returning.
+  context.callbackWaitsForEmptyEventLoop = false;
+  server = server ?? serverlessExpress({ app });
+  return server(event, context);
 };</code></pre>
 
-        <hr />
+        <p>The line I want to draw attention to is <code>callbackWaitsForEmptyEventLoop</code>. Left at its default of <code>true</code>, Lambda waits for the Node event loop to drain before it considers the invocation complete. If you have an open database pool or an HTTP agent with keep-alive — and you should — the loop never drains, and every request bills for the full timeout. I have seen a bill drop 60% from that one line.</p>
+
+        <p>Keep the lambda-lith for a quarter. Then split it, starting with whichever route has the most distinct scaling profile. If you never split it, you have bought yourself a worse-provisioned container with a fifteen-minute execution ceiling, which is not a good trade.</p>
+
+        <h2>6. State Has to Live Somewhere</h2>
+
+        <p>The phrase "stateless functions" causes more confusion than any other in this field. Functions are stateless. Systems are not. Ecommerce systems in particular are almost entirely state.</p>
+
+        <p>What actually happens is that state gets pushed out of the compute layer into services, and you now have to make explicit decisions about things a monolith made implicitly.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>State</th><th>Monolith default</th><th>Serverless choice</th><th>Trap</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Session</td><td>File or Redis, sticky</td><td>Signed cookie or Redis/DynamoDB</td><td>Cookie size limits at 4KB; carts do not fit</td></tr>
+            <tr><td>Cart</td><td>Database row + session</td><td>Its own store, keyed by cart id</td><td>Guest-to-customer merge on login</td></tr>
+            <tr><td>Config</td><td>Loaded at boot</td><td>Parameter Store / Secrets Manager</td><td>Fetched per invocation if you are careless</td></tr>
+            <tr><td>Cache</td><td>In-process (APCu, LRU)</td><td>Elasticache, DAX, or CDN</td><td>Module-scope caches with no invalidation</td></tr>
+            <tr><td>Locks</td><td>Database row lock</td><td>Conditional write with TTL</td><td>Lock outliving the function that took it</td></tr>
+            <tr><td>Uploads in flight</td><td>Temp dir on disk</td><td>Direct-to-S3 presigned</td><td>512MB /tmp is per-instance and reused</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two rows on that table deserve elaboration because they generate real incidents.</p>
+
+        <h3>Module-scope caches are a trap you will fall into</h3>
+
+        <p>A variable declared outside the handler survives warm invocations. This is genuinely useful — it is how you avoid re-reading config, re-building a database client, or re-parsing a large JSON blob on every call.</p>
+
+        <p>It is also a cache with no invalidation, an unpredictable TTL, and a different value in every concurrent instance.</p>
+
+        <p>I watched a pet supplies retailer cache VAT rates in module scope. The rate changed at midnight on a Sunday for a specific product class. Cold instances picked up the new rate immediately; warm instances kept the old one for as long as they lived, which for one instance turned out to be eleven hours. Orders placed in that window had the wrong tax and had to be manually credited.</p>
+
+        <p>The rule I use now: module scope is for things that cannot change during the life of a deployment. Clients, compiled regexes, parsed schemas. Never business data.</p>
+
+        <pre><code class="language-javascript">// Safe: a client, built once, no business meaning.
+const dynamo = new DynamoDBClient({ region: process.env.AWS_REGION });
+
+// Safe: config that is baked at deploy time and changes only on deploy.
+const FEATURE_FLAGS = JSON.parse(process.env.FEATURE_FLAGS ?? '{}');
+
+// Dangerous: business data with a real-world expiry, cached for the
+// lifetime of an instance you do not control.
+let vatRates = null;   // <-- do not do this
+
+export const handler = async (event) =&gt; {
+  // If you must cache business data, give it a TTL you enforce
+  // yourself, and make it short enough that staleness is tolerable.
+  const rates = await cachedFor(60_000, 'vat', () =&gt; loadVatRates());
+  return price(event, rates);
+};</code></pre>
+
+        <h3>Distributed locks are harder than they look</h3>
+
+        <p>The part people get wrong is what happens when the function holding the lock times out. It does not get a chance to release. So every lock needs a TTL, and the TTL has to be longer than your function timeout, and your function has to check that it still holds the lock before it commits — because if the TTL expired and someone else took the lock, your write is now unsafe.</p>
+
+        <p>My honest recommendation is to avoid needing the lock. Conditional writes — "decrement this counter only if it is currently greater than zero" — handle the overwhelming majority of inventory cases atomically without any lock at all, and they cannot leak.</p>
+
+        <pre><code class="language-javascript">// Atomic stock decrement. No lock, no TTL to leak, no lost update.
+// The ConditionExpression makes the whole thing fail if stock is short.
+await dynamo.send(new UpdateItemCommand({
+  TableName: 'inventory',
+  Key: { sku: { S: sku } },
+  UpdateExpression: 'SET available = available - :q, reserved = reserved + :q',
+  ConditionExpression: 'available &gt;= :q',
+  ExpressionAttributeValues: { ':q': { N: String(qty) } },
+}));
+// Throws ConditionalCheckFailedException when stock is insufficient.
+// That exception IS your business logic — catch it, do not retry it.</code></pre>
+
+        <p>That last comment matters. A conditional check failure is not a transient error and retrying it is pointless. Distinguishing retryable from terminal failures is a discipline serverless forces on you that a monolith lets you skip.</p>
+
+        <h2>7. Connection Management, the Problem Nobody Plans For</h2>
+
+        <p>This is where most serverless ecommerce migrations hit their first real wall, and it is worth being precise about the mechanics.</p>
+
+        <p>A relational database has a hard connection limit. A default MySQL 8 install allows 151. RDS scales that with instance size — a db.r6g.large gives you around 1,300. Postgres is stingier still because each connection is a process.</p>
+
+        <p>A Lambda function opens one connection per concurrent execution. At 400 concurrent executions you want 400 connections. If you have four functions all talking to the same database, you want 1,600. Your database refuses at 1,300 and starts returning "too many connections", which your functions interpret as an error, which triggers a retry, which creates more concurrency, which asks for more connections.</p>
+
+        <p>I have watched that spiral take down a Magento database during a flash sale in about ninety seconds. The functions were fine. The database was fine until it was not, and then the retry storm meant it could not recover on its own.</p>
+
+        <p>There are four workable answers and they are not equivalent.</p>
+
+        <p><strong>RDS Proxy or PgBouncer.</strong> A pooler sits between functions and database, multiplexing many client connections onto few server ones. This is the standard answer and it works. It adds around 5ms to every query, costs real money — RDS Proxy is billed per vCPU-hour of the target instance and typically lands around $15–30 a month per small instance — and it does not help with prepared statements or session-pinned transactions, which get pinned to a backend connection and defeat the multiplexing.</p>
+
+        <p><strong>HTTP-based data APIs.</strong> Aurora Serverless v2's Data API, Neon's HTTP driver, PlanetScale's serverless driver. No persistent connection at all; each query is an HTTP request. This suits functions perfectly and is what I would pick for a greenfield build. The cost is latency per query — expect 10–20ms of overhead — which punishes chatty code hard.</p>
+
+        <p><strong>Cap concurrency below the connection budget.</strong> Crude but effective. If your database can handle 300 connections, set reserved concurrency across your database-touching functions so the total cannot exceed 250. Requests queue rather than the database falling over. I use this alongside a pooler, not instead of it, as a backstop.</p>
+
+        <p><strong>Do not use a relational database on the hot path.</strong> DynamoDB, or a read model in a key-value store, has no connection concept at all. This is the cleanest answer and the one that requires the most rework.</p>
+
+        <pre><code class="language-javascript">// If you must talk to MySQL/Postgres from a function: one connection
+// per container, reused across warm invocations, closed on nothing.
+import mysql from 'mysql2/promise';
+
+let conn;
+
+async function db() {
+  if (conn) {
+    try {
+      await conn.ping();        // cheap; catches a connection the
+      return conn;              // proxy or server closed under us
+    } catch { conn = null; }
+  }
+  conn = await mysql.createConnection({
+    host: process.env.DB_PROXY_HOST,   // the proxy, never the instance
+    connectionLimit: 1,                // pool of 1: the container IS the pool
+    // Fail fast. A function waiting 30s for a connection is a function
+    // billing you 30s for nothing.
+    connectTimeout: 3000,
+  });
+  return conn;
+}</code></pre>
+
+        <p>If your data layer is already under strain before you go serverless, the connection problem will make it worse rather than better, and you should read the argument in <a href="/blog/database-sharding-scaling/">the piece on scaling the database tier</a> before you add hundreds of concurrent clients to something that is already unhappy.</p>
+
+        <h2>8. Orchestration Versus Choreography</h2>
+
+        <p>Once you have more than three functions, they have to coordinate, and there are exactly two shapes for that.</p>
+
+        <p><strong>Orchestration</strong> means a central coordinator knows the whole workflow and calls each step. Step Functions, Durable Functions, Temporal, or a hand-rolled state machine. The sequence lives in one place.</p>
+
+        <p><strong>Choreography</strong> means each service emits events and other services react. Nobody knows the whole flow. The sequence is emergent.</p>
+
+        <p>The literature has a strong bias toward choreography because it is more decoupled. I think that bias is wrong for ecommerce order flows and I will say why.</p>
+
+        <p>An order flow has a business owner. Someone in operations can draw it on a whiteboard: payment authorised, then stock reserved, then fulfilment requested, then invoice raised, then confirmation sent. That sequence is a business rule. It has compensation logic — if fulfilment fails, release the stock and void the authorisation. It has SLAs. It gets audited.</p>
+
+        <p>When you implement that as choreography, the business rule stops existing as an artifact. It is distributed across nine event handlers and the only way to know what happens after payment is to grep for who subscribes to <code>PaymentAuthorised</code>. Six months later somebody adds a tenth subscriber and the flow changes and no document changes.</p>
+
+        <p>So my position: <strong>orchestrate the order lifecycle, choreograph everything downstream of it.</strong></p>
+
+        <p>The order state machine is explicit, versioned, visible, and has compensation. Analytics, search indexing, email, loyalty points, ERP sync, review requests — all of those subscribe to events emitted by the state machine and none of them can break the order. If the review-request service is down for a day, orders still flow.</p>
+
+        <p>The failure mode of pure choreography in ecommerce is not that it does not work. It is that nobody can answer "why did this order not ship" without reading logs from five services. The failure mode of pure orchestration is a coordinator that grows into a monolith with all the business logic in it, which is a real risk and is why the downstream half should be events.</p>
+
+        <p>The mechanics of the events half — delivery guarantees, ordering, idempotent consumers, the outbox pattern — are involved enough that I have given them <a href="/blog/event-driven-architecture/">their own article on event-driven design</a>. What follows here is the orchestration half.</p>
+
+        <h2>9. A State Machine for an Order, Concretely</h2>
+
+        <p>Step Functions gets criticised for its JSON dialect, which is fair — Amazon States Language is verbose and the editor is not good. It earns its place anyway, because the execution history gives you something no distributed log will: a visual, per-execution record of exactly which step ran, what it returned, and where it stopped.</p>
+
+        <p>Here is a trimmed order workflow with the parts that matter.</p>
+
+        <pre><code class="language-json">{
+  "Comment": "Order fulfilment. Compensation on every failure path.",
+  "StartAt": "ReserveStock",
+  "States": {
+    "ReserveStock": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:eu-west-2:...:function:reserveStock",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["InsufficientStock"],
+          "Next": "VoidAuthorisation",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CapturePayment"
+    },
+
+    "CapturePayment": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:eu-west-2:...:function:capturePayment",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ReleaseStock",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "RequestFulfilment"
+    },
+
+    "RequestFulfilment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+      "Parameters": {
+        "QueueUrl": "https://sqs.eu-west-2.amazonaws.com/.../3pl-requests",
+        "MessageBody": {
+          "orderId.$": "$.orderId",
+          "taskToken.$": "$$.Task.Token"
+        }
+      },
+      "TimeoutSeconds": 7200,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.Timeout"],
+          "Next": "EscalateToOps",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "OrderComplete"
+    },
+
+    "ReleaseStock":      { "Type": "Task", "Resource": "...:releaseStock",      "Next": "OrderFailed" },
+    "VoidAuthorisation": { "Type": "Task", "Resource": "...:voidAuth",          "Next": "OrderFailed" },
+    "EscalateToOps":     { "Type": "Task", "Resource": "...:notifyOps",         "Next": "OrderFailed" },
+    "OrderComplete":     { "Type": "Succeed" },
+    "OrderFailed":       { "Type": "Fail", "Error": "OrderNotFulfilled" }
+  }
+}</code></pre>
+
+        <p>Three things in there are the whole reason to use this rather than chained events.</p>
+
+        <p><code>waitForTaskToken</code> on the fulfilment step. The 3PL takes anywhere from ten minutes to two hours to accept a request. The state machine parks, costing nothing, and resumes when the 3PL's callback hits <code>SendTaskSuccess</code> with the token. Doing that with events means storing correlation state yourself and building your own timeout.</p>
+
+        <p>The <code>Catch</code> blocks routing to compensation. This is a saga, and having the compensating transactions declared next to the forward path is the difference between a design you can review and a design you can only test.</p>
+
+        <p>The two-hour <code>TimeoutSeconds</code>. A workflow that hangs forever is worse than one that fails, because nobody gets paged for a hang.</p>
+
+        <p>The cost, since it is a fair objection: Standard workflows are $0.025 per 1,000 state transitions. That order flow has roughly eight transitions, so 10,000 orders a month costs about $2. Express workflows are cheaper still but have a five-minute ceiling and no visual history, which removes the main reason I wanted it. For order flows, Standard, every time.</p>
+
+        <h2>10. Local Development Gets Genuinely Worse</h2>
+
+        <p>I want to be honest about this because most serverless writing skips it, and it is the thing developers on the team will complain about within a fortnight.</p>
+
+        <p>In a monolith you run one command, you get the whole application, and you can put a breakpoint anywhere. That experience does not survive decomposition into managed services. The gap between "works on my machine" and "works in the account" widens, and every tool that claims to close it closes about 70% of it.</p>
+
+        <p>The options, honestly assessed.</p>
+
+        <h3>Full local emulation</h3>
+
+        <p>LocalStack, SAM local, serverless-offline. You run fake versions of the managed services on your laptop.</p>
+
+        <p>This works well for Lambda, API Gateway, SQS, S3 and DynamoDB, which covers a lot. It works badly for IAM — LocalStack's free tier does not enforce policies, so every permission error is deferred to deployment — and it works badly for anything with subtle behaviour, like SQS visibility timeouts under load or DynamoDB's conditional write semantics under contention. Step Functions emulation exists and I have never trusted its retry timing.</p>
+
+        <h3>Cloud development environments</h3>
+
+        <p>Each developer gets their own AWS account or their own resource prefix, and deploys to it. This is what I now recommend by default. It is accurate by definition, and tools like SST's live lambda development or the <code>sam sync --watch</code> mode make the loop tolerable — code change to running-in-cloud in about three seconds, with breakpoints in your local debugger while the event comes from real AWS.</p>
+
+        <p>The cost is a per-developer AWS account, a lot of care around IAM boundaries so nobody can touch production, and a build that only works with connectivity. It also means your dev environment has real costs, which finance will ask about.</p>
+
+        <h3>Hexagonal handlers, which is the actual answer</h3>
+
+        <p>Whatever tooling you pick, the thing that makes serverless development bearable is keeping business logic out of handlers entirely. The handler parses an event, calls a pure function, formats a response. The pure function knows nothing about Lambda and is tested with a normal unit test at normal speed.</p>
+
+        <pre><code class="language-typescript">// domain/pricing.ts — no AWS types, no I/O, testable in 4ms.
+export function applyPromotions(
+  lines: CartLine[],
+  promos: Promotion[],
+  now: Date,
+): PricedCart {
+  const active = promos.filter(p =&gt; p.from &lt;= now &amp;&amp; now &lt; p.to);
+  // ... all the fiddly business rules live here, and only here
+  return { lines: priced, total, applied };
+}
+
+// handlers/priceCart.ts — thin. Parse, delegate, serialise.
+export const handler = async (event: APIGatewayProxyEventV2) =&gt; {
+  const cart = await carts.load(event.pathParameters!.id!);
+  const promos = await promotions.active();
+  const result = applyPromotions(cart.lines, promos, new Date());
+  return { statusCode: 200, body: JSON.stringify(result) };
+};</code></pre>
+
+        <p>On the kitchenware build we ended up with about 4,000 lines of domain code with no AWS import anywhere, covered by fast unit tests, and roughly 600 lines of handlers covered by a much smaller number of integration tests against a deployed environment. That ratio is the thing that made the codebase pleasant to work in. It is also platform-portable, which matters more than people admit given how often the platform decision gets revisited.</p>
+
+        <h2>11. Testing a System You Cannot Run</h2>
+
+        <p>The testing pyramid survives, but the middle layer changes shape.</p>
+
+        <p>Unit tests on domain logic: unchanged, fast, and where the majority of your coverage should live. Nothing about serverless makes this harder.</p>
+
+        <p>Integration tests: these have to run against deployed infrastructure. Not emulated — deployed. The bugs that matter are IAM permissions, event payload shapes, timeout interactions, and the difference between what you think SQS does and what it does. None of those reproduce locally.</p>
+
+        <p>What I do is deploy an ephemeral stack per pull request, named after the branch, run the integration suite against it, and tear it down. On a reasonably sized stack that adds four to six minutes to CI, which is the real cost and is worth it.</p>
+
+        <pre><code class="language-yaml"># .github/workflows/pr.yml — ephemeral stack per PR.
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    permissions: { id-token: write, contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/ci-deploy
+          aws-region: eu-west-2
+
+      # Stage name derived from the PR number keeps stacks isolated
+      # and makes orphan cleanup trivial.
+      - run: npx serverless deploy --stage pr-${{ github.event.number }}
+
+      - run: npm run test:integration
+        env:
+          API_BASE: ${{ steps.deploy.outputs.api_url }}
+
+      # always() so a failing test still removes the stack. Orphaned
+      # stacks are how a dev account ends up at its resource quota.
+      - if: always()
+        run: npx serverless remove --stage pr-${{ github.event.number }}</code></pre>
+
+        <p>The test I have found most valuable, and least commonly written: a load test that pushes concurrency past your database connection budget and confirms the system degrades rather than collapses. That is the failure mode that costs money, and it is invisible in every other kind of test.</p>
+
+        <h2>12. Cold Starts Are an Architecture Problem Too</h2>
+
+        <p>I said I would not rehash the performance angle, and the numbers and mitigations are all in the companion article. But there is an architectural consequence that belongs here.</p>
+
+        <p>Cold start duration is roughly proportional to deployment package size and to how much your module-scope code does at import time. Which means the way you cut up your functions directly determines how bad your cold starts are.</p>
+
+        <p>A single function importing the AWS SDK, an ORM, a validation library, a PDF generator and a template engine pays the initialisation cost of all five on every cold start, even for the request that only needed the validation library. Splitting by scaling boundary tends to split imports too, which is a second, unearned benefit of drawing the boundaries properly.</p>
+
+        <p>Two concrete numbers from the kitchenware build. The original 61MB lambda-lith cold started in 1.8 to 2.4 seconds. After the split, the catalogue read function was 4MB and cold started in 340ms; the sitemap builder was still slow and nobody cared, because it ran monthly at 3am.</p>
+
+        <p>The architectural lever is bigger than any runtime tuning. Bundle aggressively, tree-shake, do not import the whole SDK when you need one client, and move anything expensive out of module scope unless it is needed on every invocation.</p>
+
+        <h2>13. When Serverless Costs More Than It Saves</h2>
+
+        <p>This is the section I most want people to read, because the cost model is genuinely non-obvious and the sales material is one-sided.</p>
+
+        <p>Serverless wins decisively on spiky, low-average-utilisation workloads. It loses decisively on steady, high-utilisation ones. The crossover is not where most people guess.</p>
+
+        <p>Here is the arithmetic, which I would encourage you to redo with your own numbers rather than trust mine.</p>
+
+        <p>A Lambda function at 1024MB costs $0.0000166667 per GB-second plus $0.20 per million requests. Say an API endpoint that takes 200ms. Per million requests: 1,000,000 × 0.2s × 1GB × $0.0000166667 = $3.33 of compute, plus $0.20 of invocation. Call it $3.53 per million.</p>
+
+        <p>A t4g.medium running that same workload costs about $24 a month on demand, less on Savings Plans, and can comfortably handle 200 requests a second sustained — call it 500 million requests a month if it were saturated.</p>
+
+        <p>So at low volume Lambda is dramatically cheaper. At one million requests a month, $3.53 against $24 is not close. At fifty million, Lambda is $176 against $24 for one instance, or maybe $72 for three behind a load balancer. Lambda has lost.</p>
+
+        <p>The crossover in that example sits somewhere around six to eight million requests a month <em>for a workload with flat traffic</em>. That last clause is the whole game. Real ecommerce traffic is not flat: a typical UK storefront does 60% of its volume in eight hours, has a Black Friday peak eight times the daily mean, and drops to near zero at 4am. The container fleet has to be sized for the peak and is idle for most of the day, so the fair comparison is Lambda's actual usage against the container's provisioned capacity, and that pushes the crossover much higher.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Workload shape</th><th>Verdict</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Webhook receivers, scheduled jobs</td><td>Serverless, always</td><td>Idle most of the time; scaling to zero is the whole point</td></tr>
+            <tr><td>Flash sales, campaign spikes</td><td>Serverless</td><td>Peak-to-mean ratio above about 10:1 makes provisioning wasteful</td></tr>
+            <tr><td>Steady API at high sustained RPS</td><td>Containers</td><td>Utilisation above ~40% and Lambda's per-request premium compounds</td></tr>
+            <tr><td>Long-running batch, imports</td><td>Containers or Fargate</td><td>15-minute ceiling; and you are billed for wall time regardless</td></tr>
+            <tr><td>Anything waiting on a slow third party</td><td>Containers, or restructure</td><td>Billed for idle wait; a 3s ERP call costs 3s of GB-seconds</td></tr>
+            <tr><td>Image and video processing</td><td>Depends on volume</td><td>High memory × long duration is the worst possible billing shape</td></tr>
+          </tbody>
+        </table>
+
+        <p>Beyond raw compute, four costs get consistently omitted from the comparison.</p>
+
+        <p><strong>The services around the functions.</strong> API Gateway REST APIs are $3.50 per million requests, which is often more than the Lambda behind them. HTTP APIs are $1.00 and you should use those unless you need a REST-only feature. NAT Gateway is $0.045 per hour plus $0.045 per GB processed, and a VPC-attached function that talks to the internet goes through it — I have seen a NAT bill exceed the entire Lambda bill by a factor of four on a store doing heavy third-party API traffic.</p>
+
+        <p><strong>CloudWatch Logs.</strong> $0.50 per GB ingested, and verbose functions at scale produce a startling amount. On one build logs cost more than compute for two months until we cut the log level and set retention to fourteen days.</p>
+
+        <p><strong>Data transfer between services.</strong> Cross-AZ traffic, cross-region replication, and anything leaving AWS. Fine-grained decomposition means more network hops and every hop is potentially billable.</p>
+
+        <p>My honest position: for a store doing under about £2m a year, the compute bill is not your problem and you should choose on operational fit rather than cost. Serverless wins there because there is nothing to patch and nothing to scale, not because it is cheaper. Above roughly £20m with steady traffic, run the numbers properly, and expect the answer to be a hybrid — functions at the edges, containers on the sustained hot path. Anyone giving you a universal answer has not looked at your traffic shape.</p>
+
+        <h2>14. The Hybrid Is Usually the Right Answer</h2>
+
+        <p>I have said "hybrid" three times so I should describe what I actually mean, because it is not a fudge.</p>
+
+        <p>The pattern I have landed on across four builds: containers for the sustained, latency-sensitive, database-heavy request path — product pages, search, cart, checkout. Functions for everything event-driven, scheduled, spiky or integration-shaped.</p>
+
+        <p>That split maps almost exactly onto the cost table above, and it has a second benefit: the container half keeps a small, well-understood database connection pool, and the function half mostly talks to queues and HTTP APIs rather than the database directly. The connection problem largely disappears because the functions that scale to hundreds of instances are not the ones holding database connections.</p>
+
+        <p>If you are already running containers and the operational overhead of Kubernetes is what pushed you to look at serverless in the first place, it is worth being clear about which problem you are solving — <a href="/blog/containerization-docker-kubernetes/">the container and orchestration side</a> has its own set of trade-offs and moving to functions does not automatically make the operational burden smaller, it relocates it into IAM policies and event plumbing.</p>
+
+        <h2>15. Observability Without a Process to Attach To</h2>
+
+        <p>You cannot SSH into a function. There is no <code>top</code>, no heap dump, no strace. Everything you will ever know about production comes from what you emitted at the time, which means instrumentation is a design decision rather than a debugging step.</p>
+
+        <p>Three things, in order of value.</p>
+
+        <p><strong>Structured JSON logs with a correlation id threaded through everything.</strong> Not optional. A single customer action might touch six functions and two queues, and without a shared id you cannot reconstruct it. Generate the id at the entry point, put it in the event payload, put it in every log line, propagate it across queue messages in a message attribute.</p>
+
+        <pre><code class="language-javascript">// A minimal correlation-aware logger. AsyncLocalStorage keeps the id
+// available without threading it through every function signature.
+import { AsyncLocalStorage } from 'node:async_hooks';
+const ctx = new AsyncLocalStorage();
+
+export const log = (level, msg, extra = {}) =&gt; {
+  const store = ctx.getStore() ?? {};
+  // One JSON object per line. CloudWatch Logs Insights can query
+  // these directly; unstructured strings it cannot.
+  console.log(JSON.stringify({
+    level, msg,
+    correlationId: store.correlationId,
+    orderId: store.orderId,
+    ...extra,
+    ts: new Date().toISOString(),
+  }));
+};
+
+export const withContext = (event, fn) =&gt; ctx.run({
+  // Accept an inbound id if there is one; only mint a new one at
+  // the true entry point of a flow.
+  correlationId: event.headers?.['x-correlation-id'] ?? crypto.randomUUID(),
+}, fn);</code></pre>
+
+        <p><strong>Distributed tracing.</strong> X-Ray, or OpenTelemetry into whatever backend you prefer. This is what answers "where did the 4 seconds go" across a chain of functions. The instrumentation cost is small; the ADOT Lambda layer covers most of it automatically.</p>
+
+        <p><strong>Alarms on the things that are silent.</strong> Dead letter queue depth above zero. Step Functions executions in a failed state. Throttled invocations. Iterator age on a stream consumer. These are the failures that produce no error page and no support ticket, and they are the ones that cost you money for days before anyone notices — exactly the shape of the incident that opened this article.</p>
+
+        <h2>16. A Worked Migration, With the Part That Went Wrong</h2>
+
+        <p>The kitchenware distributor again, over about five months in 2024. Roughly 18,000 orders a month, a Magento 2.4.6 storefront that stayed exactly where it was, and a set of integration workloads that all lived in that one function.</p>
+
+        <p><strong>Starting state.</strong> One Lambda, 61MB, 900-line handler, 3008MB memory. Eleven cron jobs on the Magento application servers. Four app nodes on t3.large. Payment webhooks and inventory sync sharing a fate. Lambda bill $38 a month; EC2 bill $290; nobody had ever looked at either.</p>
+
+        <p><strong>Month one — split by failure boundary only.</strong> No new architecture, no new services. Just took the switch statement apart into six functions, each with its own reserved concurrency and its own alarm. This alone fixed the incident that started the engagement. Cold starts dropped from 2.1s median to between 300 and 700ms depending on the function, because the deployment packages shrank. Lambda bill went to $51 — higher, because six functions each keep their own warm instances.</p>
+
+        <p><strong>Month two — the cron jobs.</strong> Eleven scheduled functions, one EventBridge rule each. Dropped from four app nodes to three because the nightly memory spikes went away. Saved about $70 a month net. The ERP export hit the 15-minute limit on the first month-end and had to be reworked into a fan-out — a coordinator function that lists the pages of the export and pushes one SQS message per page, with 20 workers. That took three days I had not planned for.</p>
+
+        <p><strong>Month four — the connection wall.</strong> Here is what went wrong.</p>
+
+        <p>The order functions talked to the Magento database directly for a handful of reads. In testing, at ten concurrent executions, fine. On the first big promotional day, the state machine fanned out to about 180 concurrent executions and MySQL's <code>max_connections</code> of 500 was already 60% consumed by the storefront. Connections were refused, Step Functions retried with backoff, retries added concurrency, and the storefront started returning 503s because it could not get connections either.</p>
+
+        <p>Eleven minutes of degraded storefront. Maybe £4,000 of revenue on a day doing £60,000. It was entirely my fault — I had load tested the functions in isolation and never against a database that was already carrying production storefront load, which in hindsight is such an obvious gap that I now put it on every plan as an explicit line item.</p>
+
+        <p>The fix had three parts, applied in this order: reserved concurrency capped across the order functions so their total could not exceed 60; RDS Proxy in front of the database; and the reads that did not need to be live moved to a DynamoDB read model updated from the order events. The third part is what actually solved it. The first two bought time.</p>
+
+        <p><strong>Month five — steady state.</strong> Lambda $94, Step Functions $6, SQS and EventBridge under $3, CloudWatch $22 after we cut log verbosity from debug, RDS Proxy $19. EC2 down to $220 across three nodes. Net infrastructure cost slightly higher than where we started, by about $30 a month.</p>
+
+        <p>Which is worth stating plainly: <strong>the migration did not save money.</strong> It was not sold on money. What it bought was a payment pipeline that could not be starved by an inventory burst, an order flow operations could inspect themselves, and integration work that no longer required a Magento deploy. The ops team's on-call pages for integration failures went from around nine a month to two. That was the actual return, and it was worth more than $30.</p>
+
+        <p>If someone tells you their serverless migration cut costs 70%, ask what they were running before. The answer is usually "badly overprovisioned EC2", and the saving came from right-sizing, not from serverless.</p>
+
+        <h2>17. Security, Because Fine-Grained Compute Means Fine-Grained Blast Radius</h2>
+
+        <p>The genuine security benefit of decomposition is that each function can have exactly the permissions it needs, which is a level of least privilege a monolith cannot reach — a monolith's database user needs the union of every permission any code path needs.</p>
+
+        <p>The genuine security risk is that you now have forty IAM roles and nobody reviews them.</p>
+
+        <p>Three practices that I have found survive contact with a real team.</p>
+
+        <p>Never write a wildcard resource in a function's policy. <code>dynamodb:*</code> on <code>*</code> is how a catalogue read function ends up able to delete the orders table. If your framework generates permissions automatically, read what it generated — most of them are generous by default.</p>
+
+        <p>Put secrets in Secrets Manager or Parameter Store, fetch them at cold start into module scope, and cache them for the container's life. Environment variables are visible to anyone with <code>lambda:GetFunctionConfiguration</code>, which is a broader group than you think, and they end up in CloudFormation templates in your repository.</p>
+
+        <p>Validate every event payload at the boundary, even the ones from your own services. An event from SQS is untrusted input in exactly the same way an HTTP body is; the only difference is that you trust the transport. A schema check at the top of every handler costs a millisecond and catches both attacks and your own regressions.</p>
+
+        <pre><code class="language-typescript">// Validate at the boundary, always. Zod, ajv, whatever you like —
+// the point is that a malformed event fails here, loudly, and does
+// not reach code that assumes the shape is right.
+const OrderEvent = z.object({
+  orderId: z.string().uuid(),
+  lines: z.array(z.object({
+    sku: z.string().min(1).max(64),
+    qty: z.number().int().positive().max(999),
+  })).min(1),
+  currency: z.enum(['GBP', 'EUR', 'USD']),
+});
+
+export const handler = async (event: SQSEvent) =&gt; {
+  for (const record of event.Records) {
+    const parsed = OrderEvent.safeParse(JSON.parse(record.body));
+    if (!parsed.success) {
+      // Do NOT throw: throwing sends the whole batch back for retry
+      // and a permanently malformed message will loop until the DLQ.
+      await deadLetter(record, parsed.error);
+      continue;
+    }
+    await process(parsed.data);
+  }
+};</code></pre>
+
+        <p>The comment on that catch block is a real lesson. Throwing on a poison message in a batched SQS consumer sends every message in the batch back, including the nine that were fine, and they get reprocessed. If your processing is not idempotent, that is a correctness bug, not just an efficiency one. Either use partial batch responses or route bad messages aside explicitly.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Should I rewrite my Magento store as serverless functions?"</strong> No. Almost never. Magento is a monolith by design and fighting that is a multi-year project with no clear payoff. What you should do is move the work <em>around</em> Magento — integrations, exports, webhooks, scheduled jobs, and possibly a read-optimised API layer — into functions, and leave the application where it is. Every successful serverless project I have run on a Magento store has looked like that.</p>
+
+        <p><strong>"How many functions is too many?"</strong> When nobody on the team can list them, you have too many. Practically, I get uncomfortable past about 30 for a mid-size store, and if you are there, ask how many of those boundaries correspond to a scaling, failure or permissions difference. Usually a third of them do not and should be merged.</p>
+
+        <p><strong>"Is Vercel or Netlify serverless in the same sense?"</strong> Partly. They run functions on the same underlying primitives, but the architectural surface is smaller — you get functions and edge functions and not much else, so orchestration, queues and state stores come from elsewhere. That is a genuine simplification for a storefront and a genuine limitation for backend workflows. For a Next.js storefront I would use them happily; for an order pipeline I would not.</p>
+
+        <p><strong>"What about cold starts on checkout?"</strong> Provisioned concurrency on the two or three functions in the checkout path, sized to your typical concurrency rather than your peak, is the pragmatic answer. It costs about $12 a month per provisioned instance at 1GB and it removes the variable entirely for the requests where variance is least acceptable. The wider argument about cold starts and what they do to perceived performance is in the companion piece.</p>
+
+        <p><strong>"Can I avoid vendor lock-in?"</strong> Partly, and less than people hope. Handler code ports easily if you keep it thin. Infrastructure-as-code does not port at all. Managed services — Step Functions, EventBridge, DynamoDB — are the parts you actually chose the platform for and they have no equivalent elsewhere. My advice is to accept lock-in at the infrastructure layer, refuse it at the domain layer, and be honest that a migration would be a rewrite of the plumbing. That is a real cost and it is usually smaller than the cost of avoiding it.</p>
+
+        <p><strong>"Do I need Kubernetes as well?"</strong> If you are asking, no. The hybrid I described runs perfectly well on ECS Fargate, which has none of the operational surface of a cluster. Kubernetes earns its complexity at a scale and organisational shape most ecommerce businesses do not have.</p>
+
+        <p><strong>"How do I convince finance?"</strong> Not with the compute bill, because as the worked example shows it may go up. Frame it as availability and lead time: fewer incidents in the integration layer, and integration changes shipping without a platform deploy. Both of those are measurable if you start measuring before the migration, which almost nobody does and which I now insist on.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>In order, because the order genuinely matters here.</p>
+
+        <p>One. Instrument what you have. Count invocations, durations, error rates and database connections in your current system for a month before you change anything. Without a baseline you cannot tell whether the migration helped, and you will be asked.</p>
+
+        <p>Two. Move the scheduled jobs. Lowest risk, immediate reduction in load on your application servers, and it teaches the team the deployment pipeline on a workload where a failure means a late report rather than a lost order.</p>
+
+        <p>Three. Move the webhook receivers, and make them do nothing but validate, persist and acknowledge. Processing happens elsewhere, asynchronously. This is the change with the best availability return in the whole exercise.</p>
+
+        <p>Four. Set reserved concurrency on everything that touches a database, and set it so the sum across all functions is comfortably below your connection ceiling. Do this before you have a traffic spike, not after, because I have done it after and it cost a client £4,000.</p>
+
+        <p>Five. Draw your function boundaries on scaling, failure and permissions. Write down which one justifies each boundary. If you cannot write one down, merge the functions.</p>
+
+        <p>Six. Put a correlation id through everything on day one. Retrofitting it means touching every handler and every queue message, and you will retrofit it, because the first time you debug a cross-function failure without one you will stop what you are doing and add it.</p>
+
+        <p>Seven. Introduce orchestration for the order lifecycle before you introduce choreography for anything else. The explicit state machine is what lets you understand the system while it is growing; events added first tend to produce a system nobody can draw.</p>
+
+        <p>Eight. Load test against a database carrying real production load, not an idle one. This is the step I skipped and it is the only genuinely expensive mistake in the whole engagement.</p>
+
+        <p>The thing I would push back on hardest: starting with checkout because it feels like the important part. The important part is the boring integration layer around the edges, where failures are invisible, retries are unbounded, and the current architecture is almost always worse than anyone realises. Fix that first and you will have earned the credibility to touch the parts that matter.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO & Performance Strategies</a></strong>
+              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
               <p>Combining serverless edge logic with static site generation.</p>
             </li>
             <li>
@@ -238,7 +867,6 @@ exports.handler = async (event) => {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -272,6 +900,6 @@ exports.handler = async (event) => {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

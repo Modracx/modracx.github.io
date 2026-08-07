@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Square POS Integration for Retail & E-Commerce Sync | MODRACX</title>
-  <meta name="description" content="Technical guide on connecting Square POS REST API v2 with Magento 2 and Shopify for real-time in-store and online catalog synchronization." />
+  <meta name="description" content="Building a Square POS integration that survives promotions, offline tills and cross-channel returns: inventory as a ledger, webhook ordering, drift alarms and settlement reconciliation." />
   <meta property="og:title" content="Square POS Integration for Retail & E-Commerce Sync | MODRACX" />
   <meta property="og:description" content="Technical guide on Square POS integration by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Square POS Integration for Retail & E-Commerce Sync</h1>
-        <p class="lede">Bridging brick-and-mortar retail transactions with web store inventory via Square Inventory API v2 ensures stock counts update instantly on physical sales.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Square POS Integration for Retail &amp; E-Commerce Sync</h1>
+        <p class="lede">A homeware retailer took 340 orders for a casserole dish with 12 units in stock. The sync job was green the whole time — it was just always describing a moment that had passed.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,30 +205,748 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Square Inventory API v2 Client Node.js Code</h2>
+        <h2>1. The Saturday That Sold 340 Units of a Product With 12 in Stock</h2>
 
-        <pre><code class="language-javascript">// Node.js Square Inventory API v2 Fetch
-const { Client, Environment } = require('square');
+        <p>An office furniture retailer with four shops and a Magento 2 storefront ran a Black Friday promotion on a cast-iron casserole dish. Real stock across all locations was 12 units. Between 09:00 and 15:00 on the Saturday they took 340 orders for it — 190 online, 150 across the tills.</p>
 
-const client = new Client({
-  accessToken: process.env.SQUARE_ACCESS_TOKEN,
-  environment: Environment.Production,
-});
+        <p>Nobody had disabled the integration. It was running, it was green, and the sync job was completing every fifteen minutes exactly as configured. What had happened was that Square's inventory webhook queue backed up under the promotion's transaction volume, their sync worker was polling Square rather than consuming events, and each poll returned inventory counts that were between four and eleven minutes stale. Meanwhile the online store was selling from a number that a background job overwrote every quarter hour with a figure that had already been wrong when it was read.</p>
 
-async function getSquareStock(catalogObjectId) {
-  const response = await client.inventoryApi.retrieveInventoryCount(catalogObjectId);
-  return response.result.counts[0].quantity;
+        <p>The number on the product page was never a lie exactly. It was just always describing a moment that had passed.</p>
+
+        <p>They spent the following ten days cancelling orders, issuing refunds, and — this is the part that actually cost money — losing the customers who had bought a Christmas present that never arrived. The engineering fix took a week. The reputational one took a season.</p>
+
+        <p>I have built or repaired Square integrations for a dozen retailers since, and the pattern is consistent: the integration is not hard to build and is very hard to build correctly, and the difference between the two only shows up under load, offline, or during a return. This article is about that difference.</p>
+
+        <h2>2. What Square Actually Gives You</h2>
+
+        <p>Square's API surface is larger than people expect and the pieces that matter for a commerce integration are a small subset. Getting the mental model right first saves a lot of rework.</p>
+
+        <p><strong>Catalog.</strong> Items, item variations, categories, modifiers, taxes, discounts. The unit that carries a SKU and a price is the <em>variation</em>, not the item. This trips up nearly everyone on day one: an "item" in Square is closer to a product family, and the thing your ecommerce platform calls a product with a SKU maps to <code>ITEM_VARIATION</code>.</p>
+
+        <p><strong>Inventory.</strong> Not a field on the catalog object — a separate service that maintains counts per variation per location, derived from a ledger of changes. You can read a count, but underneath it is an append-only sequence of adjustments and physical counts.</p>
+
+        <p><strong>Orders.</strong> The record of a sale, in-store or online, with line items, taxes, discounts, tenders and fulfilment state. Every till transaction produces one.</p>
+
+        <p><strong>Payments and Refunds.</strong> The money. Deliberately separate from Orders, which matters when you reconcile, because an order can exist without a completed payment and a refund can exist without an order line.</p>
+
+        <p><strong>Locations.</strong> Every shop, and usually one representing the online channel. Almost every other object is scoped by location, and getting the location model wrong at the start is expensive to unpick.</p>
+
+        <p><strong>Webhooks.</strong> Push notifications for changes. Essential, and — the point of the story above — not sufficient on their own.</p>
+
+        <p>The one thing Square does not give you is a reconciliation engine. It will tell you what it thinks the count is. It will not tell you that your ecommerce platform disagrees. That gap is yours to fill, and it is where most of the real engineering lives.</p>
+
+        <h2>3. Deciding What Owns What</h2>
+
+        <p>Before any code, one decision determines the shape of everything: for each kind of data, which system is authoritative?</p>
+
+        <p>The answer I use on nearly every retail integration, and would defend:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Data</th><th>Source of truth</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Product content, images, SEO copy</td><td>Ecommerce platform</td><td>Square's catalog is a till menu, not a CMS</td></tr>
+            <tr><td>SKU, barcode</td><td>Ecommerce platform</td><td>One naming authority, or joins fail</td></tr>
+            <tr><td>Retail price</td><td>Depends — see below</td><td>The genuinely contested one</td></tr>
+            <tr><td>Inventory counts</td><td>Square</td><td>Physical movement happens at the till</td></tr>
+            <tr><td>In-store orders</td><td>Square</td><td>Created there, full stop</td></tr>
+            <tr><td>Online orders</td><td>Ecommerce platform</td><td>Same reasoning, reversed</td></tr>
+            <tr><td>Customer records</td><td>Ecommerce platform or CRM</td><td>Square's customer directory is thin</td></tr>
+            <tr><td>Payouts and settlement</td><td>Square</td><td>It is the merchant of record in-store</td></tr>
+          </tbody>
+        </table>
+
+        <p>Price is the argument you will have. Store managers want to discount locally; ecommerce wants one price everywhere; finance wants a rule. My position: the ecommerce platform owns list price and pushes it to Square, and Square owns transaction-level discounting applied at the till. So the price on the shelf comes from one place, and a manager honouring a competitor's price on a Tuesday is recorded as a discount on the order rather than a silent catalog edit that syncs back and changes the website.</p>
+
+        <p>Get this written down and signed off before writing code, because the alternative — bidirectional sync on price — produces update loops that are genuinely difficult to debug. System A writes, B's webhook fires, B writes back, A's webhook fires. I have watched a price oscillate between two values every nine seconds for two days because nobody had defined direction.</p>
+
+        <h2>4. The Join Key Problem</h2>
+
+        <p>Everything downstream depends on being able to say "this Square variation is that platform product". There are three candidate keys and only one good answer.</p>
+
+        <p><strong>SKU</strong> is the obvious choice and it is fragile alone. Square allows duplicate SKUs across variations, SKUs get edited at the till by staff, and legacy catalogues are full of near-duplicates with trailing whitespace. If you join on SKU you must normalise aggressively and detect collisions loudly.</p>
+
+        <p><strong>Square's object ID</strong> is stable and opaque, which makes it the correct internal key — but you have to establish the mapping in the first place, and that first match is usually done by SKU anyway.</p>
+
+        <p><strong>A mapping table you own</strong> is the answer. Match once, store both IDs, and never join on business data at runtime.</p>
+
+        <pre><code class="language-sql">CREATE TABLE square_product_map (
+  id                BIGSERIAL PRIMARY KEY,
+  platform_sku      TEXT        NOT NULL,
+  platform_id       BIGINT      NOT NULL,
+  square_object_id  TEXT        NOT NULL,   -- ITEM_VARIATION id
+  square_item_id    TEXT        NOT NULL,   -- parent ITEM id
+  -- Square's version number for optimistic concurrency on writes
+  square_version    BIGINT      NOT NULL,
+  match_method      TEXT        NOT NULL,   -- 'sku' | 'barcode' | 'manual'
+  matched_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_synced_at    TIMESTAMPTZ,
+  sync_state        TEXT        NOT NULL DEFAULT 'ok',
+  UNIQUE (platform_sku),
+  UNIQUE (square_object_id)
+);
+
+-- Both unique constraints matter. Without them a duplicate SKU in the
+-- till catalogue silently fans one product's stock across two rows and
+-- the counts stop adding up in a way that is very hard to trace later.
+CREATE INDEX ON square_product_map (sync_state) WHERE sync_state &lt;&gt; 'ok';</code></pre>
+
+        <p>The initial match is the unglamorous part of the project and I have never seen it go smoothly. On the office furniture retailer's catalogue of about 4,200 variations, automated SKU matching resolved 3,760. The remaining 440 needed a human: 180 were genuine duplicates in Square created by staff ringing up an unknown item, 150 had SKUs that differed only by case or a hyphen, and roughly 110 were products that existed in one system and not the other.</p>
+
+        <p>Budget two weeks for catalogue reconciliation on a mid-sized retailer and give it to someone who knows the products. It is not an engineering task, and treating it as one produces a mapping table full of confidently wrong rows.</p>
+
+        <h2>5. Inventory Is a Ledger, Not a Number</h2>
+
+        <p>The single most useful shift in thinking: stop treating stock as a value you overwrite and start treating it as a balance you adjust.</p>
+
+        <p>Square models it this way natively. The count you read is a projection of an append-only sequence of changes, each with a type — <code>ADJUSTMENT</code>, <code>PHYSICAL_COUNT</code>, <code>TRANSFER</code> — and a state such as <code>IN_STOCK</code>, <code>SOLD</code>, or <code>WASTE</code>.</p>
+
+        <p>This matters because the two operations behave completely differently under concurrency. Setting a count to 12 is destructive: if a till sale happened between your read and your write, you have just erased it. Adjusting by −1 commutes: it produces the right answer regardless of what else happened in between.</p>
+
+        <pre><code class="language-javascript">// WRONG: read-modify-write. Loses any concurrent till sale.
+const current = await getInventoryCount(variationId, locationId);
+await setInventoryCount(variationId, locationId, current - qty);
+
+// RIGHT: submit a relative change. Order of arrival stops mattering.
+await squareClient.inventoryApi.batchChangeInventory({
+  idempotencyKey: `order-${orderId}-line-${lineId}`,
+  changes: [{
+    type: 'ADJUSTMENT',
+    adjustment: {
+      catalogObjectId: variationId,
+      locationId,
+      fromState: 'IN_STOCK',
+      toState: 'SOLD',
+      quantity: String(qty),          // Square wants quantities as strings
+      occurredAt: new Date().toISOString(),
+    },
+  }],
+});</code></pre>
+
+        <p>The <code>fromState</code>/<code>toState</code> pair is doing real work. You are not decrementing a number, you are moving units between buckets, which means a later report can distinguish what was sold from what was written off from what was returned. Retailers who use <code>ADJUSTMENT</code> with generic states lose that distinction and then cannot explain their shrinkage.</p>
+
+        <p>The only place a destructive write belongs is a genuine stock take, where a human has counted the shelf and their number supersedes everything:</p>
+
+        <pre><code class="language-javascript">// PHYSICAL_COUNT is authoritative by design: it discards the computed
+// balance and asserts a new one. Use it for stock takes and nothing else.
+await squareClient.inventoryApi.batchChangeInventory({
+  idempotencyKey: `stocktake-${stocktakeId}-${variationId}`,
+  changes: [{
+    type: 'PHYSICAL_COUNT',
+    physicalCount: {
+      catalogObjectId: variationId,
+      locationId,
+      state: 'IN_STOCK',
+      quantity: String(countedQty),
+      occurredAt: countedAt.toISOString(),
+      employeeId,                     // who counted it — you will want this
+    },
+  }],
+});</code></pre>
+
+        <h2>6. Webhooks, and Why Polling Is Not a Backup Plan</h2>
+
+        <p>Square pushes events for catalog changes, inventory changes, orders, payments and refunds. Subscribing is straightforward. Consuming them correctly is where the failure in the opening story lived.</p>
+
+        <p>Four properties you must design for.</p>
+
+        <p><strong>Delivery is at-least-once.</strong> You will receive duplicates. Not occasionally — routinely, during retries and after any transient failure on your side.</p>
+
+        <p><strong>Order is not guaranteed.</strong> Two inventory changes for the same variation can arrive in the wrong sequence. If you apply the payload's count naively, the older event wins and your number is wrong until the next event arrives.</p>
+
+        <p><strong>Events can be missed.</strong> Your endpoint is down for four minutes during a deploy, Square retries for a while and then gives up. Nothing tells you afterwards that you have a hole.</p>
+
+        <p><strong>The payload is a notification, not a transaction.</strong> Treat it as "something changed for this object" and re-read authoritative state, rather than trusting the embedded values, unless you are handling versioning explicitly.</p>
+
+        <p>Signature verification first, because a webhook endpoint that accepts unsigned payloads is an inventory-manipulation API you published by accident:</p>
+
+        <pre><code class="language-javascript">const crypto = require('crypto');
+
+function verifySquareSignature(req, signatureKey, notificationUrl) {
+  // Square signs the concatenation of the exact notification URL and the
+  // raw body. Any body parser that reformats JSON breaks this — capture
+  // the raw bytes before parsing.
+  const payload = notificationUrl + req.rawBody;
+  const expected = crypto
+    .createHmac('sha256', signatureKey)
+    .update(payload)
+    .digest('base64');
+
+  const received = req.get('x-square-hmacsha256-signature') || '';
+  const a = Buffer.from(expected);
+  const b = Buffer.from(received);
+  // Constant-time compare; lengths must match first or timingSafeEqual throws
+  return a.length === b.length &amp;&amp; crypto.timingSafeEqual(a, b);
 }</code></pre>
 
-        <hr />
+        <p>Then the handler. The pattern that survives production: verify, deduplicate, enqueue, acknowledge fast. Do no real work inline.</p>
+
+        <pre><code class="language-javascript">app.post('/webhooks/square', async (req, res) =&gt; {
+  if (!verifySquareSignature(req, SIGNATURE_KEY, NOTIFICATION_URL)) {
+    return res.status(401).end();
+  }
+
+  const event = JSON.parse(req.rawBody);
+
+  // event_id is stable across retries, so this INSERT is the dedupe.
+  const inserted = await db.query(
+    `INSERT INTO square_events (event_id, type, payload, received_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (event_id) DO NOTHING
+     RETURNING id`,
+    [event.event_id, event.type, event]
+  );
+
+  // 200 either way: a duplicate is not an error and telling Square
+  // otherwise just makes it retry harder.
+  if (inserted.rowCount === 0) return res.status(200).end();
+
+  await queue.publish('square.events', { rowId: inserted.rows[0].id });
+  res.status(200).end();   // ack within ~1s; Square is not patient
+});</code></pre>
+
+        <p>Acknowledging before processing is deliberate. If you do the work inline and it takes four seconds, a burst of till activity will queue behind your handler, Square will time out, retry, and you get a backlog that grows faster than it drains. That is precisely the Saturday failure.</p>
+
+        <h3>Handling out-of-order inventory events</h3>
+
+        <p>Square includes ordering information on inventory counts. Use it rather than assuming arrival order:</p>
+
+        <pre><code class="language-javascript">// Reject an event describing an older state than what we already applied.
+async function applyInventoryEvent(evt) {
+  const { catalog_object_id: variationId, location_id: locationId,
+          quantity, calculated_at: calculatedAt } = evt.object.inventory_counts[0];
+
+  const result = await db.query(
+    `UPDATE inventory_cache
+        SET qty = $1, calculated_at = $2, updated_at = now()
+      WHERE variation_id = $3 AND location_id = $4
+        AND calculated_at &lt; $2`,          // the guard that makes this safe
+    [Number(quantity), calculatedAt, variationId, locationId]
+  );
+
+  if (result.rowCount === 0) {
+    metrics.increment('square.inventory.stale_event_dropped');
+  }
+}</code></pre>
+
+        <p>That <code>calculated_at &lt; $2</code> predicate is four words of SQL that eliminate an entire class of bug. Without it, a retried event from ninety seconds ago cheerfully overwrites current state.</p>
+
+        <h3>The reconciliation sweep you still need</h3>
+
+        <p>Webhooks handle the normal case. They do not handle the case where you missed some. So a periodic full comparison is mandatory, and it is a comparison, not a resync — it reports differences and only corrects those it is confident about.</p>
+
+        <pre><code class="language-javascript">// Runs hourly for fast-moving lines, nightly for the full catalogue.
+async function reconcileInventory(locationId, variationIds) {
+  const drift = [];
+
+  for (const batch of chunk(variationIds, 500)) {   // API cap is 1000; 500 is safer
+    const { result } = await squareClient.inventoryApi.batchRetrieveInventoryCounts({
+      catalogObjectIds: batch,
+      locationIds: [locationId],
+      states: ['IN_STOCK'],
+    });
+
+    for (const count of result.counts ?? []) {
+      const local = await getLocalQty(count.catalogObjectId, locationId);
+      const remote = Number(count.quantity);
+      if (local !== remote) {
+        drift.push({ variationId: count.catalogObjectId, local, remote,
+                     delta: remote - local });
+      }
+    }
+  }
+
+  // Correct automatically only within a threshold. A variation that is
+  // out by 40 units is a data problem, not a sync problem, and silently
+  // "fixing" it destroys the evidence needed to find the cause.
+  for (const d of drift) {
+    if (Math.abs(d.delta) &lt;= AUTO_CORRECT_THRESHOLD) {
+      await setLocalQty(d.variationId, locationId, d.remote);
+    } else {
+      await raiseDriftAlert(d);
+    }
+  }
+
+  metrics.gauge('square.inventory.drift_count', drift.length, { locationId });
+  return drift;
+}</code></pre>
+
+        <p>The drift count is the single most valuable metric in a POS integration. Plot it. A healthy integration sits near zero with occasional single-digit blips during trading hours. A rising baseline means something has been broken for a while and nobody noticed — which is the state every integration eventually reaches, and the only question is whether you find out from a graph or from a customer.</p>
+
+        <h2>7. Idempotency, Properly</h2>
+
+        <p>Square requires an idempotency key on every mutating call, and most implementations satisfy the requirement without getting the benefit by generating a UUID at call time. That guards against Square processing your request twice. It does not guard against <em>you</em> sending the same logical operation twice, which is the failure that actually happens — a worker retries after a timeout, a webhook is redelivered, someone replays a dead-letter queue.</p>
+
+        <p>Derive the key from the operation, not from the moment:</p>
+
+        <pre><code class="language-javascript">// Deterministic: the same logical operation always produces the same key,
+// no matter how many times it is retried, from wherever.
+function idempotencyKey(...parts) {
+  return crypto.createHash('sha256')
+    .update(parts.join('|'))
+    .digest('hex')
+    .slice(0, 45);          // Square's limit is 45 characters
+}
+
+const key = idempotencyKey('inv-adjust', orderId, lineItemId, locationId, attemptEpoch);</code></pre>
+
+        <p>The subtlety is that last component. If the key is derived purely from the order line, a legitimate second adjustment for the same line — a partial return, then a re-sale — is silently swallowed as a duplicate. Include something that distinguishes intentional repeats. I use a monotonically increasing revision stored alongside the operation record rather than a timestamp, because timestamps are not distinct enough under load.</p>
+
+        <p>Square retains idempotency keys for a limited window, so a retry after that window will execute again. Do not rely on it as your only defence: keep a local record of which operations have completed and check it before calling out.</p>
+
+        <h3>Rate limits and batching</h3>
+
+        <p>Square's limits are per application and per endpoint, and they are generous until you do a full catalogue sync, at which point they are not. Two rules avoid most of the pain.</p>
+
+        <p>Use batch endpoints for everything that has one. <code>batchUpsertCatalogObjects</code>, <code>batchRetrieveInventoryCounts</code>, <code>batchChangeInventory</code>. The difference between 4,000 individual calls and 40 batched ones is the difference between a sync that takes an hour and one that takes ninety seconds.</p>
+
+        <p>Retry on 429 with exponential backoff and jitter. Without jitter, a fleet of workers hitting a limit simultaneously will back off in lockstep and hit it again together.</p>
+
+        <pre><code class="language-javascript">async function callSquare(fn, { attempts = 5 } = {}) {
+  for (let i = 0; i &lt; attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = err.statusCode;
+      // 429 and 5xx are worth retrying; 4xx means the request is wrong
+      // and retrying it just burns quota.
+      if (status !== 429 &amp;&amp; !(status &gt;= 500)) throw err;
+      if (i === attempts - 1) throw err;
+
+      const base = Math.min(1000 * 2 ** i, 20000);
+      const jitter = Math.random() * base * 0.5;
+      await sleep(base + jitter);
+    }
+  }
+}</code></pre>
+
+        <p>One thing worth knowing before you plan a migration: the catalogue upsert path is slower than it looks under sustained load, so a first full push of several thousand variations is an overnight job with checkpointing rather than something you run during trading hours and watch. Chunk it, record the last successful batch, and make it resumable — because it will fail partway at least once and restarting from zero on a 4,000-item catalogue is an hour you do not get back.</p>
+
+        <h2>8. Offline Mode, and What It Really Costs</h2>
+
+        <p>Square POS keeps taking payments when the network is gone. This is a genuinely good feature for a retailer and a genuinely difficult one for an integration, and I have not met a team that thought about it before it bit them.</p>
+
+        <p>What happens in offline mode: card payments are stored on the device and submitted when connectivity returns. The transaction is recorded locally. Inventory is decremented in the device's local view. Nothing reaches Square's servers, so nothing reaches your webhook, so your ecommerce platform has no idea any of it happened.</p>
+
+        <p>The consequences, in order of how much they hurt.</p>
+
+        <p><strong>Your online stock is overstated for the duration.</strong> If a shop sells 30 units during a two-hour outage, your website is selling from a count that is 30 too high, and it will keep doing so until the till reconnects.</p>
+
+        <p><strong>Payments can decline on submission.</strong> Offline payments are authorised optimistically. When they upload, some fail — insufficient funds, expired card, a limit exceeded. The retailer eats those. Square caps offline exposure per transaction and in aggregate, but within the cap the risk is real, and your order records need to tolerate a payment that turns out not to have happened.</p>
+
+        <p><strong>Events arrive in a burst, timestamped in the past.</strong> When the till reconnects you get a flood of orders and inventory changes with <code>occurred_at</code> values from hours earlier, all at once. Any handler that assumes "recent event means recent change" will produce nonsense, and any rate-limited sync will queue behind the burst.</p>
+
+        <p>The mitigations are policy as much as code.</p>
+
+        <p>Detect the outage. Square exposes device and location status, and more practically you can watch event recency per location. If a shop that normally produces a transaction every few minutes has produced nothing for twenty, something is wrong and you should know before the reconnect burst arrives.</p>
+
+        <pre><code class="language-javascript">// Per-location heartbeat derived from event flow, evaluated every 5 minutes.
+// A quiet Tuesday and a dead network look the same for a while, so the
+// threshold is tuned per location from its own trailing median.
+async function checkLocationLiveness() {
+  for (const loc of await getActiveLocations()) {
+    const last = await lastEventAt(loc.id);
+    const quietFor = Date.now() - last;
+    const expected = await medianGapMs(loc.id, { trailingDays: 28 });
+
+    if (quietFor &gt; Math.max(expected * 6, 20 * 60 * 1000)) {
+      await raiseAlert('square.location.silent', {
+        locationId: loc.id, quietMinutes: Math.round(quietFor / 60000),
+      });
+      // Tighten the online safety buffer while we are flying blind
+      await setLocationBuffer(loc.id, DEGRADED_BUFFER);
+    }
+  }
+}</code></pre>
+
+        <p>Increase the safety buffer while a location is dark. If you normally hold back two units per line as a buffer, hold back more for the affected location's contribution to the online sellable count. You are trading a small amount of online availability for not overselling, and that trade is almost always correct.</p>
+
+        <p>And process the reconnect burst by <code>occurred_at</code>, not arrival order, with a reconciliation sweep immediately afterwards for that location. The burst is exactly when your ordering guards earn their keep.</p>
+
+        <h2>9. Stopping the Oversell</h2>
+
+        <p>Every retailer asks for real-time inventory sync. What they actually want is to not oversell, and those are different problems. Real-time sync reduces the window; it does not close it, because a customer at a till and a customer on a phone can commit to the same unit within the same second and no amount of synchronisation makes that not happen.</p>
+
+        <p>Four techniques, and I would use three of them together.</p>
+
+        <p><strong>A safety buffer.</strong> Publish fewer units online than exist. Crude, effective, and universally disliked by merchandising because it looks like lost sales. Make it proportional rather than fixed: a fast-moving line needs more headroom than something that sells twice a month.</p>
+
+        <pre><code class="language-javascript">// Buffer scaled by observed velocity and the worst-case sync lag.
+// The intuition: hold back roughly what the shops could plausibly sell
+// during the longest sync gap you have measured this month.
+function sellableOnline(totalStock, unitsPerHourInStore, p99SyncLagMinutes) {
+  const exposure = unitsPerHourInStore * (p99SyncLagMinutes / 60);
+  const buffer = Math.min(Math.ceil(exposure), Math.floor(totalStock * 0.2));
+  return Math.max(0, totalStock - Math.max(buffer, MIN_BUFFER));
+}</code></pre>
+
+        <p><strong>Reserve at add-to-cart, not at checkout.</strong> Hold the unit for a bounded window — fifteen minutes is a reasonable default — and release it if the order does not complete. This cuts the oversell window from "however long checkout takes" to nearly nothing, at the cost of a background expiry job and some genuinely fiddly edge cases around cart merges.</p>
+
+        <p><strong>Verify at capture, not at order placement.</strong> Re-check availability immediately before taking payment. If it has gone, you tell the customer at the moment they can still choose an alternative rather than by email the next morning.</p>
+
+        <p><strong>Do not sell the last unit online at all.</strong> Below a threshold, switch the product to click-and-collect only, or to "check availability in store". Retailers resist this and then, after one bad season, adopt it. It is the only technique on this list that actually removes the failure rather than shrinking it.</p>
+
+        <p>What I would not do is chase true real-time synchronisation as the answer. I have seen a team spend four months building a sub-second inventory pipeline for a retailer whose actual problem was that one shop had not done a stock take in fourteen months and their counts were wrong by an average of 6% before any sync ran. Synchronising incorrect numbers faster does not help. The same discipline that governs <a href="/blog/depop-omnichannel-marketplace-sync/">omnichannel marketplace sync</a> applies here: the pipeline can only be as accurate as the counts feeding it.</p>
+
+        <h2>10. Multi-Location, and the Meaning of "In Stock"</h2>
+
+        <p>Once there is more than one shop, "how many do we have" stops having a single answer, and the integration has to represent an allocation policy rather than a number.</p>
+
+        <p>The questions that need answers before you write the aggregation:</p>
+
+        <p>Does online sell from all locations pooled, from a dedicated warehouse, or from a subset? Can a shop's stock fulfil an online order, and if so, who picks it? Does click-and-collect reserve at a specific location? Is stock in transit between shops sellable, and to whom?</p>
+
+        <p>These are commercial decisions, and engineering teams keep trying to infer them from the data. You cannot. Ask.</p>
+
+        <pre><code class="language-javascript">// Aggregation with explicit per-location roles. The policy is data,
+// not code, because it changes seasonally and by product category.
+const LOCATION_POLICY = {
+  'L4B2C1':  { role: 'warehouse', sellsOnline: true,  weight: 1.0 },
+  'LSHOP01': { role: 'retail',    sellsOnline: true,  weight: 0.5 }, // half exposed
+  'LSHOP02': { role: 'retail',    sellsOnline: true,  weight: 0.5 },
+  'LSHOP03': { role: 'retail',    sellsOnline: false, weight: 0   }, // concession
+  'LSHOP04': { role: 'retail',    sellsOnline: true,  weight: 0.5 },
+};
+
+function onlineSellable(countsByLocation) {
+  let total = 0;
+  for (const [locationId, qty] of Object.entries(countsByLocation)) {
+    const p = LOCATION_POLICY[locationId];
+    if (!p?.sellsOnline) continue;
+    // Round down: exposing a fractional unit is how you oversell by one
+    total += Math.floor(qty * p.weight);
+  }
+  return Math.max(0, total - GLOBAL_BUFFER);
+}</code></pre>
+
+        <p>The weight on retail locations is doing something specific. A shop with three units on the shelf might sell all three to walk-in customers in an afternoon; exposing all three online is a promise you cannot keep. Exposing one is a promise you probably can. That half-weight is not a magic number — it comes from comparing in-store sell-through against online orders per location, and it is worth recalculating each quarter.</p>
+
+        <p>Click-and-collect is where this gets genuinely tricky, because the customer is choosing a location and expecting the unit to be there when they arrive. That needs a real reservation against that location, written back to Square as an adjustment out of <code>IN_STOCK</code>, not a soft hold in your own database that the till knows nothing about. If the reservation is invisible at the till, a member of staff will sell the item to whoever is standing in front of them, and they will be right to.</p>
+
+        <h2>11. Returns, Exchanges, and the Cross-Channel Mess</h2>
+
+        <p>Returns are where an integration that looked finished falls apart, because the flows cross channels in ways nobody modelled.</p>
+
+        <p>Buy online, return in store is the common one and it involves: an order in your ecommerce platform, a refund in Square (because the till is where the money is being given back), an inventory increase at the shop's location, and an accounting entry that has to net against an online sale processed by a different payment provider entirely.</p>
+
+        <p>The traps, all of which I have watched happen.</p>
+
+        <p><strong>Double refunds.</strong> The shop refunds through the till; someone in customer service also refunds through the ecommerce admin, because the order still shows as unrefunded there. Fix: the till refund must write back to the order and change its state, and that write-back has to happen before the customer walks out.</p>
+
+        <p><strong>Inventory added twice.</strong> Square's refund creates an inventory change, and your integration also adds the unit back when the order status changes to refunded. Fix: exactly one system increments on a return, and for in-store returns it is Square.</p>
+
+        <p><strong>Wrong location credited.</strong> The unit physically returns to the shop that processed it, and a naive implementation credits the warehouse. Then the shop's count is short, the warehouse's is long, and both are wrong on the shelf.</p>
+
+        <p><strong>Exchanges recorded as unrelated transactions.</strong> A customer swaps a size 10 for a size 12. Square records a refund and a sale; your platform records nothing linking them. Reporting then shows a return and a new customer acquisition, and the returns rate looks worse than it is.</p>
+
+        <pre><code class="language-javascript">// Refund handler. Two guards do most of the work: an origin marker so a
+// refund we initiated does not loop, and a state check on the order.
+async function onSquareRefundCreated(evt) {
+  const refund = evt.data.object.refund;
+  const order = await findOrderBySquareOrderId(refund.order_id);
+  if (!order) return; // walk-in sale with no online counterpart
+
+  if (refund.reference_id?.startsWith('web-initiated:')) {
+    // We created this refund from the ecommerce side; the platform
+    // already knows. Recording it again would double the credit note.
+    return;
+  }
+
+  await db.transaction(async (tx) =&gt; {
+    const already = await tx.refundExists(order.id, refund.id);
+    if (already) return;
+
+    await tx.recordRefund(order.id, {
+      externalId: refund.id,
+      amountMinor: refund.amount_money.amount,
+      currency: refund.amount_money.currency,
+      locationId: refund.location_id,
+      channel: 'pos',
+    });
+
+    // Deliberately NOT adjusting inventory here: Square already did,
+    // and its webhook will update our cache through the normal path.
+    await tx.setOrderState(order.id, deriveState(order, refund));
+  });
+}</code></pre>
+
+        <p>That comment about not adjusting inventory is the one I would highlight to anyone reviewing a Square integration. The instinct is to keep both systems in step by writing to both. The correct instinct is to identify which system is the origin of the physical change and let the other learn about it through the normal event path, even though that means a brief window where they disagree.</p>
+
+        <h2>12. Getting In-Store Orders Into the Platform</h2>
+
+        <p>Most retailers want till sales visible in the ecommerce platform, and the reason is rarely stated precisely, which leads to the wrong build. "We want all our orders in one place" can mean reporting, customer history, loyalty accrual, or fulfilment. Those need different amounts of data and different fidelity.</p>
+
+        <p>If the need is reporting, do not import orders at all. Push aggregates into your warehouse or BI tool and leave the transactional systems alone. Importing 900 walk-in sales a day into Magento's order tables to satisfy a dashboard is a decision that gets regretted around month four, when the grid takes eleven seconds to load and the indexers start falling behind.</p>
+
+        <p>If the need is genuine — customer history, loyalty, cross-channel returns — import, but import a distinct order type that your platform's own workflows ignore.</p>
+
+        <pre><code class="language-javascript">// Import a Square order as a completed, non-processable record.
+// The state is terminal on creation: no fulfilment workflow, no
+// inventory hook, no order confirmation email to a customer who is
+// already holding the item and walking out of the shop.
+async function importPosOrder(squareOrder) {
+  const existing = await findByExternalId(squareOrder.id);
+  if (existing) return existing;   // webhook redelivery
+
+  const lines = [];
+  for (const li of squareOrder.line_items ?? []) {
+    const map = await mapVariation(li.catalog_object_id);
+    lines.push({
+      sku: map?.platform_sku ?? `UNMAPPED:${li.name}`,
+      qty: Number(li.quantity),
+      // Minor units throughout. Square reports gross, discount and tax
+      // separately and they do not always sum the way you expect once
+      // an order-level discount is apportioned across lines.
+      grossMinor:    li.gross_sales_money?.amount ?? 0,
+      discountMinor: li.total_discount_money?.amount ?? 0,
+      taxMinor:      li.total_tax_money?.amount ?? 0,
+    });
+  }
+
+  return createOrder({
+    channel: 'pos',
+    externalId: squareOrder.id,
+    locationId: squareOrder.location_id,
+    placedAt: squareOrder.created_at,
+    state: 'complete',
+    suppressNotifications: true,
+    suppressInventory: true,      // Square already moved the stock
+    lines,
+  });
+}</code></pre>
+
+        <p>The <code>UNMAPPED:</code> fallback is deliberate rather than defensive. Staff ring up unknown items as custom amounts constantly — a damaged box sold at a discount, a one-off, a supplier sample. Those orders must still import, with the unmapped line clearly marked, because rejecting the whole order to protect data cleanliness means losing a real sale from your records to preserve a tidy catalogue. Count them, report them weekly, and use the list to find catalogue gaps.</p>
+
+        <p>One more thing that catches people: Square emits multiple <code>order.updated</code> events for a single transaction as it moves from open to completed, and a naive importer creates the order three times or, worse, imports an order that is later voided. Wait for a terminal state, and check <code>state === 'COMPLETED'</code> before importing anything.</p>
+
+        <h2>13. Credentials and Access Scope</h2>
+
+        <p>A Square integration holds a token that can read every transaction the business has ever taken and adjust inventory across every location. It deserves more care than it usually gets.</p>
+
+        <p>Use OAuth rather than a personal access token, even for a single-merchant integration you control. Personal access tokens do not expire, do not rotate, and are attached to a human who will eventually leave. I have found one in a Magento configuration table, in plaintext, belonging to a developer who had left fourteen months earlier and whose account had been disabled everywhere except Square.</p>
+
+        <p>Request the narrowest scopes that work. An integration doing inventory and catalogue sync needs <code>ITEMS_READ</code>, <code>ITEMS_WRITE</code>, <code>INVENTORY_READ</code>, <code>INVENTORY_WRITE</code>, and probably <code>ORDERS_READ</code>. It does not need <code>PAYMENTS_WRITE</code>, and granting it means a bug in your code can move money.</p>
+
+        <pre><code class="language-javascript">// Refresh proactively rather than reactively. Catching a 401 and
+// refreshing works until the refresh itself fails at 2am during a
+// promotion, at which point every sync is failing and nobody knows why.
+async function getAccessToken() {
+  const cred = await credentialStore.get('square');
+  const expiresIn = Date.parse(cred.expires_at) - Date.now();
+
+  if (expiresIn &gt; 7 * 24 * 3600 * 1000) return cred.access_token;
+
+  const { result } = await squareClient.oAuthApi.obtainToken({
+    clientId: SQUARE_APP_ID,
+    clientSecret: SQUARE_APP_SECRET,
+    grantType: 'refresh_token',
+    refreshToken: cred.refresh_token,
+  });
+
+  await credentialStore.put('square', result);
+  await metrics.increment('square.token.refreshed');
+  return result.accessToken;
+}</code></pre>
+
+        <p>Rotate the webhook signature key on the same schedule as anything else sensitive, and support two valid keys during the rotation window so a redelivered event signed with the old key does not get rejected. And alert on the refresh failing, loudly — an expired token produces a silent integration, and a silent integration produces overselling that looks exactly like the failure at the top of this article.</p>
+
+        <h2>14. Financial Reconciliation</h2>
+
+        <p>Engineering teams build the inventory sync and consider the job done. Finance then discovers that the numbers do not reconcile and nobody can explain a £1,400 gap, and the integration acquires a second phase nobody budgeted.</p>
+
+        <p>Square is the merchant of record for in-store payments. It settles to the bank in batches, net of processing fees, on its own schedule. So the amount arriving in the account is never the sum of the day's sales, and mapping between them requires the payout API.</p>
+
+        <p>What a working reconciliation needs to join: orders (what was sold), payments (what was charged), refunds (what was returned), and payouts with their entries (what actually landed in the bank, and what was deducted).</p>
+
+        <pre><code class="language-javascript">// Daily settlement reconciliation. Payout entries are the only place
+// where fees, disputes and adjustments are itemised against real money.
+async function reconcileDay(date, locationId) {
+  const { result } = await squareClient.payoutsApi.listPayouts({
+    locationId, beginTime: startOfDay(date), endTime: endOfDay(date),
+  });
+
+  const report = { gross: 0, fees: 0, refunds: 0, other: 0, net: 0 };
+
+  for (const payout of result.payouts ?? []) {
+    const entries = await listAllPayoutEntries(payout.id);
+    for (const e of entries) {
+      const minor = e.grossAmountMoney?.amount ?? 0;
+      const fee = e.feeAmountMoney?.amount ?? 0;
+      switch (e.type) {
+        case 'CHARGE':          report.gross += minor; report.fees += fee; break;
+        case 'REFUND':          report.refunds += Math.abs(minor); break;
+        case 'DISPUTE':
+        case 'DISPUTE_REVERSAL':
+        case 'FEE':
+        case 'ADJUSTMENT':      report.other += minor; break;
+        default:
+          // An unknown entry type is a reconciliation gap, not a rounding
+          // error. Fail loudly rather than bucketing it into 'other'.
+          await raiseAlert('square.payout.unknown_entry_type', { type: e.type });
+      }
+      report.net += payout.amountMoney.amount;
+    }
+  }
+  return report;
+}</code></pre>
+
+        <p>Two details that cost people days. Every monetary value is a minor-unit integer — pence, cents — and the moment someone converts to a float for a division, you get penny discrepancies that are agonising to trace. Keep integers all the way to the report. And disputes and chargebacks appear in payout entries days or weeks after the original sale, so a reconciliation that only looks at today's transactions will never balance; it has to be date-of-settlement, not date-of-sale.</p>
+
+        <p>If the retailer runs a proper accounting package, the payout entry is the object you push, not the individual sale. One journal entry per payout, split by type, reconciles against the bank line directly. This is the same shape of problem as <a href="/blog/zoho-books-inventory-accounting-sync/">syncing inventory and accounting records</a>, and the same rule applies: match on the settlement event, because that is the object the bank statement agrees with.</p>
+
+        <h2>15. Customer Identity Across Channels</h2>
+
+        <p>The commercial pitch for POS integration usually includes a unified customer view, and this is the part that most often gets quietly dropped when the project runs late.</p>
+
+        <p>The difficulty is that in-store transactions are mostly anonymous. Someone pays with a card and leaves. You have a card fingerprint, a timestamp, and a location. You do not have an email address unless they gave you one or they are in a loyalty scheme.</p>
+
+        <p>What works, roughly in order of reliability: loyalty scheme identifiers scanned at the till; a receipt sent to an email address the customer types in; card fingerprint matching, where Square gives a stable identifier for a card that can be matched against an online order paid with the same card; and phone number capture, which staff will do inconsistently.</p>
+
+        <p>Card fingerprint matching deserves care. It genuinely works and it is inference, not fact — a shared family card links two people, and a customer who once used a corporate card gets merged with a colleague. Treat the link as probabilistic, store the evidence, and never let it drive anything irreversible.</p>
+
+        <pre><code class="language-javascript">// Link with a confidence score and keep the evidence. Anything that
+// modifies a customer record on the basis of a match should check the
+// score, and marketing consent should never be inferred from one.
+async function linkCustomerByCard(squarePayment) {
+  const fingerprint = squarePayment.card_details?.card?.fingerprint;
+  if (!fingerprint) return null;
+
+  const candidates = await findOnlineCustomersByCardFingerprint(fingerprint);
+  if (candidates.length !== 1) return null;   // ambiguous: do nothing
+
+  await recordIdentityLink({
+    customerId: candidates[0].id,
+    squareCustomerId: squarePayment.customer_id ?? null,
+    method: 'card_fingerprint',
+    confidence: 0.75,
+    evidence: { paymentId: squarePayment.id, fingerprint },
+  });
+  return candidates[0].id;
+}</code></pre>
+
+        <p>Be conservative. A wrongly merged customer record shows one person another person's purchase history, and depending on jurisdiction that is a data protection incident rather than a bug.</p>
+
+        <h2>16. A Rollout That Mostly Worked</h2>
+
+        <p>The same homeware retailer from the opening, rebuilt properly the following spring. Four shops, one warehouse, Magento 2.4, about 4,200 active variations, roughly 60% of revenue in store.</p>
+
+        <p><strong>Phase one: catalogue.</strong> Six weeks, of which four were the manual reconciliation described earlier. We matched 3,760 of 4,200 automatically and a merchandiser worked through the remaining 440. We deliberately did not automate the tail. Two of those 440 turned out to be products sold in store for two years that had never existed online.</p>
+
+        <p><strong>Phase two: inventory, read-only.</strong> Three weeks. We consumed Square's inventory events and wrote to a shadow table, comparing continuously against Magento's numbers without changing anything customer-facing. This is the phase I would insist on for any retailer. It surfaced that one shop's counts had drifted badly — 340 variations out by more than five units — because a stock take had been abandoned halfway through the previous autumn. Discovering that with the integration live would have looked like the integration's fault.</p>
+
+        <p><strong>Phase three: inventory, live, one location.</strong> Two weeks running with only the warehouse driving online availability, buffer set deliberately high at five units per line.</p>
+
+        <p><strong>Phase four: all locations, buffer tuned down.</strong> Four weeks of gradually reducing the buffer while watching the oversell rate.</p>
+
+        <p><strong>Phase five: orders and financial reconciliation.</strong> Five weeks, and the one that overran.</p>
+
+        <p><strong>Numbers.</strong> Oversell incidents went from an average of 23 per month to 2. Inventory drift, measured as the count of variations disagreeing by more than one unit at the nightly sweep, settled around 15 across 4,200 lines — about 0.4%, which I consider good. Online availability actually increased by roughly 8% overall despite the buffers, because shop stock became sellable online for the first time. Month-end reconciliation went from two days to about three hours.</p>
+
+        <p><strong>What went wrong.</strong> Three things.</p>
+
+        <p>The buffer tuning took twice as long as planned because we tuned it globally first. A single buffer across the catalogue is either too high for slow-moving lines — costing availability on things that were never at risk — or too low for the fast movers. Splitting it by velocity band should have been the starting position, not the fix.</p>
+
+        <p>We missed offline mode entirely in the design. It surfaced in week three of phase four when a shop's broadband failed for about five hours on a Saturday. Twelve overselling orders. The liveness detection and degraded-buffer logic described above were written that following week, under pressure, and I would now build them before going live at any location.</p>
+
+        <p>And the financial reconciliation overran because we modelled it on sale date. Two weeks in, a chargeback from six weeks earlier appeared in a payout and nothing balanced. Rebuilding around settlement date cost ten days. That is a mistake I had made once before and still repeated, which is why it is in this article.</p>
+
+        <h2>17. Testing Something You Cannot Fully Simulate</h2>
+
+        <p>Square's sandbox is decent and it is not production. Some things you cannot reproduce there: real device behaviour, offline mode, genuine concurrency between a physical till and a web checkout, and the timing characteristics of webhook delivery under load.</p>
+
+        <p>What I test, and how.</p>
+
+        <p><strong>Contract tests against recorded fixtures.</strong> Capture real webhook payloads from a sandbox and replay them. Cheap, fast, and catches the majority of handler bugs.</p>
+
+        <p><strong>Deliberate duplicate and out-of-order replay.</strong> Take a captured sequence of inventory events, shuffle it, duplicate a third of it, and assert the final state matches the ordered run. If it does not, your ordering guard is wrong, and you have found it in CI instead of on a Saturday.</p>
+
+        <pre><code class="language-javascript">test('inventory converges under duplication and reordering', async () =&gt; {
+  const events = loadFixture('inventory-sequence-247.json');
+  const expected = await applyAll(freshState(), events);   // canonical order
+
+  for (let trial = 0; trial &lt; 50; trial++) {
+    const noisy = shuffle([...events, ...sample(events, 0.3)]);
+    const actual = await applyAll(freshState(), noisy);
+    expect(actual).toEqual(expected);   // must be order-independent
+  }
+});</code></pre>
+
+        <p><strong>A concurrency test with a real device.</strong> Not automatable in any pleasant way. Put a tablet running Square POS on a desk next to a laptop, have two people commit to the last unit of a test product at the same time, and see which one wins and what the other sees. Do this before launch. It takes twenty minutes and it is the only way to know what your customer experiences at the boundary.</p>
+
+        <p><strong>An offline drill.</strong> Put the device in aeroplane mode, take several transactions, reconnect, and watch the burst land. Confirm your liveness alert fired, your buffer tightened, and the reconnected events did not corrupt anything. Nobody wants to do this drill and everybody who skips it learns the same lesson on a Saturday.</p>
+
+        <h2>18. What to Monitor</h2>
+
+        <p>An integration is not done when it works; it is done when you would find out within minutes if it stopped.</p>
+
+        <p>The four signals I put on a dashboard, in priority order:</p>
+
+        <p><strong>Drift count per location.</strong> Variations disagreeing by more than one unit at the last sweep. This is the health of the whole system in one number.</p>
+
+        <p><strong>Event lag.</strong> Time from Square's <code>created_at</code> to your processing completion, at p50 and p99. The p99 is what causes overselling, and a rising p99 with a flat p50 means your queue is backing up under bursts — precisely the failure in the opening story, and visible on this graph forty minutes before it becomes a problem.</p>
+
+        <p><strong>Location silence.</strong> Time since the last event per location, compared against that location's own trading pattern.</p>
+
+        <p><strong>Oversell rate.</strong> Orders that could not be fulfilled because stock was not there. Track it as a business metric, not an engineering one, and report it monthly to the people who set the buffer policy.</p>
+
+        <pre><code class="language-javascript">// Emit the lag from the event's own timestamp, not from when you dequeued
+// it. Measuring from dequeue hides exactly the queueing delay you care about.
+function recordEventLag(event, stage) {
+  const createdAt = Date.parse(event.created_at);
+  metrics.histogram('square.event.lag_ms', Date.now() - createdAt, {
+    type: event.type,
+    location: event.data?.object?.location_id ?? 'unknown',
+    stage,
+  });
+}</code></pre>
+
+        <p>Alert on the p99 lag crossing a threshold you have chosen deliberately — mine is usually 120 seconds during trading hours — rather than on individual slow events. And put the drift count somewhere a non-engineer can see it, because the person who notices a rising baseline first is usually the operations manager, not the on-call engineer.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"Can we just use an off-the-shelf connector?"</strong> Sometimes, and check three things before you commit: does it handle inventory as adjustments or as overwrites, does it verify webhook signatures, and does it have a reconciliation sweep. A connector that does read-modify-write on stock will oversell under load no matter what its marketing says, and you will not be able to fix it. For a single shop with modest volume, a connector is usually fine. For four shops and a promotion calendar, I would build it.</p>
+
+        <p><strong>"How real-time can inventory actually be?"</strong> With webhooks consumed properly, a few seconds from till to website in the normal case. Under burst load or after an offline period, minutes. Design for the bad case: any system that only works when lag is low will fail on your busiest day, which is the day it matters.</p>
+
+        <p><strong>"Should Square or the ecommerce platform own the catalogue?"</strong> The ecommerce platform, nearly always. Square's catalogue is built for ringing up a sale, not for merchandising. The exception is a retailer whose business is genuinely in-store first with a small web presence, where forcing staff to update products in a web admin they never open produces worse data than letting them manage it at the till.</p>
+
+        <p><strong>"What about Square's own online store?"</strong> If it does what you need, using it removes this entire class of problem and you should seriously consider it. The reasons to integrate with an external platform are the ones Square Online does not cover well: complex catalogue structures, B2B pricing, deep content and SEO requirements, or an existing platform investment. "We want more control" is not by itself a reason worth this much engineering.</p>
+
+        <p><strong>"How do we handle products sold by weight?"</strong> Square supports fractional quantities and most ecommerce platforms handle them poorly. Decide on a canonical unit early, store quantities as integers in the smallest unit — grams, not kilograms — and convert only for display. Floating-point quantities in an inventory ledger produce counts like 2.9999999996 and reconciliation reports nobody trusts.</p>
+
+        <p><strong>"Do we need to store card data anywhere?"</strong> No, and do not. Square holds the payment credentials; you hold references. The moment card data touches your systems your compliance scope expands enormously for no benefit. Card fingerprints for identity matching are not card data and are safe to store, but treat them as personal data.</p>
+
+        <p><strong>"Our counts are already wrong. Where do we start?"</strong> A stock take, before anything else. I have seen two integration projects fail because they synchronised inaccurate data faster and everyone concluded the integration was broken. Count the fast-moving lines at minimum, push those as <code>PHYSICAL_COUNT</code>, and only then start the sync. It is unglamorous and it is the difference between a project that delivers and one that gets blamed.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>In order, if you are starting this on Monday:</p>
+
+        <p><strong>One.</strong> Write the ownership table. Every data type, one owning system, signed off by whoever owns pricing commercially. An afternoon of argument now saves a quarter of bidirectional sync bugs later.</p>
+
+        <p><strong>Two.</strong> Do the catalogue reconciliation before writing integration code. Match on SKU, produce the exception list, and give it to a merchandiser. Expect 5–15% to need human judgement.</p>
+
+        <p><strong>Three.</strong> Run a stock take on your top-moving lines. If the counts feeding the integration are wrong, everything built on them is theatre.</p>
+
+        <p><strong>Four.</strong> Build the webhook receiver with signature verification, deduplication on <code>event_id</code>, and fast acknowledgement, before you build anything that consumes the events. This is the foundation and it is two days of work.</p>
+
+        <p><strong>Five.</strong> Run inventory in shadow mode for at least two weeks. Compare, log drift, change nothing customer-facing. You will find problems that predate you, and finding them before go-live is the difference between a discovery and a blame conversation.</p>
+
+        <p><strong>Six.</strong> Go live at one location with a generous buffer. Tune down gradually, by velocity band, watching the oversell rate.</p>
+
+        <p><strong>Seven.</strong> Build offline detection before the second location goes live, not after the first outage.</p>
+
+        <p>Financial reconciliation comes last, and it takes longer than you think. Budget for it as a phase, not a fortnight of cleanup, and model it on settlement date from the first line of code.</p>
+
+        <p>The thing I would most want a team starting this to internalise: the integration's job is not to make two numbers equal. It is to make the disagreement between them small, bounded, visible, and recoverable. Chasing perfect real-time consistency between a physical shop and a website is chasing something that does not exist, and the effort is better spent on the buffer policy, the drift alarm, and the reconciliation sweep — the three things that turn an inevitable discrepancy into something you notice on a graph rather than in a customer's email.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/depop-omnichannel-marketplace-sync/">Depop & Omnichannel Marketplace Synchronization</a></strong>
+              <strong><a href="/blog/depop-omnichannel-marketplace-sync/">Depop &amp; Omnichannel Marketplace Synchronization</a></strong>
               <p>Multichannel web inventory deduplication.</p>
             </li>
             <li>
@@ -235,7 +955,6 @@ async function getSquareStock(catalogObjectId) {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -269,6 +988,6 @@ async function getSquareStock(catalogObjectId) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

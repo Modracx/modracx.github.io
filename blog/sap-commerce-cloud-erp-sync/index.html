@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>SAP Commerce Cloud & S/4HANA ERP Synchronization | MODRACX</title>
-  <meta name="description" content="Technical guide on connecting SAP Commerce Cloud (Hybris) with SAP S/4HANA ERP using Integration Suite (CPI) and OData API services." />
+  <meta name="description" content="SAP Commerce Cloud to S/4HANA integration: deciding system of record per field, idempotent order export, sync versus async, reconciliation queries, and the observability that catches silent failure." />
   <meta property="og:title" content="SAP Commerce Cloud & S/4HANA ERP Synchronization | MODRACX" />
   <meta property="og:description" content="Technical guide on SAP Commerce Cloud synchronization by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>SAP Commerce Cloud & S/4HANA ERP Synchronization</h1>
-        <p class="lede">Integrating SAP Commerce Cloud with S/4HANA via SAP Integration Suite (CPI) ensures real-time B2B customer tier pricing and inventory availability.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>SAP Commerce Cloud &amp; S/4HANA ERP Synchronization</h1>
+        <p class="lede">Eleven thousand orders sat in a dead-letter queue for five days because a category was renamed in the ERP. The storefront never broke. Here are the patterns that prevent silent divergence between commerce and SAP.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 37 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 22 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,17 +205,345 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>SAP OData v2 API Inventory Fetch Request</h2>
+        <h2>1. Eleven Thousand Orders in a Queue</h2>
 
-        <pre><code class="language-http">GET /sap/opu/odata/sap/API_PRODUCT_SRV/A_ProductStorage('MAT1234')/to_ProductStorageLocation?$format=json HTTP/1.1
-Host: s4hana.internal.company.com
-Authorization: Basic Base64EncodedCredentials==</code></pre>
+        <p>I got a call on a Tuesday from a distributor whose ERP had stopped accepting orders from their storefront the previous Thursday. Nobody had noticed for five days, because the storefront was working perfectly — customers placed orders, got confirmations, and were charged. The orders simply never arrived in SAP.</p>
 
-        <hr />
+        <p>Eleven thousand of them were sitting in a retry queue, most having exhausted their attempts and moved to a dead-letter table nobody monitored. Warehouse staff had spent the week wondering why it was quiet.</p>
+
+        <p>The cause was mundane: a product category had been renamed in the ERP, an inbound mapping expected the old value, and the integration rejected every order containing an item in that category. Which, because it was their largest category, meant nearly everything.</p>
+
+        <p>This is what ERP integration failure looks like in practice. Not a dramatic outage — a silent divergence between two systems that both believe they are correct, discovered days later by someone noticing an absence. The engineering that prevents it is not clever; it's mostly about idempotency, observability, and deciding in advance which system is allowed to be right.</p>
+
+        <p>This article covers the patterns that hold up, using SAP Commerce Cloud and S/4HANA as the concrete case, though nearly all of it applies to any commerce-to-ERP integration.</p>
+
+        <h2>2. Decide Who Owns What, First</h2>
+
+        <p>Every integration problem I have debugged traces back to two systems believing they own the same field. Before any technical design, write down the system of record for each domain, and make it a single answer per field rather than per entity.</p>
+
+        <p>A defensible default for most distributors and manufacturers:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Data</th><th>System of record</th><th>Direction</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Product master, SKU, units</td><td>ERP</td><td>ERP → Commerce</td></tr>
+            <tr><td>Marketing copy, images, SEO</td><td>Commerce or PIM</td><td>Commerce owns</td></tr>
+            <tr><td>List price, price lists</td><td>ERP</td><td>ERP → Commerce</td></tr>
+            <tr><td>Promotions, cart rules</td><td>Commerce</td><td>Commerce owns</td></tr>
+            <tr><td>Contract pricing (B2B)</td><td>ERP</td><td>ERP → Commerce, or live call</td></tr>
+            <tr><td>Stock quantity</td><td>ERP</td><td>ERP → Commerce</td></tr>
+            <tr><td>Customer account, credit limit</td><td>ERP</td><td>ERP → Commerce</td></tr>
+            <tr><td>Web registration, preferences</td><td>Commerce</td><td>Commerce → ERP</td></tr>
+            <tr><td>Order</td><td>Commerce at capture, ERP after</td><td>Commerce → ERP, status back</td></tr>
+            <tr><td>Invoice, delivery, returns</td><td>ERP</td><td>ERP → Commerce</td></tr>
+          </tbody>
+        </table>
+
+        <p>The row that generates the most argument is product description, because merchandising wants to write copy and the ERP already has a material description. Resolve it by splitting the field rather than the entity: the ERP owns <code>materialDescription</code>, commerce owns <code>marketingName</code>, and they are different fields that never overwrite each other. Trying to have one field owned by two systems produces a loop where each overwrites the other on its own schedule, and the symptom — copy reverting overnight — takes a long time to diagnose.</p>
+
+        <p>The order row deserves care too. The storefront owns the order until it is accepted by the ERP; after that the ERP owns fulfilment state and commerce holds a read-only reflection. Getting this backwards, so the storefront tries to be authoritative about shipping status, produces the class of bug where a customer sees "shipped" for something the warehouse has not picked.</p>
+
+        <h2>3. The Four Flows That Matter</h2>
+
+        <p>Almost every commerce-ERP integration reduces to four exchanges with quite different characteristics. Designing them separately, rather than as one "sync", is the difference between something maintainable and something nobody wants to touch.</p>
+
+        <h3>Product and price, ERP to commerce</h3>
+
+        <p>High volume, low urgency, tolerant of latency. A nightly or hourly delta feed is usually right. The complexity is not the transfer, it's the transformation — ERP product data is modelled for finance and logistics, and storefront product data is modelled for browsing.</p>
+
+        <p>Key decisions: full load or delta. Full loads are simpler and self-healing, and they stop being viable somewhere around a few hundred thousand SKUs. Deltas are efficient and accumulate drift, because a message missed during an outage is missed permanently unless you also run periodic reconciliation. My preference is deltas hourly plus a full reconciliation weekly, which gets the efficiency and repairs the drift.</p>
+
+        <h3>Stock, ERP to commerce</h3>
+
+        <p>The one with genuine urgency, and the one most often built badly. Overselling is expensive and erodes trust faster than almost anything else on a storefront.</p>
+
+        <p>The instinct is to call the ERP for live stock on every product view. Don't. It couples storefront availability to ERP availability, it puts read load on a system sized for transactions, and it makes your product page as slow as your slowest backend call.</p>
+
+        <p>The pattern that works: cache stock in commerce, update it by event as movements happen, and reserve at the point of order rather than trusting a displayed number. Then treat the displayed quantity as advisory and the reservation as authoritative. A customer seeing "3 in stock" that turns out to be 2 is a minor annoyance; a customer completing checkout for something unavailable is a refund and a complaint.</p>
+
+        <p>For high-value or low-stock items, a live availability check at the add-to-cart or checkout step is a reasonable compromise — one call at a decision point rather than on every page view.</p>
+
+        <h3>Order, commerce to ERP</h3>
+
+        <p>Low volume, high value, and the flow where correctness matters absolutely. Every order must arrive exactly once. This is where idempotency lives, and it gets its own section below.</p>
+
+        <h3>Status, ERP to commerce</h3>
+
+        <p>Invoices, deliveries, tracking numbers, credit notes. Low urgency, and the flow most often left until last and then implemented badly. It matters because it drives customer-facing communication and self-service, and every gap here becomes a support call.</p>
+
+        <h2>4. Customers, Accounts and the B2B Complication</h2>
+
+        <p>Product and order flows get the attention; customer data is where B2B integrations actually get hard, because the two systems model a customer completely differently.</p>
+
+        <p>An ERP thinks in terms of a sold-to party, a ship-to party, a bill-to party and a payer, which may be four different entities with different addresses and different roles in the same transaction. A storefront thinks in terms of a person with a login. Mapping between those is not a field-level exercise; it is a modelling decision that has to be made deliberately.</p>
+
+        <p>The shape that works for most distributors: the ERP account is the organisation, and commerce holds users who belong to it. One company account may have a purchasing manager who can approve, three buyers who can order within a limit, and a finance contact who sees invoices but cannot place orders. Those users exist only in commerce; the ERP knows about the organisation and about which delivery addresses are permitted.</p>
+
+        <p>That split determines several things at once. Registration becomes a two-step process, because a new user requesting access to an existing account needs approval rather than instant self-service — which is a workflow, not a form. Address handling becomes constrained, because in most B2B settings a buyer may not invent a new delivery address; they choose from the ship-to parties the ERP allows, and free-text address entry is a fraud and a logistics problem.</p>
+
+        <p>The pieces that reliably cause trouble:</p>
+
+        <p><strong>Credit status changes mid-session.</strong> A customer on stop in the ERP should not be able to complete an order, and the block may be applied while they are shopping. Check at checkout rather than only at login, and give support a clear message rather than a generic failure — "your account is on hold, please contact us" prevents a support ticket that starts with "the website is broken".</p>
+
+        <p><strong>Account hierarchies.</strong> A parent company with subsidiaries that share pricing but not credit, or a buying group whose members order independently against a shared agreement. This is where a simple one-account-one-organisation model breaks, and retrofitting hierarchy later is expensive. Ask about it during discovery even when nobody raises it, because the answer is often "yes, for about a dozen of our largest customers", and those dozen are usually a substantial share of revenue.</p>
+
+        <p><strong>Deleted or merged accounts.</strong> ERPs merge duplicate customer records as routine housekeeping. Commerce has users pointing at the old identifier, who then cannot log in or cannot see their order history. Handle merges explicitly with a mapping table rather than assuming identifiers are permanent.</p>
+
+        <h2>5. Idempotency, Which Is Non-Negotiable</h2>
+
+        <p>Any network call can fail after the work was done but before the acknowledgement arrived. Your integration cannot distinguish "the ERP never received this order" from "the ERP created the order and the response was lost." If your retry logic assumes the former, you will eventually create duplicate orders, and duplicate orders mean duplicate shipments and duplicate charges.</p>
+
+        <p>The fix is that the commerce side generates a stable, unique key for each order and the ERP side treats a repeat of that key as the same order rather than a new one.</p>
+
+        <pre><code class="language-java">// Commerce side: the key is generated once, at order placement, and never regenerated
+public class OrderExportPayload {
+    private final String idempotencyKey;   // e.g. "WEB-2026-000184213"
+    private final String orderCode;
+    private final Instant placedAt;
+    private final int attempt;
+
+    // The key must derive from the order, not from the attempt.
+    // A UUID generated per retry is the classic mistake — it defeats
+    // the whole mechanism while looking correct.
+    public static OrderExportPayload of(OrderModel order, int attempt) {
+        return new OrderExportPayload(
+            "WEB-" + order.getCode(),
+            order.getCode(),
+            order.getCreationtime().toInstant(),
+            attempt
+        );
+    }
+}</code></pre>
+
+        <p>On the ERP side, the receiving service checks whether that key has been seen and returns the existing document rather than creating a second one. If your ERP integration layer cannot enforce this, put a deduplication table in the middleware and enforce it there — it is worth building even as a workaround.</p>
+
+        <p>Two related properties worth designing in at the same time:</p>
+
+        <p><strong>Retry with backoff and a ceiling.</strong> Exponential backoff with jitter, so a recovering ERP is not immediately flattened by a thundering herd of retries. And a maximum, after which the message goes to a dead-letter queue rather than retrying forever.</p>
+
+        <p><strong>A dead-letter queue somebody watches.</strong> The distributor at the top of this article had one. It worked exactly as designed. Nobody had ever looked at it. A dead-letter queue without an alert is a place where problems go to be forgotten quietly, which is worse than no queue at all because it creates the impression of a safety net.</p>
+
+        <pre><code class="language-java">// Alert on depth and on age — depth alone misses the slow leak
+if (deadLetterQueue.depth() &gt; 0) {
+    Duration oldest = Duration.between(deadLetterQueue.oldestMessageTime(), Instant.now());
+    if (oldest.toMinutes() &gt; 15) {
+        alerting.page("order export dead-letter: " + deadLetterQueue.depth()
+            + " messages, oldest " + oldest.toMinutes() + "m");
+    }
+}</code></pre>
+
+        <h2>6. Synchronous or Asynchronous</h2>
+
+        <p>A decision that shapes everything downstream, and the wrong choice is difficult to reverse.</p>
+
+        <p><strong>Synchronous</strong> — the storefront calls the ERP and waits. Simple to reason about, immediate confirmation, and it makes your checkout as available as your ERP. That last clause is the problem. ERPs go down for batch windows, month-end, and upgrades, and a synchronous design means your checkout goes down with them. It also makes checkout as slow as the ERP call, which on a busy S/4HANA system is not always fast.</p>
+
+        <p><strong>Asynchronous</strong> — the storefront accepts the order, queues it, and confirms to the customer immediately. The ERP consumes at its own pace. Resilient, faster, and the right default. The cost is that "order accepted" and "order in ERP" become different states, and you have to design for the gap: what the customer is told, what happens if the ERP later rejects it, and how support sees the difference.</p>
+
+        <p>I use asynchronous for order submission essentially always, with two exceptions where a synchronous call is genuinely needed at the decision point rather than after it:</p>
+
+        <p><strong>Credit limit checks for B2B.</strong> If a customer might exceed their limit, you need to know before you take the order, not after. A synchronous call at checkout with a short timeout and a defined fallback — usually "accept and flag for manual review" rather than "reject" — is the right shape.</p>
+
+        <p><strong>Contract pricing.</strong> B2B pricing that depends on customer-specific agreements often can't be replicated in commerce faithfully. A live call with aggressive caching per customer-material pair works; recalculating the ERP's pricing logic in commerce does not, and every attempt I've seen has drifted within a year.</p>
+
+        <p>The general principle: synchronous calls belong where a wrong answer changes the customer's decision. Everywhere else, queue it.</p>
+
+        <h2>7. Integration Middleware</h2>
+
+        <p>SAP's own tooling for this is SAP Integration Suite, and on a Commerce Cloud project you will likely be using it or something equivalent. The choice matters less than the discipline, but a few observations.</p>
+
+        <p><strong>Put transformation in one place.</strong> The recurring failure is mapping logic spread between the commerce extension, the middleware, and an ERP user-exit — because each layer added a small fix under time pressure. Debugging then requires tracing a field through three systems owned by three teams. Pick the middleware as the transformation layer and keep the others thin.</p>
+
+        <p><strong>Version your contracts.</strong> The interface between commerce and middleware is an API, and it deserves the same treatment as any other: a schema, a version, and a deprecation path. Integrations that break on ERP upgrades are usually integrations with no contract, where both sides assumed the other would not change.</p>
+
+        <p><strong>Keep the payloads flat and explicit.</strong> Deeply nested structures mirroring internal models make every change a coordinated release. A flat, explicit contract that names what it needs survives refactoring on both sides.</p>
+
+        <p><strong>Log correlation identifiers everywhere.</strong> One identifier that follows an order from storefront through middleware to ERP document number. Without it, investigating "where did order 184213 go" means searching three log systems by timestamp and hoping.</p>
+
+        <pre><code class="language-java">MDC.put("correlationId", order.getCode());
+MDC.put("customerId", order.getUser().getUid());
+try {
+    exportService.send(payload);
+    log.info("order exported, erpDocument={}", response.getDocumentNumber());
+} finally {
+    MDC.clear();
+}</code></pre>
+
+        <h2>8. Getting the Catalogue Load Right</h2>
+
+        <p>Catalogue synchronisation is the flow that consumes the most engineering time on these projects, and the difficulty is rarely the transfer. It is that ERP product data is not storefront product data and the gap has to be closed by someone.</p>
+
+        <p>An ERP material master is modelled for procurement, costing and logistics. It has a material number, a description written by whoever set it up, base unit of measure, weight, and a classification hierarchy designed for reporting. What it usually lacks is anything a customer would want to read, images, or a structure that maps onto how people browse.</p>
+
+        <p>Three decisions to make explicitly.</p>
+
+        <p><strong>Which attributes actually cross.</strong> The instinct is to replicate everything because the mapping is mechanical and storage is cheap. Resist it. Every attribute is a field to maintain, a column to index, and a thing that can be wrong. The useful test is whether any template renders it or any query filters on it; if neither, it does not need to be in commerce. Cutting a replicated set from 140 fields to 60 is a normal outcome of asking that question honestly, and it makes every subsequent load faster.</p>
+
+        <p><strong>How units of measure translate.</strong> The ERP sells in boxes of 250; the storefront shows a price per unit; the warehouse picks in cases. Getting this wrong produces order quantities that are out by a factor of the case size, which is the kind of error that ships pallets to people who wanted one item. Model the conversion explicitly, test it with the awkward products, and be suspicious of any material where the base unit and the sales unit differ.</p>
+
+        <p><strong>Where the browsing structure comes from.</strong> ERP classification hierarchies are built for internal reporting and make poor navigation. Most projects end up with a commerce-owned category tree, mapped from ERP classification but curated separately. That is more work and it is the right answer — merchandising needs to reorganise navigation without a change request to the ERP team.</p>
+
+        <p>A practical note on deltas. Whatever change-detection the ERP offers, verify what it actually reports. Some systems flag a material as changed when any field changes, including ones you do not replicate, which produces a delta feed that is nearly a full load. Filtering on the fields you care about, on the ERP side if possible, can shrink a feed by an order of magnitude.</p>
+
+        <h2>9. Where Commerce Cloud Specifics Bite</h2>
+
+        <p>A few things particular to SAP Commerce Cloud that shape integration design.</p>
+
+        <p><strong>ImpEx for bulk loads.</strong> The native import format is genuinely efficient for large catalogue loads and awkward for anything conditional. It's the right tool for a nightly product feed and the wrong one for order status updates. Don't stretch it past its purpose because it's familiar.</p>
+
+        <p><strong>The type system is a schema.</strong> Extending item types is normal and adding attributes is cheap, but every attribute you add to a heavily-indexed type has a cost at load time. Be deliberate about what you replicate from the ERP — teams routinely mirror fields nobody ever reads because the mapping was easy.</p>
+
+        <p><strong>Solr indexing is a separate concern from data sync.</strong> An updated product is not a searchable product until the index catches up. On a large catalogue, a full reindex is measured in hours, so plan for partial indexing on the delta feed and full reindexing on a schedule. The bug this prevents: a price updates in the database and the search results keep showing the old one, which looks like a sync failure and is actually an indexing lag.</p>
+
+        <p><strong>Cloud deployment windows constrain your batch schedule.</strong> Commerce Cloud deploys and ERP batch windows both take capacity, and if they overlap you get failures that look intermittent and are actually scheduled. Map the two calendars against each other once, and you'll explain several recurring incidents.</p>
+
+        <p><strong>Cronjobs need singleton protection.</strong> In a clustered environment, a cronjob that runs on every node instead of one will happily export every order several times. Commerce has mechanisms for this; use them, and verify in a clustered environment rather than on a developer machine where the problem cannot appear.</p>
+
+        <h2>10. Performance, and Not Letting the ERP Set Your Page Speed</h2>
+
+        <p>A storefront backed by an ERP has a standing temptation: the authoritative answer lives over there, so ask for it. Follow that instinct consistently and your product page inherits the latency and the availability of a system designed for batch accounting.</p>
+
+        <p>The discipline is to be explicit about which calls are on a customer's critical path, and to keep that list very short.</p>
+
+        <p><strong>Never on a product listing page.</strong> A category showing 48 products must not make 48 calls, and must not make one call that fans out to 48 lookups either. Everything on a listing comes from commerce's own data, refreshed asynchronously. If a number is slightly stale on a listing, nobody is harmed.</p>
+
+        <p><strong>Rarely on a product detail page.</strong> One call, at most, and only when there is a genuine reason — customer-specific pricing that cannot be pre-computed being the main one. Cache it per customer and material with a short lifetime, and set a timeout short enough that a slow ERP degrades to a fallback rather than holding the page.</p>
+
+        <p><strong>Acceptable at cart and checkout.</strong> These are decision points where a wrong answer costs money, and where a customer will tolerate a moment's wait. Credit checks, final pricing, and availability confirmation belong here.</p>
+
+        <p>Two implementation details make the difference between this working and not.</p>
+
+        <p>Timeouts must be short and must have a defined fallback. An unbounded call to an ERP means a page that hangs rather than a page that degrades, and hanging is worse — the customer waits, gives up, and you have lost the session and generated load. Two seconds is generous for a pricing call; beyond that, fall back to list price and flag the order for review.</p>
+
+        <p>And a circuit breaker is worth the complexity on any synchronous path. When the ERP starts failing, continuing to send it traffic makes recovery slower and makes every affected page slow. Trip the breaker, serve fallbacks, and probe periodically until it recovers.</p>
+
+        <pre><code class="language-java">// Fail fast and degrade, rather than queue customers behind a struggling ERP
+private final CircuitBreaker breaker = CircuitBreaker.of("erp-pricing",
+    CircuitBreakerConfig.custom()
+        .failureRateThreshold(50)
+        .waitDurationInOpenState(Duration.ofSeconds(30))
+        .slidingWindowSize(20)
+        .build());
+
+public Price priceFor(String customerId, String material, Price listPrice) {
+    return Try.ofSupplier(
+            CircuitBreaker.decorateSupplier(breaker,
+                () -&gt; erpClient.contractPrice(customerId, material)))
+        .recover(t -&gt; {
+            metrics.increment("pricing.fallback");
+            return listPrice.withFlag(PriceFlag.FALLBACK);
+        })
+        .get();
+}</code></pre>
+
+        <p>That <code>FALLBACK</code> flag matters as much as the breaker. It gives support a way to explain a price a customer queries, and it gives you a metric that tells you how often customers are seeing a degraded answer — which is the number that should drive whether the integration needs attention.</p>
+
+        <h2>11. Reconciliation, the Part Everyone Skips</h2>
+
+        <p>Event-driven sync drifts. A message is dropped during a deploy, a transformation silently fails on an edge case, a manual change is made directly in one system. None of these announce themselves, and the divergence accumulates until someone notices a symptom.</p>
+
+        <p>The fix is a scheduled comparison that treats divergence as an expected condition rather than an emergency.</p>
+
+        <pre><code class="language-sql">-- Daily: orders placed on the storefront with no corresponding ERP document
+SELECT o.code, o.creationtime, o.totalprice, o.erp_status
+FROM orders o
+WHERE o.creationtime &gt;= NOW() - INTERVAL 7 DAY
+  AND (o.erp_document_number IS NULL OR o.erp_document_number = '')
+  AND o.status NOT IN ('CANCELLED', 'DRAFT')
+ORDER BY o.creationtime;</code></pre>
+
+        <p>Three reconciliations worth running, in order of value:</p>
+
+        <p><strong>Orders without an ERP document, older than the expected latency.</strong> This is the one that would have caught the eleven thousand within an hour. Run it every fifteen minutes and alert on any result.</p>
+
+        <p><strong>Stock divergence beyond a threshold.</strong> Compare commerce's cached quantity against the ERP's for a sample of SKUs daily. Small differences are normal in a moving warehouse; a systematic drift in one direction indicates a broken event stream.</p>
+
+        <p><strong>Price divergence.</strong> Compare a sample of prices weekly. Price errors are commercially serious and, unlike stock, there is no legitimate reason for divergence.</p>
+
+        <p>Publish the results somewhere visible even when they're clean. A dashboard that shows zero divergence every day builds the habit of looking, so the day it shows something, someone notices.</p>
+
+        <h2>12. Failure Modes and What to Do About Them</h2>
+
+        <p><strong>The ERP is down for a batch window.</strong> Expected and schedulable. Queue orders, keep taking them, and surface an internal indicator rather than a customer-facing one. Customers don't need to know your ERP is in month-end close.</p>
+
+        <p><strong>The ERP rejects an order.</strong> The interesting case, because the customer has already been told it succeeded. Decide the policy before you need it: which rejection reasons are automatically retryable after a data fix, which need human review, and what the customer is told and when. A rejection that sits silently in a queue is the eleven-thousand-order failure in miniature.</p>
+
+        <p><strong>Partial success.</strong> The order is created in the ERP but the confirmation to commerce fails, so commerce retries and idempotency prevents a duplicate — but commerce still doesn't know the document number. Handle it with a reconciliation lookup by idempotency key rather than by re-sending: ask the ERP "do you have this key" and record the answer.</p>
+
+        <p><strong>Reference data drift.</strong> The failure from the opening of this article. A category, unit of measure, payment method, or country code changes in one system and the other's mapping is stale. Two defences: validate reference data on a schedule rather than trusting it, and fail loudly on an unknown value instead of dropping the record.</p>
+
+        <p><strong>Clock skew and time zones.</strong> An ERP running in one time zone and a storefront in another, with a batch window defined in local time and a daylight-saving transition. Store everything in UTC, convert at display, and be suspicious of any bug that appears twice a year.</p>
+
+        <h2>13. Making It Observable</h2>
+
+        <p>The theme running through every failure above is that nobody knew. Three things worth instrumenting, and none of them are expensive.</p>
+
+        <p><strong>End-to-end latency per flow.</strong> Not "did the call succeed" but "how long from order placed to ERP document created". Chart the distribution. A rising p95 is an early warning that something is degrading before it fails outright.</p>
+
+        <p><strong>Volume against expectation.</strong> Orders exported per hour, compared to a rolling baseline for that hour and weekday. Alert on a significant drop rather than on errors, because the worst failures produce no errors — they produce silence. This single alert catches the majority of integration incidents I have seen.</p>
+
+        <p><strong>Queue depth and message age.</strong> Depth alone is misleading; a queue can be shallow and stuck. Age of the oldest unprocessed message is the honest metric.</p>
+
+        <p>And one process item that matters more than any dashboard: decide who is paged when order export stops. Integration sits between two teams and frequently belongs to neither, which is precisely how a queue accumulates for five days.</p>
+
+        <h2>14. Running It After Go-Live</h2>
+
+        <p>Integrations are not delivered, they are operated, and the handover is where a good build becomes a bad system.</p>
+
+        <p><strong>Write the runbook while you still remember.</strong> Not documentation of the design — instructions for the specific things that will happen. How to replay a dead-lettered order. How to trigger a manual reconciliation. What to check first when order volume drops. Who to call at the ERP end out of hours. Half a page per scenario, written during the project, is worth more than a design document nobody opens.</p>
+
+        <p><strong>Give support a view into the integration.</strong> The most common escalation is "where is my order", and the answer requires knowing whether it reached the ERP. If answering that means asking an engineer to grep a log, every instance becomes a ticket. A simple admin screen showing export status and ERP document number per order removes an entire category of escalation and pays for itself within weeks.</p>
+
+        <p><strong>Rehearse the failure.</strong> Once, in a controlled window, disconnect the ERP and confirm the behaviour: orders queue, the customer sees a normal confirmation, alerts fire, and when the connection returns the backlog drains without duplicates. Then do it again after any significant change. This is the single most valuable test in the whole project and it takes an afternoon.</p>
+
+        <p><strong>Review the reference data mapping on a schedule.</strong> Country codes, payment terms, units of measure, category codes, shipping methods. These change in the ERP without anyone thinking to tell the commerce team, because from their side it is routine master-data maintenance. A quarterly check that every mapped value still exists on both sides prevents the failure this article opened with.</p>
+
+        <p><strong>Watch the boring numbers.</strong> Export volume by hour against baseline, queue age, reconciliation results, and the ratio of retries to first-attempt successes. That last one is an underrated leading indicator — a rising retry rate usually precedes an outright failure by days, and it is the signal that lets you fix something before it becomes an incident.</p>
+
+        <h2>15. A Project That Went Well</h2>
+
+        <p>A janitorial supplies distributor, roughly 180,000 SKUs, S/4HANA, moving from a legacy webshop to Commerce Cloud. B2B with contract pricing and credit limits, which is the harder end of this problem.</p>
+
+        <p><strong>What we decided early.</strong> The ownership table came before any code, and took two workshops with commercial stakeholders rather than engineers. That felt slow and saved months — the marketing-copy-versus-material-description argument surfaced in week one instead of during UAT.</p>
+
+        <p><strong>Order flow.</strong> Asynchronous with idempotency keys derived from the order code, exponential backoff, a dead-letter queue with a fifteen-minute age alert, and a reconciliation query every fifteen minutes for orders lacking an ERP document. The reconciliation caught two real incidents in the first year, both within twenty minutes.</p>
+
+        <p><strong>Pricing.</strong> Live calls to the ERP for contract prices at cart level, cached per customer-material pair for fifteen minutes, with list price as a fallback if the call timed out and a flag so support could see when a fallback had been used. Nobody attempted to reimplement SAP's pricing logic, which was the single most important restraint of the project.</p>
+
+        <p><strong>Stock.</strong> Event-driven updates into commerce, displayed as banded availability rather than exact counts — "in stock", "low stock", "on request" — which removed a whole class of complaint about numbers being slightly wrong, and reserved at order placement.</p>
+
+        <p><strong>What went wrong.</strong> The catalogue load was the problem, not the orders. The initial full ImpEx import took eleven hours and blocked the deployment window. We moved to delta loads with a weekly full reconciliation, and cut the replicated attribute set from 140 fields to 60 after asking which ones any page actually rendered. Load time dropped to under an hour.</p>
+
+        <p><strong>What I'd do differently.</strong> Build the reconciliation queries in week one rather than month four. They are twenty lines of SQL and they are the difference between finding a problem in fifteen minutes and finding it in five days. We built them after a near-miss, which is the usual and wrong order.</p>
+
+        <h2>16. Questions That Come Up</h2>
+
+        <p><strong>"Should we sync in real time?"</strong> Only stock and, for B2B, credit and contract price. Everything else tolerates minutes or hours, and real-time coupling buys you an ERP outage becoming a storefront outage. Ask what decision the freshness changes; if none, batch it.</p>
+
+        <p><strong>"Can we skip middleware and call the ERP directly?"</strong> You can, and it works until the first schema change, at which point transformation logic is embedded in your commerce extension and an ERP upgrade becomes a commerce release. A thin integration layer is worth its cost mostly as a place to absorb change.</p>
+
+        <p><strong>"How do we handle an ERP upgrade?"</strong> Contract versioning and a compatibility window where the integration accepts both old and new shapes. Then migrate, then remove the old path. Big-bang cutovers of an integration are how you get an unplanned weekend.</p>
+
+        <p><strong>"What about returns and credit notes?"</strong> Frequently the last thing built and the first thing customers ask about. The ERP owns them; commerce reflects them. Budget for it properly rather than treating it as a phase two that never arrives.</p>
+
+        <p><strong>"Do we need a separate PIM?"</strong> If merchandising needs richer product content than the ERP holds — which is usually true for anything consumer-facing — then yes, and it sits between the two with clearly defined ownership. If you sell industrial parts by part number, the ERP plus a few commerce-owned fields is often enough.</p>
+
+        <p><strong>"How do we test this?"</strong> A sandbox ERP with realistic data, contract tests against the interface schema so either side can change independently, and a rehearsed failure drill — take the ERP connection down deliberately and confirm orders queue, alerts fire, and recovery drains cleanly. That drill finds more than any amount of unit testing.</p>
+
+        <h2>17. What Actually Prevents the Bad Week</h2>
+
+        <p>Nearly everything in this article is ordinary engineering. Stable keys, bounded retries, a queue somebody watches, a scheduled comparison between two systems, and a clear answer to who owns each field.</p>
+
+        <p>None of it is specific to SAP, and none of it is difficult. It gets skipped because integration work is invisible when it succeeds and because it sits in the gap between the commerce team and the ERP team, where neither has clear ownership and both assume the other is watching.</p>
+
+        <p>There is a related organisational point worth making plainly. On most of these projects the commerce team is an agency or a product team measured on storefront delivery, and the ERP team is internal and measured on stability. Neither is rewarded for the integration working well, and both are blamed when it doesn't. That misalignment produces the specific behaviours you see on troubled projects: mapping logic quietly duplicated on both sides so neither has to wait for the other, alerts routed to whoever complained last, and a shared reluctance to touch anything after go-live. Naming a single owner with authority over the contract between the two systems fixes more integration problems than any amount of architecture.</p>
+
+        <p>So the highest-value thing you can do is not technical. Name an owner for the integration, give them the volume alert and the dead-letter alert, and make sure the reconciliation query runs. The distributor's eleven thousand orders were not caused by a hard problem. They were caused by a queue that worked perfectly and a dashboard nobody had opened.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -226,7 +556,6 @@ Authorization: Basic Base64EncodedCredentials==</code></pre>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -260,6 +589,6 @@ Authorization: Basic Base64EncodedCredentials==</code></pre>
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

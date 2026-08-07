@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Depop & Omnichannel Marketplace Synchronization | MODRACX</title>
-  <meta name="description" content="Technical guide on building multi-channel inventory synchronization between Depop, eBay, Amazon, and Magento 2 / Shopify storefronts." />
+  <meta name="description" content="Building marketplace inventory sync across Depop, eBay, Amazon and Shopify: event-driven push, reservation ledgers, buffers, rate limits and oversell prevention." />
   <meta property="og:title" content="Depop & Omnichannel Marketplace Synchronization | MODRACX" />
   <meta property="og:description" content="Technical guide on Depop marketplace sync by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Depop & Omnichannel Marketplace Synchronization</h1>
-        <p class="lede">Selling apparel on social marketplaces like Depop requires immediate stock deduplication back to central warehouse inventory to avoid double-fulfillment oversells.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Depop &amp; Omnichannel Marketplace Synchronization</h1>
+        <p class="lede">A Manchester vintage reseller oversold 137 items in one Saturday. The sync tool was not broken — it polled every fifteen minutes, and on Black Friday that was forty times too slow.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,37 +205,583 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Depop Inventory Webhook Handler Node.js Code</h2>
+        <h2>1. The Saturday That Cost £4,200</h2>
 
-        <pre><code class="language-javascript">// Express Webhook Handler for Marketplace Order Sold Events
-const express = require('express');
-const app = express();
-app.use(express.json());
+        <p>A vintage clothing reseller in Manchester ran a Black Friday promotion in November 2023 across their Shopify store, eBay, Depop and a small Vinted presence. They had a sync tool. It had worked for eighteen months. On the Saturday of that weekend they oversold 137 items.</p>
 
-app.post('/webhooks/marketplace/sold', async (req, res) => {
-  const { sku, quantity, channel } = req.body;
-  await updateCentralStock(sku, -quantity);
-  res.status(200).send('Stock Synced');
-});</code></pre>
+        <p>Not 137 units — 137 <em>items</em>, most of which were one-of-one vintage pieces where an oversell means somebody definitively does not get the thing they paid for. Refunds, apology credits, a Depop rating that went from 4.9 to 4.6 in a week, and roughly £4,200 in direct cost once they'd counted the postage on the goodwill gifts they sent out.</p>
 
-        <hr />
+        <p>The sync tool polled every fifteen minutes. Under normal traffic that was fine, because two people rarely bought the same unique item within the same quarter-hour window. Under Black Friday traffic it was catastrophic, because the interval hadn't changed but the arrival rate had gone up by a factor of forty.</p>
+
+        <p>Nothing was broken. The system did exactly what it had been built to do. It had simply been built on an assumption — that inventory changes slowly relative to the polling interval — that stopped being true on the one day of the year when it mattered most.</p>
+
+        <p>That's the shape of almost every marketplace sync failure I've been called in on. Not a bug. An assumption about timing that held until it didn't. This article is about building the thing so that it doesn't depend on that assumption.</p>
+
+        <h2>2. Why This Is Harder Than It Looks</h2>
+
+        <p>Selling one catalogue on four channels sounds like a data replication problem. It is not. It's a distributed consensus problem wearing a data replication problem's clothes, and the reason is that you don't control most of the participants.</p>
+
+        <p>You have one physical stock pool in one warehouse — or, worse, in three bins across a spare bedroom and a self-storage unit. You have four systems each holding a number that claims to represent that pool. Each of those systems will accept an order against its own number without asking you first. There is no lock you can take across all four. There is no transaction. eBay does not phone you before it lets someone buy.</p>
+
+        <p>So every marketplace integration is fundamentally optimistic concurrency with no rollback, and the entire engineering problem is minimising the window during which the four numbers disagree, plus deciding what to do when they inevitably do.</p>
+
+        <p>Four properties make it worse than the equivalent problem inside your own systems.</p>
+
+        <p><strong>Latency you don't control.</strong> When you push a stock update to a marketplace, the API accepts it and returns 200. That does not mean the change is live on the listing page. On eBay, revised quantity typically becomes visible in seconds but has taken minutes under load. On Amazon, feed-based inventory updates are asynchronous by design and a submitted feed can take anywhere from thirty seconds to several minutes to process. Your "success" response is an acknowledgement of receipt, not of effect.</p>
+
+        <p><strong>Different consistency models per channel.</strong> Some marketplaces will hold an item in a cart. Some won't. Some allow overselling and expect you to cancel. Some penalise cancellation severely enough that overselling is worse than losing the sale.</p>
+
+        <p><strong>Rate limits that bite exactly when you need throughput.</strong> The moment a big promotion drives a hundred orders in ten minutes is the moment you want to push a hundred stock updates, and it is also the moment you hit your daily call allowance.</p>
+
+        <p><strong>Partial failure is the normal case.</strong> Four channels, four network calls, and the realistic outcome of any broadcast is that three succeed and one times out. Your architecture has to have an answer for that which isn't "retry the whole thing".</p>
+
+        <h2>3. Depop's Particular Awkwardness</h2>
+
+        <p>Depop deserves its own section because it does not behave like the others and teams routinely design for eBay and then discover Depop doesn't fit the model.</p>
+
+        <p>First, and most importantly for anyone planning an integration: Depop does not offer an open public seller API. Access is partner-gated. You apply, you explain what you're building, and you may or may not be approved. This is not a documentation gap you can engineer around — it's an access decision made by a company that has historically been protective of its peer-to-peer character and not especially interested in enabling bulk operations.</p>
+
+        <p>The practical consequence is that most sellers reach Depop through an approved integrator rather than directly, and the choice of integrator therefore constrains your architecture more than it would elsewhere. I've had two clients build a beautiful channel-agnostic sync layer and then bolt Depop on through a third party's webhook feed, which works, but means Depop's data arrives on a different shape and a different schedule to everything else.</p>
+
+        <p>Second, the inventory model. Depop grew up as a one-of-one secondhand marketplace. A listing is a photograph of a specific garment. Multi-quantity listings exist now for brand and boutique sellers, but the platform's centre of gravity is still single-item, and that changes the maths completely.</p>
+
+        <p>With a quantity of one, there is no buffer strategy. You cannot hold back two units of a thing there is one of. Every single sale is a race between channels, and the only lever you have is how fast you can delist everywhere else.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Channel</th><th>Typical inventory model</th><th>Buffer viable?</th><th>Oversell cost</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Depop (secondhand)</td><td>Quantity 1, per-listing</td><td>No</td><td>Very high — rating and refund</td></tr>
+            <tr><td>Depop (boutique)</td><td>Multi-quantity, variants</td><td>Partially</td><td>High</td></tr>
+            <tr><td>eBay</td><td>Multi-quantity, variation groups</td><td>Yes</td><td>Defect rate, seller standing</td></tr>
+            <tr><td>Amazon</td><td>Multi-quantity per SKU/FNSKU</td><td>Yes</td><td>Severe — order defect rate</td></tr>
+            <tr><td>Own Shopify store</td><td>Full control, real reservations</td><td>Not needed</td><td>Low — you can apologise directly</td></tr>
+          </tbody>
+        </table>
+
+        <p>Third, Depop's fulfilment and messaging culture is personal. Buyers expect a reply, expect the seller to be an individual, and treat a cancellation as a broken promise rather than a stock discrepancy. An oversell on Amazon is a metric. An oversell on Depop is a bad review that says "seller cancelled on me" and sits at the top of your profile for months.</p>
+
+        <p>So if you're building a sync layer that includes Depop, design for the one-of-one case first and treat the multi-quantity channels as the easy variant. Doing it the other way round produces a system that works everywhere except the place where failure hurts most.</p>
+
+        <h2>4. Three Architectures, And Which One I'd Build</h2>
+
+        <p>There are essentially three ways to keep channels in step, and they're not equally good despite what integrator marketing pages suggest.</p>
+
+        <h3>Scheduled polling</h3>
+
+        <p>A cron job every N minutes reads current stock and pushes it to every channel. This is what the Manchester reseller had.</p>
+
+        <p>It is simple, it is easy to reason about, and it fails in exactly one predictable way: the window. Between the last push and the next, every channel's number is stale by however much sold in that period. Halving the interval halves the exposure and doubles the API calls, and you run out of API calls long before you run out of exposure.</p>
+
+        <p>I would not build this as the primary mechanism. I would absolutely keep it as a safety net, running hourly, correcting drift that the event path missed.</p>
+
+        <h3>Event-driven push</h3>
+
+        <p>Every stock-affecting event — an order, a cancellation, a stock adjustment, a return going back on the shelf — immediately publishes to a queue, and a worker fans it out to every channel.</p>
+
+        <p>This is what I build. The window shrinks from minutes to whatever your queue latency plus the marketplace's propagation delay is, typically two to ten seconds. It's an order of magnitude better and it costs an order of magnitude fewer API calls, because you only push when something changed.</p>
+
+        <pre><code class="language-javascript">// One event in, N channel updates out. The queue is doing the
+// durability work; the worker only has to be idempotent.
+async function onInventoryChanged(event) {
+  // event: { sku, availableAfter, reason, sourceChannel, occurredAt, version }
+  const channels = await listingsForSku(event.sku);   // where is this listed?
+
+  await Promise.allSettled(
+    channels
+      .filter(c =&gt; c.channel !== event.sourceChannel)  // don't echo back
+      .map(c =&gt; queue.publish('channel.inventory.push', {
+        channel: c.channel,
+        listingId: c.externalId,
+        sku: event.sku,
+        quantity: applyBuffer(c.channel, event.availableAfter),
+        version: event.version,     // for stale-write rejection at the worker
+        idempotencyKey: `${c.channel}:${event.sku}:${event.version}`
+      }))
+  );
+}</code></pre>
+
+        <p>The <code>version</code> field is the piece people leave out and then spend a fortnight debugging. Without it, two updates for the same SKU can be processed out of order by two workers and the older number wins. More on that below.</p>
+
+        <h3>Central inventory service with reservations</h3>
+
+        <p>The most correct and the most expensive. One service owns availability. Nothing writes stock directly. Every channel's number is derived, and every order takes a reservation against the central pool before it's confirmed.</p>
+
+        <p>The catch is that marketplaces don't ask permission. You can't make eBay call your reservation service before completing a checkout. So the reservation model only gives you true safety on channels you control — your own storefront — and degrades to optimistic push everywhere else.</p>
+
+        <p>It's still worth building the ledger even if only one channel can reserve against it, because it gives you one authoritative number and a full audit trail of why it changed. When someone asks "why did this show as available when it wasn't", a ledger answers in thirty seconds and a spreadsheet of last-known quantities answers never.</p>
+
+        <p>What I'd actually build, for a seller with four channels and real volume: event-driven push as the primary path, a reservation ledger as the source of truth, and a scheduled reconciliation as the backstop. All three, because they fail in different ways.</p>
+
+        <h2>5. The Reservation Ledger</h2>
+
+        <p>Availability should be a computed number, not a stored one. The moment you store a quantity and mutate it, you have lost the ability to answer "how did it get to this value", and every marketplace sync eventually needs that answer.</p>
+
+        <p>An append-only ledger of movements, with availability derived by summation, costs slightly more in query time and saves you weeks.</p>
+
+        <pre><code class="language-sql">CREATE TABLE inventory_movement (
+  id            BIGSERIAL PRIMARY KEY,
+  sku           TEXT        NOT NULL,
+  location_id   TEXT        NOT NULL,
+  delta         INTEGER     NOT NULL,   -- +5 receipt, -1 sale, +1 return
+  kind          TEXT        NOT NULL,   -- receipt|sale|reservation|release|adjustment
+  channel       TEXT,                   -- null for warehouse movements
+  external_ref  TEXT,                   -- marketplace order id
+  expires_at    TIMESTAMPTZ,            -- reservations only
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- One movement per external reference per kind. This single constraint
+  -- makes the whole webhook pipeline safe to replay.
+  UNIQUE (channel, external_ref, kind)
+);
+
+CREATE INDEX ON inventory_movement (sku, location_id) INCLUDE (delta);
+CREATE INDEX ON inventory_movement (expires_at) WHERE expires_at IS NOT NULL;</code></pre>
+
+        <p>Availability is then a sum, with expired reservations excluded:</p>
+
+        <pre><code class="language-sql">-- On hand minus live reservations. Expired holds fall out automatically.
+SELECT sku,
+       SUM(delta) FILTER (
+         WHERE expires_at IS NULL OR expires_at &gt; now()
+       ) AS available
+FROM inventory_movement
+WHERE sku = $1
+GROUP BY sku;</code></pre>
+
+        <p>For a catalogue of any size you'd materialise this into a summary table updated by trigger or by the same worker that writes the movement, and keep the ledger for audit. But start with the sum. Premature materialisation of an inventory number is how you end up with two sources of truth that disagree, which is worse than one slow query.</p>
+
+        <p>The <code>UNIQUE (channel, external_ref, kind)</code> constraint is the most valuable line in that schema. Marketplaces resend webhooks. eBay will deliver the same order notification twice if your endpoint was slow to acknowledge. Amazon's notifications are explicitly at-least-once. With that constraint, a replayed webhook produces a unique violation, which you catch and ignore. Without it, you decrement stock twice and now your numbers are wrong in a way that reconciliation will paper over and nobody will ever explain.</p>
+
+        <h2>6. Buffers: The Blunt Instrument That Works</h2>
+
+        <p>A buffer means telling a channel you have fewer units than you do. Ten in the warehouse, publish seven to eBay, keep three as absorption for the propagation window.</p>
+
+        <p>It is crude, it costs you sales, and it is the single most effective oversell prevention available for multi-quantity channels. I recommend it constantly and I'm always slightly embarrassed doing so, because it's admitting the sync isn't fast enough rather than making it fast enough. But the sync is never fast enough, because the propagation delay isn't yours to fix.</p>
+
+        <p>The buffer should not be a flat number. A flat buffer of three is enormous on a SKU with four units and negligible on one with four hundred.</p>
+
+        <pre><code class="language-javascript">// Buffer scales with how fast the SKU sells and how slow the channel is.
+// velocity = units sold per hour over the trailing 7 days
+function bufferFor(channel, sku, onHand, velocity) {
+  // How long, realistically, between us learning of a sale and the
+  // other channels reflecting it. Measured, not guessed.
+  const propagationHours = {
+    shopify: 0.02,   // ~1 minute, we control it
+    ebay:    0.08,   // ~5 minutes p95 observed
+    amazon:  0.25,   // ~15 minutes p95 for feed processing
+    depop:   0.17    // ~10 minutes via our integrator
+  }[channel] ?? 0.25;
+
+  // Expected sales during the blind window, rounded up.
+  const exposure = Math.ceil(velocity * propagationHours);
+
+  // Never buffer a one-of-one into oblivion, and never buffer more
+  // than a fifth of the pool away from a healthy SKU.
+  if (onHand &lt;= 2) return 0;
+  return Math.min(exposure, Math.floor(onHand * 0.2), 10);
+}</code></pre>
+
+        <p>Note the <code>onHand &lt;= 2</code> escape. Buffering a SKU with two units down to one, or one down to zero, converts a small oversell risk into a guaranteed lost sale. For the one-of-one case — most of Depop — buffers are simply not a tool you have.</p>
+
+        <p>The honest tradeoff: on a client selling roughly 900 units a week across three multi-quantity channels, a velocity-scaled buffer took oversells from about eleven a month to under one, at a cost of somewhere between fifteen and twenty-five units a month of stock that showed as unavailable while sitting on a shelf. They considered that an excellent trade. A seller with thinner margins might not.</p>
+
+        <h2>7. The Race Condition You Cannot Design Away</h2>
+
+        <p>Two buyers, one item, two channels, same second. This is the case that has no clean solution, and being clear-eyed about that is more useful than pretending otherwise.</p>
+
+        <p>What you can do is make the window small and make the losing case handled gracefully.</p>
+
+        <p>Small window: event-driven push, and delisting rather than zeroing where the channel supports it. Setting quantity to zero on eBay leaves the listing findable and, on some listing types, buyable again the moment your next sync gets confused. Ending the listing is unambiguous.</p>
+
+        <pre><code class="language-javascript">// For one-of-one stock, don't set quantity 0 — end the listing.
+// Fire all channels in parallel; a sequential loop means the fourth
+// channel learns about the sale four round trips late.
+async function itemSold(sku, winningChannel) {
+  const listings = await activeListings(sku);
+  const others = listings.filter(l =&gt; l.channel !== winningChannel);
+
+  const results = await Promise.allSettled(
+    others.map(l =&gt; withTimeout(endListing(l), 4000))
+  );
+
+  // Anything that failed goes to a retry queue with backoff. It does
+  // NOT block the response — the sale already happened.
+  results.forEach((r, i) =&gt; {
+    if (r.status === 'rejected') {
+      queue.publish('channel.delist.retry', {
+        listing: others[i],
+        attempt: 1,
+        reason: String(r.reason)
+      });
+    }
+  });
+}</code></pre>
+
+        <p><code>Promise.allSettled</code> rather than <code>Promise.all</code> is deliberate. With <code>all</code>, one channel timing out means you never find out whether the other two succeeded, and you retry all three. With <code>allSettled</code> you retry only what failed.</p>
+
+        <p>Graceful losing case: when you do oversell, the response matters more than the incident. Detect it within minutes, not at the next day's picking round. Contact the buyer before they contact you. Offer something concrete rather than an apology. On Depop specifically, a message within the hour that offers a refund plus a discount on anything else in the shop converts a one-star review into no review at all a meaningful proportion of the time. That's not engineering, but it's the part that protects the account, and the engineering exists to make it possible.</p>
+
+        <h2>8. Listing Sync Is A Different Problem To Inventory Sync</h2>
+
+        <p>Teams conflate these and then build one pipeline that does both badly.</p>
+
+        <p>Inventory sync is high-frequency, low-payload, latency-critical and idempotent. One number, pushed often, where being late is the only real failure.</p>
+
+        <p>Listing sync is low-frequency, high-payload, latency-tolerant and full of channel-specific transformation. Title limits, category taxonomies, image count and aspect ratio rules, required attributes that differ per category, prohibited-word lists.</p>
+
+        <p>Run them as separate pipelines with separate queues and separate rate-limit budgets. If they share a queue, a bulk listing update of 4,000 products will starve your inventory pushes for twenty minutes, which is precisely the failure mode you built the event system to avoid.</p>
+
+        <pre><code class="language-javascript">// Separate transport, separate priority, separate budget.
+const queues = {
+  inventory: new Queue('inv',  { concurrency: 8, rateLimit: 'high' }),
+  listings:  new Queue('list', { concurrency: 2, rateLimit: 'low'  }),
+  orders:    new Queue('ord',  { concurrency: 4, rateLimit: 'high' })
+};
+
+// Listing pushes yield to inventory pushes when the shared API
+// budget gets tight. Inventory correctness beats catalogue freshness.
+queues.listings.pause = () =&gt; rateLimiter.remaining('ebay') &lt; 200;</code></pre>
+
+        <p>That last rule — listings yield to inventory when the budget is low — is one I'd hold firmly. A stale product description costs nothing. A stale quantity costs a refund and a rating.</p>
+
+        <h2>9. Taxonomy And Attribute Mapping</h2>
+
+        <p>This is the unglamorous work that consumes sixty percent of the project timeline and appears in none of the estimates.</p>
+
+        <p>Your internal catalogue says a product is a "Women's Denim Jacket, Size 12, Blue, Levi's, 1990s". eBay wants a leaf category id, a set of item specifics with names it dictates, and a condition code. Amazon wants a browse node, a product type definition with dozens of required and conditional attributes, and probably a GTIN you don't have for a vintage item. Depop wants a much simpler set — category, size, brand, condition — but its size taxonomy doesn't map cleanly to anyone else's because it mixes UK sizes, US sizes and letter sizes in one list.</p>
+
+        <p>Build the mapping as data, not code. A table per channel, versioned, editable by the merchandising team without a deploy.</p>
+
+        <pre><code class="language-sql">CREATE TABLE channel_attribute_map (
+  channel        TEXT NOT NULL,
+  internal_field TEXT NOT NULL,   -- 'size', 'colour', 'condition'
+  internal_value TEXT NOT NULL,   -- 'UK 12'
+  external_field TEXT NOT NULL,   -- 'Size' / 'size_name'
+  external_value TEXT NOT NULL,   -- 'UK 12' / '12' / 'M'
+  category_scope TEXT,            -- some maps only apply within a category
+  PRIMARY KEY (channel, internal_field, internal_value, category_scope)
+);
+
+-- The query that matters: which mappings are missing?
+-- Run this before every bulk publish, not after it fails.
+SELECT DISTINCT p.size
+FROM product p
+LEFT JOIN channel_attribute_map m
+  ON m.channel = 'depop'
+ AND m.internal_field = 'size'
+ AND m.internal_value = p.size
+WHERE m.external_value IS NULL
+  AND p.status = 'active';</code></pre>
+
+        <p>That last query is the difference between a controlled rollout and a Monday morning of 400 listing rejections. Validate mappings exist before you publish. Marketplaces reject listings asynchronously and often with error text that means nothing, and tracing "error 21916584" back to a missing size mapping is an afternoon you don't need to spend.</p>
+
+        <h2>10. Rate Limits, Backoff, And The Budget You Should Be Watching</h2>
+
+        <p>Every marketplace meters you differently and none of them meter you generously.</p>
+
+        <p>eBay allocates daily call quotas per API and per application, with the useful property that you can query your remaining allowance. Amazon's Selling Partner API uses a token bucket per operation with a restore rate, and returns the state in response headers. Depop, through an integrator, gives you whatever the integrator gives you, which is usually less than you'd like and rarely documented.</p>
+
+        <p>Track spend as a first-class metric. Not as a log line — as a gauge on a dashboard with an alert at seventy percent.</p>
+
+        <pre><code class="language-javascript">// Token bucket that reads the marketplace's own headers rather than
+// guessing. Guessing is how you get banned during a promotion.
+class ChannelLimiter {
+  constructor(channel, floor = 100) {
+    this.channel = channel;
+    this.remaining = Infinity;
+    this.resetAt = 0;
+    this.floor = floor;          // reserve for order ingestion
+  }
+
+  observe(headers) {
+    const r = headers.get('x-ratelimit-remaining');
+    if (r != null) this.remaining = Number(r);
+    const reset = headers.get('x-ratelimit-reset');
+    if (reset) this.resetAt = Number(reset) * 1000;
+    metrics.gauge('marketplace.quota.remaining',
+                  this.remaining, { channel: this.channel });
+  }
+
+  // Low-priority work stops well before the quota is actually gone.
+  canSpend(priority) {
+    if (priority === 'critical') return this.remaining &gt; 0;
+    return this.remaining &gt; this.floor;
+  }
+}</code></pre>
+
+        <p>On backoff: retry with exponential delay and jitter, and treat 429 differently to 5xx. A 429 with a <code>Retry-After</code> header is an instruction, and ignoring it to retry after your own computed delay is how an application gets throttled harder. A 5xx is the marketplace having a bad time and you should back off aggressively because so is everyone else, which is exactly when a thundering herd of synchronised retries makes it worse. Jitter is not optional.</p>
+
+        <h2>11. Order Ingestion, Deduplication And Ordering</h2>
+
+        <p>Orders flow the other way, and they bring their own problems.</p>
+
+        <p>Every channel will deliver you the same order more than once eventually. Webhook retries, a resync after an outage, an operator clicking "reimport". Your ingestion has to be idempotent on the marketplace's order id, and that has to be enforced at the database level rather than by an <code>if (exists)</code> check, because two workers will run that check simultaneously and both will find nothing.</p>
+
+        <pre><code class="language-sql">-- Enforced in the schema. Application-level checks race; this doesn't.
+CREATE TABLE marketplace_order (
+  id              BIGSERIAL PRIMARY KEY,
+  channel         TEXT NOT NULL,
+  external_id     TEXT NOT NULL,
+  external_status TEXT NOT NULL,
+  -- Monotonic sequence from the channel where one exists. Used to
+  -- reject out-of-order status updates instead of applying them.
+  external_seq    BIGINT,
+  payload         JSONB NOT NULL,
+  received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (channel, external_id)
+);</code></pre>
+
+        <pre><code class="language-javascript">// Insert-or-ignore, then only advance status if the update is newer.
+async function ingestOrder(channel, order) {
+  const res = await db.query(`
+    INSERT INTO marketplace_order (channel, external_id, external_status,
+                                   external_seq, payload)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (channel, external_id) DO UPDATE
+      SET external_status = EXCLUDED.external_status,
+          payload         = EXCLUDED.payload
+      -- The guard: a replayed older webhook changes nothing.
+      WHERE marketplace_order.external_seq IS NULL
+         OR EXCLUDED.external_seq &gt; marketplace_order.external_seq
+    RETURNING (xmax = 0) AS inserted`,
+    [channel, order.id, order.status, order.seq ?? null, order]);
+
+  // Only decrement stock when the row was genuinely new.
+  if (res.rows[0]?.inserted) {
+    await recordSale(channel, order);
+  }
+}</code></pre>
+
+        <p>The <code>xmax = 0</code> trick tells you whether Postgres inserted or updated, which is what you need to decide whether to touch inventory. It's obscure and it works.</p>
+
+        <p>Out-of-order status updates are the subtler problem. A "shipped" webhook arriving before the "paid" webhook it supersedes is common when a marketplace retries the earlier one after a delay. Without a sequence guard you'll flip an order back from shipped to paid and confuse your fulfilment team, who will then ship it twice.</p>
+
+        <h2>12. Returns, Cancellations And Restocking</h2>
+
+        <p>The reverse flow gets built last and tested least, and it's responsible for more slow-burning inventory drift than the forward flow.</p>
+
+        <p>A cancellation before dispatch should return stock to the pool immediately. A return after dispatch should not — the item is in a van, or a sorting office, or a customer's hallway, and putting it back into available stock creates a phantom unit that will be oversold. Restock on physical receipt and inspection, not on the return being authorised.</p>
+
+        <p>That sounds obvious and roughly half the integrations I've reviewed get it wrong, usually because the marketplace's return webhook fires at authorisation and the developer wired the obvious event to the obvious action.</p>
+
+        <pre><code class="language-javascript">// Returns move through states. Only one of them touches availability.
+const RETURN_TRANSITIONS = {
+  requested:  () =&gt; {},                       // nothing
+  authorised: () =&gt; {},                       // still nothing
+  in_transit: () =&gt; {},                       // still nothing
+  received:   (r) =&gt; markAwaitingInspection(r),
+  // Grading matters: a damaged vintage item does not go back on Depop.
+  graded_sellable:   (r) =&gt; restock(r.sku, 1, 'return-sellable'),
+  graded_damaged:    (r) =&gt; writeOff(r.sku, 1, 'return-damaged'),
+  graded_secondgrade:(r) =&gt; restock(r.sku, 1, 'return-b-grade', 'outlet')
+};</code></pre>
+
+        <p>The last line matters for apparel resellers specifically. A returned garment often can't go back to the same listing, because the listing photographed a specific item in a specific condition. It goes to an outlet channel or gets relisted with new photos. Modelling that as "restock to a different location" rather than "restock" keeps the numbers honest.</p>
+
+        <h2>13. Reconciliation: The Nightly Truth</h2>
+
+        <p>However good the event pipeline, the numbers drift. A webhook was lost. A worker crashed mid-flight. Someone edited a quantity in a marketplace's own admin UI, which people absolutely do and which generates no event you'll see.</p>
+
+        <p>So you reconcile. Every night, pull every channel's current view of quantity, compare with yours, and produce a report of disagreements.</p>
+
+        <p>What matters is what you do with the disagreements, and the answer is not "automatically correct them all". An automatic correction that pushes your number to a channel is fine when your number is higher. When the channel's number is <em>lower</em> than yours, that often means a sale you haven't ingested, and overwriting it upward will cause an oversell. Direction matters.</p>
+
+        <pre><code class="language-javascript">async function reconcile(channel) {
+  const [theirs, ours] = await Promise.all([
+    fetchAllChannelQuantities(channel),   // paginated, slow, run off-peak
+    internalAvailability()
+  ]);
+
+  const report = [];
+  for (const [sku, theirQty] of theirs) {
+    const ourQty = ours.get(sku) ?? 0;
+    if (theirQty === ourQty) continue;
+
+    if (theirQty &gt; ourQty) {
+      // They think there's more than there is. Always safe to correct
+      // downward, and this is the oversell-causing direction.
+      await pushQuantity(channel, sku, ourQty);
+      report.push({ sku, theirQty, ourQty, action: 'corrected-down' });
+    } else {
+      // They think there's less. Could be an unlogged sale. Do NOT
+      // push up automatically — flag it for a human.
+      report.push({ sku, theirQty, ourQty, action: 'flagged-review' });
+    }
+  }
+  await emailReport(channel, report);
+  metrics.gauge('reconcile.drift', report.length, { channel });
+  return report;
+}</code></pre>
+
+        <p>Track the count of discrepancies as a metric over time. It's the single best health indicator for a sync system. A steady two or three a night is normal noise. A jump to forty means something broke yesterday and you have until tomorrow's promotion to find it.</p>
+
+        <h2>14. Build Or Buy</h2>
+
+        <p>I'll give you my actual opinion rather than a balanced table, because the balanced table is what every vendor comparison page already is.</p>
+
+        <p>If you sell on three or fewer channels, under roughly 500 orders a month, with a fairly standard catalogue: buy. Linnworks, Codisto, Sellbrite, ChannelAdvisor at the enterprise end. The engineering cost of building this properly is three to five months of a good developer, and the maintenance cost is permanent because marketplace APIs change under you without asking. That is not worth it to avoid a few hundred pounds a month.</p>
+
+        <p>If you have unusual inventory semantics — one-of-one items, made-to-order, bundles that decompose into components, serialised stock, multi-location allocation — build the inventory core yourself and use connectors for transport. The off-the-shelf tools are built around a quantity-per-SKU model and every one of those semantics fights it. I've watched a client spend nine months trying to express a bundle-decomposition rule in a channel manager's configuration UI before accepting that the tool could not represent the thing.</p>
+
+        <p>If you have volume and margin — thousands of orders a month, and enough gross profit that a two percent oversell rate is real money — build. At that point you want the control, and you can afford the team.</p>
+
+        <p>The middle path that I've seen work best: buy the connectors, own the truth. Let a third party handle the grim reality of eBay's Trading API and Amazon's feed processing, but keep the availability ledger, the allocation logic and the reconciliation in your own system. You get out of the API-maintenance business without giving up the ability to express what your business actually does. The general shape of that argument — own the parts that encode your business rules, rent the parts that are commodity plumbing — applies well beyond marketplaces, and shows up again in <a href="/blog/enterprise-erp-systems-ecommerce/">ERP integration work</a>.</p>
+
+        <h2>15. Allocation: Which Channel Gets The Last One</h2>
+
+        <p>Once stock is scarce, publishing the same number everywhere is not the only option, and often not the best one.</p>
+
+        <p>Allocation means deciding, per SKU, how the available pool is divided between channels. Twelve units, four to eBay, four to Depop, four to your own store. It eliminates cross-channel contention entirely at the cost of stranding stock in a channel that isn't selling it.</p>
+
+        <p>It is worth doing when your channels have genuinely different margins — and they do. A sale on your own Shopify store keeps close to full margin. eBay takes a final value fee in the region of twelve to fifteen percent depending on category. Depop's fee structure has changed more than once and is worth checking against current rates rather than what you remember. Amazon's referral fee plus FBA costs can be a third of the sale price.</p>
+
+        <p>So a naive equal split is leaving money on the table. A margin-weighted allocation with a floor for each channel does better.</p>
+
+        <pre><code class="language-javascript">// Weight by contribution margin, floor at 1 so no channel goes dark,
+// and hold back a reserve for the direct store where margin is best.
+function allocate(onHand, channels) {
+  if (onHand &lt;= channels.length) {
+    // Too few to split. Give them all to the highest-margin channel
+    // and delist elsewhere; contention is worse than concentration.
+    const best = channels.reduce((a, b) =&gt; a.margin &gt; b.margin ? a : b);
+    return Object.fromEntries(
+      channels.map(c =&gt; [c.name, c === best ? onHand : 0])
+    );
+  }
+
+  const totalWeight = channels.reduce((s, c) =&gt; s + c.margin * c.velocity, 0);
+  const alloc = {};
+  let assigned = 0;
+
+  for (const c of channels) {
+    const share = Math.max(1, Math.floor(
+      onHand * (c.margin * c.velocity) / totalWeight));
+    alloc[c.name] = share;
+    assigned += share;
+  }
+  // Remainder to the best channel rather than round-robin.
+  const best = channels.reduce((a, b) =&gt; a.margin &gt; b.margin ? a : b);
+  alloc[best.name] += onHand - assigned;
+  return alloc;
+}</code></pre>
+
+        <p>I would not start here. Allocation adds a whole layer of policy that someone has to own and tune, and for most sellers a shared pool with buffers outperforms a badly-tuned allocation. Reach for it when you have evidence that cross-channel contention is costing you more than stranded stock would.</p>
+
+        <h2>16. Observability: What To Put On The Wall</h2>
+
+        <p>A sync system that fails silently is worse than no sync system, because people trust it. Four numbers I'd want visible.</p>
+
+        <p><strong>Propagation latency, per channel, p95.</strong> Time from an inventory event being published to the channel's API confirming the write. This is the number your buffer sizes depend on, and it moves — marketplaces get slower under seasonal load, which is exactly when your buffers need to be bigger.</p>
+
+        <p><strong>Oversell count, daily.</strong> Defined as orders accepted for a SKU whose available quantity was already zero or negative. This is the metric the business cares about and the only one worth waking someone up for.</p>
+
+        <p><strong>Reconciliation drift, nightly.</strong> Count of SKUs where your number and the channel's number disagreed. Trend it. A rising baseline means the event path is degrading before it fails outright.</p>
+
+        <p><strong>API quota headroom, per channel.</strong> Percentage of daily allowance remaining at each hour. Alert at seventy percent consumed, not at ninety-five, because by ninety-five you have no room to react.</p>
+
+        <pre><code class="language-javascript">// The alert that actually matters. Everything else is a dashboard.
+async function checkOversellRate() {
+  const { rows } = await db.query(`
+    SELECT channel, COUNT(*) AS n
+    FROM marketplace_order o
+    JOIN oversell_flag f ON f.order_id = o.id
+    WHERE o.received_at &gt; now() - interval '1 hour'
+    GROUP BY channel`);
+
+  for (const r of rows) {
+    // One is noise. Three in an hour means the pipeline is broken.
+    if (r.n &gt;= 3) {
+      await page('marketplace-sync',
+        `${r.n} oversells on ${r.channel} in the last hour`);
+    }
+  }
+}</code></pre>
+
+        <h2>17. A Worked Example</h2>
+
+        <p>Same Manchester reseller, six months after the Black Friday incident. Roughly 6,000 active listings, 78% one-of-one vintage, four channels, about 1,400 orders a month.</p>
+
+        <p><strong>Starting point.</strong> Fifteen-minute polling from a channel manager. Oversell rate 2.9% of orders — around forty a month. Depop rating 4.6. Two staff spending an estimated six hours a week manually cross-checking listings.</p>
+
+        <p><strong>What we built.</strong> A Postgres ledger as the source of truth. Shopify webhooks and the channel manager's order feed both writing movements. An event bus fanning out to delist workers. Nightly reconciliation. Roughly eleven weeks of work for one developer plus my time.</p>
+
+        <p><strong>Month one after launch.</strong> Oversell rate 0.7%. Propagation p95 down from a fifteen-minute worst case to 9 seconds on Shopify, 46 seconds on eBay, and — this was the disappointment — 4 minutes 20 on Depop, because the integrator batched delist calls on a two-minute cycle we couldn't influence.</p>
+
+        <p><strong>Month three.</strong> Oversell rate 0.3%. Depop rating back to 4.8. The manual cross-checking stopped entirely, which the owner valued more than the oversell reduction because it was six hours a week of a person's actual life.</p>
+
+        <p><strong>What went wrong along the way.</strong> Two things worth reporting honestly.</p>
+
+        <p>We introduced a regression in week six that was worse than the original problem. The delist worker treated a 404 from eBay as a retryable error. eBay returns 404 for a listing that has already ended — which is the normal case when two of our workers both handled the same sale. So every concurrent sale generated a retry storm, and we burned through 80% of the daily eBay quota by 10am on a Tuesday. Order ingestion then failed for four hours because it had no quota left, which is how we learned that the quota floor for critical operations needed to be reserved rather than shared. That reserved floor in the limiter above exists because of that Tuesday.</p>
+
+        <p>And the Depop latency never got better. We tried three integrators and the best of them was two minutes at p95. For a one-of-one catalogue, two minutes is a real exposure window and we could not close it. The mitigation was operational rather than technical: they stopped listing their highest-value pieces on more than one channel at a time. About 400 items, listed exclusively on whichever channel historically sold that category best. Oversell risk on those went to zero because contention went to zero. I would have preferred an engineering answer. Sometimes the answer is that the constraint is real and you route around it.</p>
+
+        <h2>18. What Goes Wrong</h2>
+
+        <p><strong>Treating an API 200 as confirmation the listing changed.</strong> It confirms receipt. Poll back, or subscribe to the channel's own change notification, if the difference matters.</p>
+
+        <p><strong>Echo loops.</strong> Channel A reports a sale, you push to B, B's integration reports a change, you push back to A. Tag every event with its origin channel and never fan out to the source.</p>
+
+        <p><strong>Application-level idempotency checks.</strong> "Select then insert" races. Use a unique constraint.</p>
+
+        <p><strong>Restocking on return authorisation.</strong> The item isn't back. Restock on receipt and grading.</p>
+
+        <p><strong>Sharing a rate-limit budget between bulk listing work and inventory pushes.</strong> The bulk work will starve the urgent work at the worst possible moment.</p>
+
+        <p><strong>Reconciling by overwriting in both directions.</strong> Correct downward automatically, flag upward for a human. The upward case is usually an order you haven't seen.</p>
+
+        <p><strong>No dead letter queue.</strong> Failed channel updates that vanish are invisible drift. Every failure should land somewhere a person eventually looks.</p>
+
+        <p><strong>Testing only the happy path.</strong> The interesting cases are duplicate webhooks, out-of-order status updates, a channel returning 503 for twenty minutes, and two sales in the same second. If your test suite has none of those, it tests nothing that will actually happen.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"How fast does sync actually need to be?"</strong> Work backwards from your arrival rate. If a SKU sells four times an hour, a five-minute window gives roughly a one-in-three chance of a contested sale during any given window. If it sells four times a month, fifteen minutes is fine. Compute exposure per SKU rather than picking an interval that feels responsive.</p>
+
+        <p><strong>"Can I just use a channel manager and skip all this?"</strong> For a straightforward catalogue, yes, and you probably should. The argument for building starts when your inventory semantics don't fit a quantity-per-SKU model, or when the volume makes the oversell rate expensive enough to fund a team.</p>
+
+        <p><strong>"What's an acceptable oversell rate?"</strong> Under 0.5% of orders is achievable with event-driven sync and buffers. Under 0.1% needs either allocation or single-channel exclusivity on contested items. Zero is not achievable across channels you don't control, and any vendor claiming otherwise is describing a buffer and calling it magic.</p>
+
+        <p><strong>"Should stock live in the ERP or the ecommerce platform?"</strong> Wherever the physical count is maintained, which is usually the ERP or WMS. What matters more is that exactly one system owns it and everything else derives. Two systems that both think they own stock will disagree, and the disagreement will surface as an oversell.</p>
+
+        <p><strong>"Does this change with fulfilment by the marketplace?"</strong> Substantially. If units are physically in FBA, that's a separate location the marketplace controls and reports on, not part of your sellable pool. Model it as its own location with its own movements. Trying to treat FBA stock as part of a shared pool is a recurring source of phantom availability.</p>
+
+        <p><strong>"How do I test this without risking real listings?"</strong> eBay and Amazon both have sandboxes, and both sandboxes behave differently to production in ways that will surprise you. Use them for shape and contract testing. For behaviour, use a small set of genuinely listed low-value items in production and accept that as a cost. Depop, via an integrator, will typically give you a test account only if you ask specifically.</p>
+
+        <p><strong>"Is webhook or polling better for order ingestion?"</strong> Both. Webhooks for latency, a polling sweep every fifteen minutes for the ones the webhook lost. Marketplaces lose webhooks and none of them will tell you they did.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>If you're staring at a channel setup that oversells and you don't know where to start, this is the order.</p>
+
+        <p>Measure your actual oversell rate for the last ninety days. Orders where available stock was already zero, divided by total orders, split by channel. Most sellers do not know this number, and it decides whether any of the rest is worth doing. Under half a percent and your time is better spent elsewhere.</p>
+
+        <p>Then measure propagation latency per channel. Change a quantity, poll the listing until it reflects, record the delta. Do it twenty times per channel at different times of day. That distribution is the input to every other decision here, and it takes an afternoon.</p>
+
+        <p>Then put a unique constraint on your order ingestion if there isn't one. It is one migration and it eliminates an entire category of silent corruption.</p>
+
+        <p>Then switch from polling to event-driven push on the highest-velocity channel only. Not all of them. One, so you can attribute the change, and so the blast radius of getting it wrong is one channel rather than four.</p>
+
+        <p>Then add nightly reconciliation with the downward-only auto-correction. This gives you the drift metric, and the drift metric is what tells you whether everything else is working.</p>
+
+        <p>Then, if you still have contention on specific items, consider exclusivity before you consider allocation. Listing a one-of-one piece on a single channel is a five-minute decision that removes the race entirely, and for high-value items it's frequently the right answer even though it feels like a retreat.</p>
+
+        <p>The thing I'd want you to take from the Manchester story isn't the architecture. It's that their system worked perfectly for eighteen months and then failed on the day that mattered, because the assumption underneath it was about timing and nobody had written the assumption down. Every sync system has one of those. Find yours, write it on the wall, and check once a quarter whether it's still true.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/event-driven-architecture/">Event-Driven Architecture for E-Commerce: Kafka & Webhooks</a></strong>
+              <strong><a href="/blog/event-driven-architecture/">Event-Driven Architecture for E-Commerce: Kafka &amp; Webhooks</a></strong>
               <p>Asynchronous event stream processing.</p>
             </li>
             <li>
-              <strong><a href="/blog/square-point-of-sale-pos-integration/">Square POS Integration for Retail & Ecommerce Synchronization</a></strong>
+              <strong><a href="/blog/square-point-of-sale-pos-integration/">Square POS Integration for Retail &amp; Ecommerce Synchronization</a></strong>
               <p>Physical retail inventory sync.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -267,6 +815,6 @@ app.post('/webhooks/marketplace/sold', async (req, res) => {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

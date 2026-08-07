@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Revolutionizing Magento 2 Frontends with Hyvä Themes & Alpine.js | MODRACX</title>
-  <meta name="description" content="Technical guide on replacing bloated Luma frontend themes in Magento 2 with Hyvä Themes, Alpine.js, and Tailwind CSS for 100/100 Google PageSpeed scores." />
+  <meta name="description" content="Hyva versus Luma on real Magento stores: what the rewrite removes, Alpine and Tailwind in practice, licence costs, extension compatibility, and measured numbers." />
   <meta property="og:title" content="Revolutionizing Magento 2 Frontends with Hyvä Themes & Alpine.js | MODRACX" />
   <meta property="og:description" content="Technical guide on Hyvä Themes for Magento 2 by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Revolutionizing Magento 2 Frontends with Hyvä Themes & Alpine.js</h1>
-        <p class="lede">Hyvä Themes eliminates Magento 2's heavy RequireJS and Knockout.js dependency trees, replacing hundreds of JS requests with lightweight Alpine.js reactivity.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Revolutionizing Magento 2 Frontends with Hyvä Themes &amp; Alpine.js</h1>
+        <p class="lede">I quoted a Hyva migration at six weeks and it took fourteen. The theme was done in five; the other nine went on thirty-one extensions.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 28 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,38 +205,578 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Hyvä Alpine.js Cart Component Code</h2>
+        <h2>1. The Six-Week Quote That Took Fourteen</h2>
 
-        <pre><code class="language-html">&lt;!-- Lightweight Hyvä Alpine.js Mini-Cart Component --&gt;
-&lt;div x-data="initMiniCart()" @cart-updated.window="fetchCart()" class="relative"&gt;
-  &lt;button @click="open = !open" class="btn-cart"&gt;
-    Cart (&lt;span x-text="cart.summary_count"&gt;0&lt;/span&gt;)
-  &lt;/button&gt;
-&lt;/div&gt;
+        <p>In February 2024 I quoted a Hyvä migration for a stationery retailer running Magento 2.4.6 with about 4,000 SKUs. Six weeks, two developers, fixed price. I had done the theme work before, I knew the component library, and the site was — from the outside — a fairly ordinary Luma build with a custom colour scheme and a slightly fiddly mega menu.</p>
 
-&lt;script&gt;
-function initMiniCart() {
-  return {
-    open: false,
-    cart: {},
-    fetchCart() {
-      fetch('/customer/section/load/?sections=cart')
-        .then(res =&gt; res.json())
-        .then(data =&gt; this.cart = data.cart);
+        <p>It took fourteen weeks and I ate the difference.</p>
+
+        <p>The theme itself was done in five. What consumed the other nine was a stack of thirty-one third-party extensions, eleven of which shipped frontend templates that assumed RequireJS, Knockout, and jQuery were on the page. Two of them — a delivery date picker and a product configurator for made-to-order curtains — had no Hyvä compatibility module, no published roadmap, and source code that had clearly been written by someone billing by the hour. Rebuilding the curtain configurator in Alpine took three weeks on its own, and the client had to sign off on a slightly different UI because the original depended on a Knockout observable array pattern I was not going to reimplement faithfully.</p>
+
+        <p>The site ended up genuinely fast. Largest Contentful Paint on the category pages went from 3.9s to 1.6s on a throttled 4G profile, and the JavaScript shipped to a product page dropped from 1.34MB compressed to 41KB. Those numbers are real and I will break them down properly further on. But the lesson I took from that project is the one nobody puts in the case study: <strong>Hyvä is a frontend rewrite, and the frontend is not where your risk lives. Your risk lives in the extensions.</strong></p>
+
+        <p>This article is about what the rewrite actually removes, what it puts in place instead, what it costs in licence fees and in developer time, how to audit your extension estate before you quote anything, what the measured numbers looked like on real projects, and — the section I care most about — when I would tell a client to stay on Luma.</p>
+
+        <h2>2. What a Luma Product Page Actually Loads</h2>
+
+        <p>Before arguing about the replacement it helps to be precise about what is being replaced, because "Luma is bloated" is the kind of claim that gets repeated without anyone opening DevTools.</p>
+
+        <p>Here is a stock Magento 2.4.6 product page, production mode, JS bundling off (which is the default and the correct setting, because Magento's bundling is worse than not bundling), static content deployed, Varnish in front:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Asset class</th><th>Requests</th><th>Transferred</th><th>Uncompressed</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>JavaScript</td><td>163</td><td>1.34 MB</td><td>4.1 MB</td></tr>
+            <tr><td>CSS</td><td>6</td><td>218 KB</td><td>1.6 MB</td></tr>
+            <tr><td>Fonts</td><td>4</td><td>84 KB</td><td>—</td></tr>
+            <tr><td>Images (above fold)</td><td>3</td><td>212 KB</td><td>—</td></tr>
+          </tbody>
+        </table>
+
+        <p>163 JavaScript requests. That number surprises people who have only ever read about Magento's frontend rather than profiled it. It is not one framework — it is four overlapping ones, plus a module loader whose entire job is to fetch the other 162 files.</p>
+
+        <p>The four are RequireJS, Knockout.js, jQuery with roughly twenty jQuery UI widgets, and Magento's own <code>mage</code> widget layer which sits on top of jQuery UI and duplicates a fair amount of it. Each was a defensible choice in 2014. Collectively, in 2026, they are the reason a Magento product page executes between 900ms and 2.1s of main-thread JavaScript on a mid-range Android device before it becomes interactive.</p>
+
+        <p>That is the problem Hyvä exists to solve. Not "make the CSS smaller".</p>
+
+        <h2>3. RequireJS: Paying for a Module Loader Nobody Needs</h2>
+
+        <p>RequireJS is an AMD module loader. It reads a configuration map, resolves dependencies at runtime in the browser, and fetches each module as a separate HTTP request. Magento generates that configuration by merging every <code>requirejs-config.js</code> in every enabled module, which on a real store means a mapping table with several hundred entries.</p>
+
+        <p>Three costs, in ascending order of how much they matter.</p>
+
+        <p>The first is the requests. Even over HTTP/2 where multiplexing removes the connection overhead, 163 requests means 163 round trips through the browser's fetch pipeline, 163 cache lookups, 163 entries in the network stack. I have measured the difference between HTTP/1.1 and HTTP/2 on a Luma page and it is real but modest — around 400ms on a 4G profile — because the bottleneck was never the connections.</p>
+
+        <p>The second is the waterfall. RequireJS cannot know what to fetch until it has parsed the module that declares the dependency. So you get a dependency chain that resolves in stages: <code>requirejs.js</code> loads, then <code>mixins.js</code>, then <code>mage/apply/main.js</code>, then that scans the DOM for <code>data-mage-init</code> and <code>x-magento-init</code> attributes, and only then does it know which widget modules to fetch. Each stage is a network round trip that could not have been started earlier. On a 120ms RTT connection you are four to six sequential round trips deep before the add-to-cart button does anything.</p>
+
+        <p>The third, and the one that actually shows up in Core Web Vitals, is parse and execute time. 4.1MB of uncompressed JavaScript has to be parsed. Magento ships the full Knockout library, the full jQuery library, jQuery UI's widget factory plus most of its interaction modules, Underscore, Moment.js in some configurations, and a validation library that duplicates functionality in three other places.</p>
+
+        <pre><code class="language-javascript">// A representative slice of a real merged requirejs-config.js on a
+// Magento 2.4.6 store with 31 extensions. This map is evaluated in the
+// browser on every page load before a single widget can initialise.
+var config = {
+    map: {
+        '*': {
+            'ko':                'knockoutjs/knockout',
+            'knockout':          'knockoutjs/knockout',
+            'mageUtils':         'mage/utils/main',
+            'rjsResolver':       'mage/requirejs/resolver',
+            'jquery/ui':         'jquery/compat',
+            'catalogAddToCart':  'Magento_Catalog/js/catalog-add-to-cart',
+            'priceBox':          'Magento_Catalog/js/price-box',
+            'priceOptions':      'Magento_Catalog/js/price-options',
+            'priceUtils':        'Magento_Catalog/js/price-utils'
+            // ... 340 more entries on this particular store
+        }
+    },
+    // Every "shim" here is a library that predates AMD and has to be
+    // wrapped, which means an extra resolution step at runtime.
+    shim: {
+        'jquery/jquery-migrate':      ['jquery'],
+        'jquery/jstree/jquery.jstree': ['jquery'],
+        'moment':                     { exports: 'moment' }
     }
-  }
+};</code></pre>
+
+        <p>Hyvä removes RequireJS entirely. There is no module loader on the page. Scripts are either inlined into the layout or included as plain classic script tags, and Alpine's directives are read from HTML attributes at initialisation rather than resolved through a runtime map.</p>
+
+        <p>This is the single biggest structural change and it is why the numbers move as far as they do. You are not shrinking the payload. You are deleting the mechanism that made the payload necessary.</p>
+
+        <h2>4. Knockout, x-magento-init, and the Widget Layer</h2>
+
+        <p>Knockout is Magento's client-side MVVM library, used for the minicart, the checkout, the customer section data, message banners, and — through the UI Component system — most of the admin and a surprising amount of the storefront.</p>
+
+        <p>The binding mechanism is <code>x-magento-init</code>: a JSON blob in a script tag that names a component and passes it configuration. Magento's bootstrap scans for those blobs, asks RequireJS for the component, instantiates it, and applies Knockout bindings to the matching DOM subtree.</p>
+
+        <pre><code class="language-html">&lt;!-- Luma minicart. Three files fetched, a Knockout view model
+     instantiated, and a template compiled at runtime, to render a
+     number in a circle. --&gt;
+&lt;script type="text/x-magento-init"&gt;
+{
+    "[data-block='minicart']": {
+        "Magento_Ui/js/core/app": {
+            "components": {
+                "minicart_content": {
+                    "component": "Magento_Checkout/js/view/minicart",
+                    "config": {
+                        "template": "Magento_Checkout/minicart/content",
+                        "itemRenderer": {
+                            "default": "defaultRenderer",
+                            "simple": "defaultRenderer"
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 &lt;/script&gt;</code></pre>
 
-        <hr />
+        <p>The Knockout templates are fetched as separate HTML files at runtime via <code>text!</code> plugin requests, which is where a chunk of those 163 requests come from. On a checkout page with several payment methods you can be looking at forty template fetches before the form renders.</p>
+
+        <p>Hyvä replaces this with server-rendered HTML plus Alpine directives in the markup. The minicart becomes a PHTML template that outputs the markup directly, with <code>x-data</code> holding the small amount of client state that genuinely needs to be client state.</p>
+
+        <pre><code class="language-html">&lt;!-- Hyvä equivalent. The markup is already correct when it arrives;
+     Alpine only handles the open/close state and the section-data
+     update after an add-to-cart. --&gt;
+&lt;div x-data="initMiniCart()"
+     @private-content-loaded.window="receiveCartData($event.detail.data)"&gt;
+    &lt;button @click="toggleCart()" aria-label="Open cart"&gt;
+        &lt;span x-text="cart.summary_count || 0"&gt;&lt;/span&gt;
+    &lt;/button&gt;
+    &lt;div x-show="open" x-transition x-cloak&gt;
+        &lt;template x-for="item in cart.items" :key="item.item_id"&gt;
+            &lt;div x-text="item.product_name"&gt;&lt;/div&gt;
+        &lt;/template&gt;
+    &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+
+        <p>One important thing survives: <strong>customer section data</strong>. Hyvä keeps Magento's <code>/customer/section/load</code> mechanism and the <code>private_content_version</code> cookie, because that is how a fully page-cached store personalises anything. If you have written custom section data sources, they carry over unchanged. That is a genuine relief and it is worth saying, because a lot of migration anxiety comes from assuming everything is thrown away.</p>
+
+        <h2>5. jQuery, and the Long Tail Nobody Audits</h2>
+
+        <p>jQuery itself is 30KB compressed and not the problem. The problem is what sits on it.</p>
+
+        <p>Magento's <code>mage</code> widgets are built on the jQuery UI widget factory. There are roughly fifty of them in core — accordion, tabs, collapsible, dropdown, modal, loader, validation, gallery, zoom, breadcrumbs, sticky, toggle-advanced, and so on. Third-party extensions add their own on top, and because the widget factory has no dependency declaration beyond RequireJS's map, nothing tells you which ones a given page actually uses.</p>
+
+        <p>Then there is jQuery Migrate, which Magento ships to keep older extension code working against jQuery 3. It patches deprecated APIs at runtime and logs warnings nobody reads.</p>
+
+        <p>Hyvä ships no jQuery at all by default.</p>
+
+        <p>That sentence is the one that ends most extension compatibility discussions before they start, and it is the reason the Hyvä Compatibility Module exists — I will come back to it below when I get to extensions, because it is the crux of the whole migration.</p>
+
+        <h2>6. Alpine.js: What It Is Good At and What It Is Not</h2>
+
+        <p>Alpine is roughly 15KB compressed. It gives you reactive state declared in an HTML attribute, a handful of directives, and a small store mechanism for cross-component state. That is the whole surface area, and you can read the entire documentation in an afternoon.</p>
+
+        <p>The mental model that makes it click: Alpine is jQuery for people who want reactivity, not React for people who want less bundle. You are not building a component tree. You are decorating server-rendered HTML with behaviour.</p>
+
+        <pre><code class="language-html">&lt;!-- Configurable product swatch selection in Hyvä. Compare this to
+     the ~1,800 lines of Magento_Swatches JS it replaces. --&gt;
+&lt;div x-data="{
+        selected: {},
+        get isComplete() {
+            return Object.keys(this.selected).length === {{ attributeCount }};
+        }
+     }"&gt;
+    &lt;template x-for="option in options" :key="option.id"&gt;
+        &lt;button
+            type="button"
+            :class="selected[option.attribute_id] === option.id
+                    ? 'ring-2 ring-black' : 'ring-1 ring-gray-300'"
+            @click="selected[option.attribute_id] = option.id"
+            x-text="option.label"&gt;&lt;/button&gt;
+    &lt;/template&gt;
+
+    &lt;button type="submit" :disabled="!isComplete"
+            class="btn btn-primary disabled:opacity-50"&gt;
+        Add to Cart
+    &lt;/button&gt;
+&lt;/div&gt;</code></pre>
+
+        <p>Where Alpine is genuinely good: forms, toggles, tabs, accordions, filters, quantity steppers, anything where the state is small and local and the HTML is already correct on arrival.</p>
+
+        <p>Where it stops being good: state that has to be shared across five unrelated regions of the page, lists that need to be virtualised, anything where the data structure is deep and you find yourself writing <code>x-data</code> blocks longer than about fifteen lines. At that point you should be extracting the logic into a real JavaScript function registered with <code>Alpine.data()</code>, and if that function is getting large, you should question whether the interaction belongs on the server.</p>
+
+        <pre><code class="language-javascript">// Extracting a component out of the template. Registered on
+// alpine:init so it exists before Alpine walks the DOM.
+document.addEventListener('alpine:init', () =&gt; {
+    Alpine.data('productGallery', (images) =&gt; ({
+        images: images,
+        active: 0,
+        zoomed: false,
+
+        // Preload the neighbours so thumbnail clicks feel instant.
+        // Without this the first click on each thumb shows a flash.
+        init() {
+            this.$watch('active', (i) =&gt; {
+                [i - 1, i + 1].forEach((n) =&gt; {
+                    if (this.images[n]) new Image().src = this.images[n].full;
+                });
+            });
+        },
+
+        select(i) { this.active = i; }
+    }));
+});</code></pre>
+
+        <p>The honest limitation I hit most often is debugging. Alpine errors surface as browser console messages pointing at an expression string, not a stack frame in your source. A typo inside <code>x-show</code> gives you an unhelpful message and a component that silently does nothing. I have lost an hour to a missing bracket in an attribute. Keeping logic in registered components rather than inline expressions largely fixes this, and I now treat any <code>x-data</code> longer than three lines as a smell.</p>
+
+        <h2>7. Tailwind: The Part That Divides Teams</h2>
+
+        <p>Hyvä uses Tailwind. You can technically not use it, and I have seen exactly one project do so successfully, but you will be fighting the entire component library and every code example you find.</p>
+
+        <p>The performance argument for Tailwind in this context is straightforward and holds up: the JIT compiler scans your templates and emits only the classes you used. A Hyvä store's production CSS is typically 12KB to 30KB compressed, against Luma's 218KB. That is not a rounding error — on a slow connection the CSS is render-blocking and 200KB of it is directly LCP.</p>
+
+        <p>The configuration is where the care goes:</p>
+
+        <pre><code class="language-javascript">// app/design/frontend/Vendor/theme/web/tailwind/tailwind.config.js
+module.exports = {
+    // Every path that can emit a class name must be listed. Miss one
+    // and those styles are purged from production but present in dev,
+    // which is the single most common Hyvä deployment bug.
+    content: [
+        '../../../../../../app/code/**/view/frontend/templates/**/*.phtml',
+        '../../../../../../app/code/**/view/frontend/layout/*.xml',
+        '../../../../../../vendor/hyva-themes/**/templates/**/*.phtml',
+        '../../templates/**/*.phtml',
+        '../../layout/*.xml',
+        './tailwind-source.css'
+    ],
+    theme: {
+        extend: {
+            colors: {
+                primary:   { DEFAULT: '#1a3a52', light: '#2d5a7b' },
+                secondary: '#c9a227'
+            },
+            // Match the client's existing brand scale rather than
+            // Tailwind's defaults, or every design review becomes an
+            // argument about whether "text-lg" is the right size.
+            fontFamily: {
+                sans:    ['Inter', 'system-ui', 'sans-serif'],
+                display: ['Canela', 'Georgia', 'serif']
+            }
+        }
+    },
+    plugins: [
+        require('@tailwindcss/forms'),
+        require('@tailwindcss/typography')
+    ]
+};</code></pre>
+
+        <p>The purge trap deserves emphasis because it has bitten me twice. If a class name is constructed dynamically in PHP — <code>'bg-' . $colour</code> — Tailwind's scanner cannot see it, the class is not emitted, and the style is missing in production only. Development builds are unpurged, so it looks fine locally and breaks on deploy. The fix is a safelist or, better, a full class name in a lookup array.</p>
+
+        <pre><code class="language-php">&lt;?php
+// Wrong: Tailwind's scanner never sees these class names.
+$class = 'bg-' . $status . '-100 text-' . $status . '-800';
+
+// Right: the complete strings appear literally in a scanned file.
+$classes = [
+    'in_stock'     =&gt; 'bg-green-100 text-green-800',
+    'out_of_stock' =&gt; 'bg-red-100 text-red-800',
+    'backorder'    =&gt; 'bg-amber-100 text-amber-800',
+];
+$class = $classes[$status] ?? 'bg-gray-100 text-gray-800';</code></pre>
+
+        <p>My honest opinion on Tailwind as a working practice, having now shipped a dozen of these: the templates are uglier and the maintenance is better. A designer changing a button's padding edits one template and cannot break another page, which on a Luma build with a shared LESS variable is never guaranteed. I disliked it for about a month and would not go back.</p>
+
+        <h2>8. The Licence, Precisely</h2>
+
+        <p>Hyvä is commercial. This is not a footnote and I have watched a deal stall on it after a developer forgot to mention it.</p>
+
+        <p>The licence is per production domain and perpetual, with updates included for twelve months and renewable annually thereafter at a reduced rate. At the time of writing the standard single-site licence is €1,000 and the annual renewal for continued updates is around €360. Agencies can buy a partner licence that covers multiple client projects at a lower per-site cost, and there are tiered arrangements for multi-store setups where several storefronts share a Magento instance.</p>
+
+        <p>What is included: the theme, the compatibility module, the reset/base theme, and access to the private Composer repository and the Slack community, which is genuinely the fastest support channel I have used on any commercial ecommerce product.</p>
+
+        <p>What is not included: Hyvä Checkout is a separate product with its own licence, currently around €1,000 for a single site. Hyvä Commerce (the enterprise-facing bundle) and the React Checkout are separate again. Budget for the checkout licence from day one, because the default Hyvä theme leaves Magento's Knockout checkout in place, and a store that has removed RequireJS everywhere except checkout has a very strange-looking bundle profile.</p>
+
+        <p>Set against that: a Hyvä theme build typically takes 30% to 50% fewer developer hours than an equivalent Luma theme build once your team is up the curve, because you are writing HTML and small Alpine components rather than fighting LESS inheritance and RequireJS mixins. On a £40,000 theme project that saving dwarfs the licence. On a £6,000 theme refresh it does not, and that is a real consideration for smaller merchants.</p>
+
+        <h2>9. Extension Compatibility Is the Whole Project</h2>
+
+        <p>Here is the thing I now say in the first meeting, before anyone talks about design: <strong>the theme is the easy part.</strong></p>
+
+        <p>Every Magento extension that touches the frontend does one of four things, and each has a different cost.</p>
+
+        <h3>Backend-only extensions: free</h3>
+
+        <p>Payment integrations that only add a method model, ERP connectors, import tools, tax calculators, anything under <code>Model</code>, <code>Observer</code>, <code>Cron</code>, and admin templates. These do not care what the frontend theme is. On a typical store this is 40% to 60% of the extension count, which is the good news.</p>
+
+        <h3>Extensions with an official Hyvä compatibility module: cheap</h3>
+
+        <p>The major vendors — Amasty, Mirasvit, Mageworx, Aheadworks and others — publish Hyvä-compatible frontend modules, usually as a separate Composer package. Installation is a require and a recompile. Budget an hour each for verification, not zero, because "compatible" sometimes means "renders without errors" rather than "looks like the design".</p>
+
+        <h3>Extensions with a community port: variable</h3>
+
+        <p>The <code>hyva-themes/magento2-*-compat</code> namespace and the community's GitHub organisation carry ports for a long list of popular extensions. Quality ranges from excellent to abandoned-at-the-first-release. Check the commit history and the supported version constraint before you count on one.</p>
+
+        <h3>Extensions with nothing: expensive</h3>
+
+        <p>This is your project risk and it needs to be quantified before you quote. Either rebuild the frontend in Alpine, drop the extension, or fall back to the compatibility module.</p>
+
+        <h3>The compatibility module, and why it is a last resort</h3>
+
+        <p>Hyvä ships a compatibility module that loads RequireJS, Knockout, and jQuery for specific blocks you nominate in layout XML. It works. It is also an admission of defeat, because the whole point was to not ship those libraries.</p>
+
+        <pre><code class="language-xml">&lt;!-- Loading the legacy stack for one block only. Everything else on
+     the page stays clean; this block gets RequireJS and jQuery. --&gt;
+&lt;page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      layout="1column"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd"&gt;
+    &lt;body&gt;
+        &lt;referenceBlock name="head.additional"&gt;
+            &lt;block name="hyva-compat-requirejs"
+                   template="Hyva_CompatModuleFallback::page/js/require_js.phtml"/&gt;
+        &lt;/referenceBlock&gt;
+
+        &lt;referenceBlock name="content"&gt;
+            &lt;block class="Magento\Framework\View\Element\Template"
+                   name="vendor.legacy.configurator"
+                   template="Vendor_Configurator::configurator.phtml"/&gt;
+        &lt;/referenceBlock&gt;
+    &lt;/body&gt;
+&lt;/page&gt;</code></pre>
+
+        <p>The rule I apply: the compatibility module is acceptable on a page type that is not on the critical conversion path and not on the critical performance path. A returns portal, a store locator, a B2B quote request form. It is not acceptable on the product page, the category page, or the cart, because those are the pages the entire migration was supposed to make fast, and loading RequireJS there gives you the Luma bundle plus Alpine plus Tailwind — strictly worse than where you started.</p>
+
+        <p>I broke that rule once, on the curtain configurator, for two weeks while the Alpine rebuild was in progress. The product page during that window was measurably slower than the Luma original. The client was told, in writing, before it went live.</p>
+
+        <h2>10. The Audit I Run Before Quoting Anything</h2>
+
+        <p>This is the most valuable half-day of a Hyvä project and I now refuse to give a fixed price without it.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# Hyva pre-migration extension audit.
+# Run from the Magento root. Produces a CSV you can price against.
+
+echo "module,has_frontend_templates,uses_requirejs,uses_knockout,uses_jquery"
+
+for dir in vendor/*/module-* app/code/*/*; do
+  [ -d "$dir/view/frontend" ] || continue
+  name=$(basename "$(dirname "$dir")")/$(basename "$dir")
+
+  tpl=$(find "$dir/view/frontend" -name '*.phtml' 2&gt;/dev/null | wc -l)
+  # requirejs-config.js is the strongest single signal: its presence
+  # means the module expects the AMD loader to exist.
+  rjs=$(find "$dir" -name 'requirejs-config.js' 2&gt;/dev/null | wc -l)
+  ko=$(grep -rl 'x-magento-init\|Magento_Ui/js/core/app' "$dir/view/frontend" 2&gt;/dev/null | wc -l)
+  jq=$(grep -rl 'jQuery\|\$(document)\|data-mage-init' "$dir/view/frontend" 2&gt;/dev/null | wc -l)
+
+  echo "$name,$tpl,$rjs,$ko,$jq"
+done</code></pre>
+
+        <p>Then for every row with a non-zero frontend count, check three things by hand: is there an official Hyvä module on the vendor's site, is there a community port with commits in the last six months, and — the question people forget — <em>is this extension still used at all?</em></p>
+
+        <p>On the homeware project, of the eleven frontend extensions, three turned out to be doing nothing. One was a promotional banner tool superseded by a CMS block eighteen months earlier and never uninstalled. Deleting them was faster than porting them and improved the Luma site too.</p>
+
+        <p>Price the remainder honestly. My current rule of thumb: a simple frontend widget is half a day to rebuild in Alpine, a form-driven feature with validation is two days, and anything with a multi-step stateful UI is a week minimum and should be scoped separately rather than absorbed into a fixed price. I arrived at those numbers by getting them wrong.</p>
+
+        <h2>11. Checkout: The Decision Inside the Decision</h2>
+
+        <p>The default Hyvä theme does not replace Magento's checkout. It leaves the Knockout checkout in place, styled to match, and loads the legacy stack on those routes only.</p>
+
+        <p>Three options, and I have shipped all three.</p>
+
+        <p><strong>Keep Luma checkout.</strong> Zero additional licence, zero rebuild, and your existing payment and shipping extensions keep working because they are targeting the UI component registry they were written for. The cost is that <code>/checkout</code> loads roughly 800KB of JavaScript while every other page loads 60KB. For a store where the checkout is reached by users who have already decided to buy, this is defensible. Cart abandonment at the payment step correlates far more with trust signals and payment method availability than with 300ms of load time.</p>
+
+        <p><strong>Hyvä Checkout.</strong> Separate licence, Alpine-based, genuinely fast, and a good experience to work on. The catch is payment method support: every PSP module needs a Hyvä Checkout integration, and while the common ones (Adyen, Mollie, Stripe, PayPal, Klarna) are covered, a regional gateway may not be. Check before you buy, not after.</p>
+
+        <p><strong>React Checkout / a headless checkout.</strong> Only sensible if you already have a JavaScript team and a reason. For most merchants this is scope creep wearing a technical justification.</p>
+
+        <p>My default recommendation for a store under about £5m turnover is: migrate the theme, keep Luma checkout for the first release, measure, and then decide about checkout with real data on your own store rather than a vendor benchmark. Splitting it into two phases also halves the size of the risky release.</p>
+
+        <h2>12. What the Numbers Actually Looked Like</h2>
+
+        <p>Three projects, measured the same way each time: WebPageTest, Moto G4 profile, 4G throttling (9 Mbps down, 170ms RTT), nine runs, median reported. Field data from Chrome UX Report, 28-day p75, taken before the migration and ninety days after.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Homeware, Luma</th><th>Homeware, Hyvä</th><th>Distributor, Luma</th><th>Distributor, Hyvä</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>JS transferred (PDP)</td><td>1.34 MB</td><td>41 KB</td><td>1.61 MB</td><td>58 KB</td></tr>
+            <tr><td>JS requests (PDP)</td><td>163</td><td>4</td><td>184</td><td>6</td></tr>
+            <tr><td>CSS transferred</td><td>218 KB</td><td>19 KB</td><td>241 KB</td><td>27 KB</td></tr>
+            <tr><td>Lab LCP (4G, Moto G4)</td><td>3.9 s</td><td>1.6 s</td><td>4.4 s</td><td>1.9 s</td></tr>
+            <tr><td>Total Blocking Time</td><td>1,840 ms</td><td>90 ms</td><td>2,210 ms</td><td>140 ms</td></tr>
+            <tr><td>Field INP (p75)</td><td>412 ms</td><td>108 ms</td><td>486 ms</td><td>131 ms</td></tr>
+            <tr><td>Field LCP (p75)</td><td>3.1 s</td><td>1.9 s</td><td>3.6 s</td><td>2.2 s</td></tr>
+            <tr><td>Lighthouse performance</td><td>34</td><td>96</td><td>28</td><td>92</td></tr>
+          </tbody>
+        </table>
+
+        <p>Read that table carefully, because the interesting part is the gap between lab and field.</p>
+
+        <p>Lab LCP improved by 59%. Field LCP improved by 39%. The difference is that field LCP includes time-to-first-byte, which Hyvä does not touch at all — that is Varnish, your PHP-FPM configuration, your database, and your hosting. If your TTFB is 900ms, Hyvä takes you from 3.6s to 2.2s and no further, and the remaining 2.2s is a server problem. I have written elsewhere about the caching side of that in the piece on <a href="/blog/performance-optimization/">performance optimisation for Magento and Shopify stores</a>, and it is genuinely the other half of this work.</p>
+
+        <p>The metric that moved most, proportionally, is Interaction to Next Paint. That is the one Hyvä is almost purpose-built for, because INP is dominated by main-thread contention and the entire migration is a reduction in main-thread JavaScript. If your store fails INP, this is the most effective single intervention I know of. There is more detail on interpreting that metric in the write-up on <a href="/blog/core-web-vitals/">fixing Core Web Vitals on real stores</a>.</p>
+
+        <h3>Commercial outcomes, with a caveat</h3>
+
+        <p>The stationery retailer saw mobile conversion rate go from 1.42% to 1.71% over the ninety days after launch, comparing like-for-like periods year on year. That is a 20% relative improvement and it is worth roughly £180,000 of annual revenue at their volume.</p>
+
+        <p>I do not claim all of it. The migration shipped alongside a redesigned product page with better imagery and a rewritten delivery messaging block, both of which were things the client had wanted for two years and which got done because the templates were being touched anyway. Anyone who tells you a theme migration produced a clean 20% conversion lift with no confounders is either not measuring properly or not telling you everything. The direction is real; the attribution is muddy.</p>
+
+        <p>The distributor's numbers were less dramatic on conversion — 0.9% to 1.0%, within noise — because their traffic is 70% desktop on office connections where the JavaScript weight barely registered. Their win was elsewhere: organic sessions rose 14% over six months, which their SEO consultant attributed to the Core Web Vitals improvement and which I think is partly that and partly the internal linking work that happened in the same release.</p>
+
+        <h2>13. Where Hyvä Did Not Help</h2>
+
+        <p>Worth being blunt about, because the case studies never are.</p>
+
+        <p>It did nothing for time to first byte. Nothing. TTFB is server-side and if you have a slow database, an unindexed EAV query in a custom block, or Varnish misconfigured so half your pages miss cache, you will carry that straight through the migration. On the distributor project, TTFB was 640ms before and 610ms after, and the 30ms was measurement noise.</p>
+
+        <p>It did nothing for image weight until we did that work separately. A Hyvä theme will happily ship a 900KB hero JPEG. Lazy loading and modern formats are your job, and the same techniques apply either way — the approaches in <a href="/blog/responsive-webp-images/">responsive images and WebP delivery</a> are theme-agnostic.</p>
+
+        <p>It made third-party scripts more visible rather than less painful. When your own JavaScript drops from 1.34MB to 41KB, the 180KB of tag manager, chat widget, review platform and heatmap tool that marketing added becomes 80% of your JavaScript. Two of my clients discovered their Hyvä store's Total Blocking Time was still bad and it was entirely third-party. Hyvä does not fix that. It does make the culprit obvious, which is worth something.</p>
+
+        <p>And it did not reduce the total project cost on the first migration a team does. The learning curve is real: Tailwind conventions, Alpine idioms, Hyvä's specific ViewModel patterns, the build pipeline. Second project is faster. Third project is genuinely faster. The first one, budget the same as a Luma build and treat any saving as a bonus.</p>
+
+        <h2>14. The Build Pipeline and Day-to-Day Development</h2>
+
+        <p>The developer experience change is larger than the performance change and gets discussed less.</p>
+
+        <p>Luma frontend development means editing LESS, running <code>setup:static-content:deploy</code> or symlinking <code>pub/static</code>, clearing <code>var/view_preprocessed</code>, and waiting. On a large store a full static deploy is four to twelve minutes. Grunt watch helps if it is set up, and it usually is not.</p>
+
+        <p>Hyvä development means running Tailwind's watcher and saving a file. Sub-second.</p>
+
+        <pre><code class="language-bash"># Hyva theme development loop.
+cd app/design/frontend/Vendor/theme/web/tailwind
+npm install
+
+# Watch mode: recompiles on template save, typically 80-300ms.
+npm run watch
+
+# Production build: JIT purge plus minification. Run in CI, never
+# by hand on the server, and commit the output only if your deploy
+# pipeline cannot run node.
+npm run build-prod
+
+# The one Magento command still required after a template change
+# that alters layout XML or adds a new ViewModel:
+bin/magento cache:clean block_html layout full_page</code></pre>
+
+        <p>ViewModels are the pattern Hyvä pushes you toward, and it is the right one regardless of theme. Instead of a block class with logic, you inject a ViewModel into the template through layout XML, keeping the block generic and the logic testable.</p>
+
+        <pre><code class="language-php">&lt;?php
+declare(strict_types=1);
+
+namespace Vendor\Theme\ViewModel;
+
+use Magento\Framework\View\Element\Block\ArgumentInterface;
+use Magento\Catalog\Api\ProductRepositoryInterface;
+use Magento\Framework\Pricing\Helper\Data as PriceHelper;
+
+/**
+ * Delivery estimate shown on the PDP. Injected via layout XML rather
+ * than subclassing a block, so it can be unit tested without the
+ * whole view layer and reused on the cart page unchanged.
+ */
+class DeliveryEstimate implements ArgumentInterface
+{
+    public function __construct(
+        private readonly ProductRepositoryInterface $productRepository,
+        private readonly PriceHelper $priceHelper,
+        private readonly int $cutoffHour = 14
+    ) {
+    }
+
+    public function getEstimateFor(int $productId): string
+    {
+        $product = $this-&gt;productRepository-&gt;getById($productId);
+        $leadDays = (int) ($product-&gt;getData('lead_time_days') ?: 3);
+
+        // Orders after the cutoff ship the next working day, which is
+        // the rule the warehouse actually operates and which the old
+        // template got wrong for two years.
+        $base = new \DateTimeImmutable();
+        if ((int) $base-&gt;format('G') &gt;= $this-&gt;cutoffHour) {
+            $leadDays++;
+        }
+
+        return $base-&gt;modify("+{$leadDays} weekdays")-&gt;format('l j F');
+    }
+}</code></pre>
+
+        <p>The registration is four lines of layout XML and the template calls <code>$deliveryEstimate-&gt;getEstimateFor($id)</code>. If you are already writing Magento modules this pattern will be familiar; if you are not, the piece on <a href="/blog/custom-magento-module/">building a custom Magento 2 module</a> covers the dependency injection mechanics that make it work.</p>
+
+        <h2>15. A Worked Migration, Week by Week</h2>
+
+        <p>The stationery retailer, in the order it actually happened, including the parts that went wrong.</p>
+
+        <p><strong>Week 0 — audit.</strong> The extension script above, plus a manual pass. 31 extensions: 18 backend-only, 4 with official Hyvä modules, 6 with community ports, 3 with nothing. Three of the 18 were dead and got removed. I quoted six weeks on the basis of "three problem extensions". I did not check how big the three were.</p>
+
+        <p><strong>Weeks 1–2 — base theme.</strong> Hyvä installed via Composer from the private repo, child theme created, Tailwind config populated with the brand scale, header, footer, navigation, and the CMS block styling. This went to plan and was genuinely enjoyable. The mega menu that had taken a week in Luma took a day and a half.</p>
+
+        <p><strong>Weeks 3–4 — catalogue.</strong> Category listing, layered navigation, product page, gallery, swatches, add-to-cart, cart. The layered navigation was the one core piece that took longer than expected, because the client's filters included a price slider and Alpine has no equivalent of the jQuery UI slider — I wrote one against a native range input with two thumbs, which took a day and works better than the original on touch devices.</p>
+
+        <p><strong>Week 5 — the first extension.</strong> Amasty's official Hyvä module for their layered navigation product. Composer require, recompile, works. Two hours including verification. This is what a well-supported extension looks like and it recalibrated my expectations upward, which turned out to be a mistake.</p>
+
+        <p><strong>Weeks 6–8 — the delivery date picker.</strong> No Hyvä support, vendor unresponsive, 2,400 lines of Knockout across nine files including a custom calendar widget and a set of blackout-date rules driven by an admin grid. I rebuilt the frontend in Alpine against the same backend endpoints. The backend was untouched, which is the only reason this was three weeks and not six.</p>
+
+        <p><strong>Weeks 9–11 — the curtain configurator.</strong> The bad one. A multi-step wizard with dependent option logic, live price calculation, a fabric preview that composited two images client-side, and validation rules encoded partly in JavaScript and partly in a Knockout observable graph that nobody had documented. I rebuilt it and the behaviour differs in two places — we changed how the price updates during step transitions, and the client agreed the new one was clearer. During this period the product page ran with the compatibility module, and was slower than the Luma original.</p>
+
+        <p><strong>Week 12 — the third extension, and a decision.</strong> A gift-wrap module with 300 lines of frontend code. I looked at the usage data: 0.4% of orders in twelve months. We removed it and put a gift message field on the cart instead. Half a day. This was the best decision on the project and it came from asking a commercial question rather than a technical one.</p>
+
+        <p><strong>Week 13 — third-party scripts and images.</strong> With our own JavaScript at 41KB, the tag manager container at 164KB was suddenly the largest script on the page. Audited it, removed four tags nobody could account for, deferred the rest. Converted the hero and category imagery to WebP with a fallback.</p>
+
+        <p><strong>Week 14 — launch.</strong> Deployed on a Tuesday morning, staged by traffic percentage using a cookie-based theme switch for the first six hours. Two issues surfaced: a Tailwind class constructed dynamically in a PHP template that had been purged (the exact trap described above), and the newsletter popup extension rendering behind the header because its z-index assumed a Luma stacking context. Both fixed within the day.</p>
+
+        <p><strong>What I would do differently.</strong> Audit the size of the incompatible extensions, not just their count. "Three extensions need rebuilding" and "3,000 lines of undocumented Knockout need rebuilding" are the same sentence at different resolutions and only one of them is a quote. I now open the source of every incompatible extension before pricing, and I quote those rebuilds separately as time and materials.</p>
+
+        <h2>16. When Staying on Luma Is the Right Call</h2>
+
+        <p>I have talked three clients out of Hyvä migrations and I would do it again. Here is when.</p>
+
+        <p><strong>Your traffic is overwhelmingly desktop on good connections.</strong> A B2B distributor whose customers order from a warehouse office on fibre will see the lab numbers improve dramatically and the business numbers not move at all. The JavaScript weight that costs a Moto G4 two seconds costs a desktop machine 180ms. Run your own analytics: if mobile is under 25% of sessions and revenue, the case is weak.</p>
+
+        <p><strong>You are on Adobe Commerce with a heavy extension estate and a small budget.</strong> The compatibility work scales with extension count, not store size. A £2m store with 45 extensions is a harder migration than a £20m store with 12.</p>
+
+        <p><strong>You are replatforming within eighteen months.</strong> If Shopify Plus or a headless build is genuinely on the roadmap, a Hyvä migration is a write-off. Spend the money on the thing you are actually going to keep.</p>
+
+        <p><strong>Your performance problem is server-side and you have not fixed it.</strong> This is the most common one. A store with a 1.2s TTFB and a 40% Varnish hit rate will get less from Hyvä than from a fortnight of caching work, and the caching work is cheaper. Fix TTFB first. Then measure again. Then decide.</p>
+
+        <p><strong>You have no frontend developer and no agency retainer.</strong> Hyvä is a maintained product with a version cadence, and someone has to apply the updates and understand Tailwind when the marketing team wants a new landing page. A store whose "developer" is a freelancer who logs in twice a year is better served by a well-optimised Luma theme that nobody touches.</p>
+
+        <p>There is also a case I would call marginal rather than negative: stores where the current Luma theme is heavily customised, works, and nobody is complaining. Migration cost is real and certain; the benefit is real but probabilistic. If the site is passing Core Web Vitals in field data — and some well-built Luma stores do — then the honest answer is that you are buying developer experience and future headroom, not a conversion lift, and you should be told that.</p>
+
+        <h2>17. Alternatives I Have Actually Considered</h2>
+
+        <p>Hyvä is not the only answer to the Luma problem, and pretending otherwise is lazy.</p>
+
+        <p><strong>Optimise Luma.</strong> You can get a Luma store to a passing LCP and a mediocre INP with critical CSS, aggressive deferral, removing unused jQuery UI widgets from the RequireJS map, and killing the extensions you do not need. I have taken a Luma store from Lighthouse 31 to 68 in eight days. It will not reach 90 and it will not fix INP properly, because the main-thread work is structural. But it costs a fraction and it is the right first move for a store that has never had any performance work done at all.</p>
+
+        <p><strong>PWA Studio.</strong> Adobe's own answer. Full headless, React, GraphQL. I would not start a new project on it in 2026. The ecosystem never arrived, the extension story is worse than Hyvä's rather than better, and the operational complexity of running a separate Node application in front of Magento is not something most merchants should take on.</p>
+
+        <p><strong>A custom headless frontend.</strong> Next.js or Nuxt against Magento's GraphQL. Genuinely powerful, genuinely expensive, and it moves your problems rather than removing them — the trade-offs are covered properly in the piece on <a href="/blog/headless-architecture/">headless architecture and what decoupling actually buys</a>. Right for a handful of merchants with in-house JavaScript teams and content-heavy requirements. Wrong for most.</p>
+
+        <p><strong>Replatform.</strong> Sometimes the right answer to "how do we make Magento fast" is "why are you on Magento". If your catalogue is simple, your integrations are shallow, and your team is small, Shopify's total cost of ownership over five years may well beat Magento plus Hyvä plus hosting plus a retainer. That is a commercial conversation and it should not be had with a Magento specialist alone.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Can we run Hyvä and Luma side by side during a migration?"</strong> Yes, and I recommend it. Magento's theme fallback lets you assign different themes per store view, and you can drive selection with a cookie for staged rollout. What you cannot easily do is run them on the same page, so a partial migration means whole page types at a time — catalogue on Hyvä, checkout on Luma is the standard split and it works fine.</p>
+
+        <p><strong>"Does Hyvä work with Adobe Commerce, not just Open Source?"</strong> Yes. B2B features, shared catalogues, requisition lists and company accounts all have Hyvä support, though the B2B frontend components are newer and I have hit rough edges in the requisition list UI. Check the specific feature set you rely on rather than trusting "Adobe Commerce supported" as a blanket statement.</p>
+
+        <p><strong>"What happens to our page builder content?"</strong> Adobe's Page Builder renders through its own template system and Hyvä has a compatibility layer for it that covers the standard content types. Custom Page Builder content types you have written will need their frontend templates ported. If your marketing team lives in Page Builder, test this early — it is a common source of unpleasant surprises in week ten.</p>
+
+        <p><strong>"Is Alpine going to be around in five years?"</strong> Honest answer: I do not know, and neither does anyone else. It is small, stable, has had no breaking major version since v3 in 2021, and — this is the part that matters — the amount of Alpine in a Hyvä store is small enough that replacing it would be a rewrite of a few hundred lines rather than a rewrite of an application. The framework risk here is genuinely low, which is more than I would say for a React storefront.</p>
+
+        <p><strong>"Our developers do not know Tailwind or Alpine. How long to get productive?"</strong> A competent Magento frontend developer is useful in a week and fluent in a month. The harder adjustment is not the syntax, it is unlearning the instinct to reach for a JavaScript solution to a problem the server can solve. Developers who came from Luma tend to over-engineer the Alpine layer for the first few weeks.</p>
+
+        <p><strong>"Will it break our SEO?"</strong> It should improve it, because Hyvä is server-rendered HTML with less client-side dependency than Luma. What breaks SEO on these projects is the same thing that always breaks it: URL changes, lost redirects, dropped structured data, and templates that quietly stop outputting canonical tags. Audit your JSON-LD output before and after — Magento's own structured data is thin and if you had a custom implementation it lives in templates you are rewriting. The considerations in <a href="/blog/technical-seo-structured-data/">technical SEO and JSON-LD for Magento</a> apply directly here.</p>
+
+        <p><strong>"How much does the whole thing cost?"</strong> For a mid-size store with a clean extension estate: £18,000 to £35,000 including licences, in the UK market, for theme, catalogue, cart and testing, with checkout staying on Luma. Add £8,000 to £20,000 for Hyvä Checkout with payment integration work. A store with several unsupported complex extensions can double the lower figure and I have seen quotes that were wrong by a factor of two in both directions.</p>
+
+        <p><strong>"Can we do it ourselves?"</strong> If you have a developer who knows Magento's frontend properly, yes — the documentation is good and the Slack community answers fast. Budget double your first estimate and do the extension audit before you commit to a date.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>In this order, and the first three cost you almost nothing.</p>
+
+        <p>One. Pull your own field data. Chrome UX Report, split by device, for LCP, CLS and INP. If mobile INP is above 200ms and mobile is a meaningful share of revenue, you have a case. If everything is green, you do not have a performance case and any migration has to be justified on developer experience instead — which is legitimate, but say so out loud.</p>
+
+        <p>Two. Measure your TTFB. If it is above 600ms on a cached page, stop reading about themes and go and fix your caching, because Hyvä cannot help you and the fix is cheaper.</p>
+
+        <p>Three. Run the extension audit script. Count the frontend extensions, then open the source of every one without official Hyvä support and read it. Not skim — read it. The number of lines of Knockout you cannot avoid rewriting is the single best predictor of what this project will cost.</p>
+
+        <p>Four. Ask which extensions are still earning their place. Pull usage data from the last twelve months for anything customer-facing. On every project I have run, at least one extension turned out to be doing nothing and deleting it was cheaper than porting it.</p>
+
+        <p>Five. Decide about checkout explicitly and write the decision down. Defaulting into "we will sort checkout later" is how a migration ends up with two rendering stacks and nobody accountable for the slow one.</p>
+
+        <p>Six. Build one page type as a spike before you commit to a full quote. The category page, with real data and the real layered navigation. A week of work that tells you whether your estimate is fantasy.</p>
+
+        <p>Seven. Plan the rollout with a cookie-based theme switch and a percentage ramp, and have a rollback that is a config change rather than a deploy. The theme switch is thirty lines and it is the difference between a bad launch being a bad hour and a bad launch being a bad week.</p>
+
+        <p>The thing I would push back on hardest: skipping the extension audit because the client is in a hurry and the sales conversation is going well. That is exactly how a six-week quote becomes fourteen weeks of unbilled work, and I have the invoice history to prove it.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify Stores</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
               <p>Varnish caching and sub-100ms TTFB.</p>
             </li>
             <li>
@@ -243,7 +785,6 @@ function initMiniCart() {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -277,6 +818,6 @@ function initMiniCart() {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

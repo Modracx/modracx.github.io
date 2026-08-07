@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Vercel & Next.js Edge Rendering for E-Commerce | MODRACX</title>
-  <meta name="description" content="Technical guide on leveraging Vercel Edge Middleware and Next.js App Router server components for sub-50ms TTFB global e-commerce rendering." />
+  <meta name="description" content="Vercel and Next.js for ecommerce: middleware matchers, edge vs node runtime, how ISR really caches, Next 15 caching defaults, and the cost model." />
   <meta property="og:title" content="Vercel & Next.js Edge Rendering for E-Commerce | MODRACX" />
   <meta property="og:description" content="Technical guide on Vercel & Next.js Edge rendering by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Vercel & Next.js Edge Rendering for E-Commerce</h1>
-        <p class="lede">Next.js Edge Middleware executes logic at Vercel edge nodes in under 5ms, enabling personalized currency formatting and geo-steering before page rendering.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Vercel &amp; Next.js Edge Rendering for E-Commerce</h1>
+        <p class="lede">Their edge middleware invocations went from 9 million a month to 61 million in eleven days, and nobody had shipped a feature. A twelve-line file with no matcher was running on every font and every image.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,25 +205,476 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Vercel Edge Middleware Middleware Code</h2>
+        <h2>1. The Three-Line Middleware That Tripled a Vercel Bill</h2>
 
-        <pre><code class="language-typescript">// Next.js Edge Middleware for Geolocation Routing (middleware.ts)
-import { NextResponse, type NextRequest } from 'next/server';
+        <p>In February a camping equipment retailer sent me a screenshot of their Vercel usage graph with the message "we didn't ship anything big". Edge middleware invocations had gone from about 9 million a month to 61 million in eleven days. Function invocations had roughly doubled. The bill was heading somewhere they had not budgeted for.</p>
 
-export function middleware(request: NextRequest) {
-  const country = request.geo?.country || 'US';
-  const response = NextResponse.next();
-  response.cookies.set('user_country', country);
-  return response;
-}
+        <p>They had shipped something. A junior developer had added a middleware file to set a preferred-store cookie for a new click-and-collect feature. Twelve lines. What they had not added was a <code>matcher</code>, so the middleware ran on every single request that hit the deployment — every image, every font, every chunk of JavaScript, every <code>_next/static</code> file, every request from the uptime monitor, every scraper. Requests that had previously been pure CDN cache hits costing nothing were now invoking an edge function first.</p>
 
-export const config = { matcher: '/products/:path*' };</code></pre>
+        <p>Worse, and this took longer to find: the middleware called <code>NextResponse.next()</code> and set a cookie unconditionally. That made the response carry a <code>Set-Cookie</code> header on the ISR-cached product pages, and their downstream analytics started reporting every visitor as new because the cookie was being reissued with a fresh value on every request. So the bill was the visible symptom and the attribution data was quietly wrong for a fortnight.</p>
 
-        <hr />
+        <p>The fix was a matcher and a conditional. Invocations dropped back to about 7 million. Nothing about the feature changed.</p>
+
+        <p>I tell this story because it captures what makes Vercel and Next.js different from generic edge computing. The platform is genuinely good, and the abstractions are genuinely leaky in specific, learnable places. If you know where the seams are, you get very fast storefronts cheaply. If you do not, you get an architecture where a twelve-line file changes your cost structure and your data quality without a single error appearing anywhere.</p>
+
+        <p>This article is about those seams. The general question of what belongs at the edge at all — isolates, sockets, the geography of data — I have covered in <a href="/blog/edge-computing-ecommerce/">the edge computing fundamentals piece</a>, and the cold-start and crawl-budget side of serverless in <a href="/blog/serverless-seo-performance/">the serverless SEO article</a>. Here I am assuming you have decided to build on this platform and want to know how it actually behaves.</p>
+
+        <h2>2. The Five Places Your Code Can Run</h2>
+
+        <p>Before anything else, get clear on the execution contexts, because almost every confusing Next.js behaviour resolves to "this ran somewhere I did not expect".</p>
+
+        <p><strong>Build time.</strong> Static generation. Runs once, on the build machine, with full Node. Output is HTML and JSON in the CDN. Zero request-time cost. This is where you want as much of a catalogue as your build budget allows.</p>
+
+        <p><strong>Edge middleware.</strong> A V8 isolate at the PoP, running before the CDN cache is consulted. Sees every matching request. No filesystem, no sockets, a small CPU budget, and — this is the part that surprises people — it runs even when the response is going to be served from cache.</p>
+
+        <p><strong>Edge functions.</strong> Route handlers and pages with <code>export const runtime = 'edge'</code>. Same isolate constraints as middleware, but they render a response rather than deciding about one.</p>
+
+        <p><strong>Node functions.</strong> The default runtime for App Router routes. Full Node, real sockets, native modules, running in a specific region — by default the region you chose when creating the project, which is <code>iad1</code> unless somebody changed it. Cold starts apply.</p>
+
+        <p><strong>The client.</strong> Where anything marked <code>'use client'</code> hydrates and runs.</p>
+
+        <p>The mental model that keeps me out of trouble: middleware is a router, edge functions are for responses that need no origin data, node functions are for responses that need your database, and build time is for everything you can possibly precompute. Most storefront performance problems on this platform are a route sitting in the wrong one of those five boxes.</p>
+
+        <h2>3. Middleware Runs Before the Cache, and That Is the Whole Cost Story</h2>
+
+        <p>This single fact explains the camping equipment retailer's bill and about half the middleware questions I get.</p>
+
+        <p>On a conventional CDN, cached content is served without your code executing. On Vercel, middleware sits in front of the cache lookup. A product page that is fully static, fully cached, and would otherwise be served in 12ms from a PoP still invokes your middleware first. Middleware invocations therefore scale with total request volume, not with cache miss volume, and total request volume on a storefront includes a great deal of traffic you never think about.</p>
+
+        <p>So the matcher is not a tidiness concern. It is the single most consequential line in the file.</p>
+
+        <pre><code class="language-javascript">// middleware.ts
+export const config = {
+  matcher: [
+    // Everything EXCEPT: static output, image optimiser, API routes,
+    // the well-known paths, and anything with a file extension.
+    // The final `.*\\..*` clause is what excludes .js, .css, .woff2, .png.
+    '/((?!_next/static|_next/image|api|\\.well-known|favicon\\.ico|.*\\..*).*)'
+  ]
+};</code></pre>
+
+        <p>That negative lookahead is unpleasant to read and I copy it between projects rather than rewriting it, because getting it wrong is expensive in a way that does not show up in testing. There is no test that fails when your middleware runs on 40 million font requests.</p>
+
+        <p>A more explicit alternative, which I now prefer on larger projects because it is legible six months later, is to match only the paths that genuinely need a decision:</p>
+
+        <pre><code class="language-javascript">export const config = {
+  matcher: [
+    '/',
+    '/product/:path*',
+    '/category/:path*',
+    '/search',
+    '/account/:path*'
+  ]
+};</code></pre>
+
+        <p>You lose the catch-all safety net, so a new route section needs a matcher update. I consider that a feature: it makes the cost of middleware a thing somebody decides about rather than a default.</p>
+
+        <p>The second discipline is to bail out early. Even within matched paths, most requests do not need the expensive branch.</p>
+
+        <pre><code class="language-javascript">export function middleware(request) {
+  const { pathname } = request.nextUrl;
+
+  // Cheapest possible exit. A returned NextResponse.next() with no
+  // mutation lets the platform serve the cached response untouched.
+  if (request.cookies.has('locale') &amp;&amp; request.cookies.has('ab')) {
+    return NextResponse.next();
+  }
+
+  // Only first-time visitors reach anything that costs CPU.
+  return assignLocaleAndVariant(request);
+}</code></pre>
+
+        <h2>4. What Middleware Can and Cannot Do to a Response</h2>
+
+        <p>Middleware has four useful outputs and the differences are not obvious from the names.</p>
+
+        <p><strong><code>NextResponse.next()</code></strong> — continue to the route. If you pass request headers, downstream server components can read them, which is the sanctioned way to hand a computed value from middleware into rendering:</p>
+
+        <pre><code class="language-javascript">const headers = new Headers(request.headers);
+headers.set('x-geo-country', request.geo?.country ?? 'GB');
+headers.set('x-ab-variant', variant);
+return NextResponse.next({ request: { headers } });
+
+// In a server component:
+import { headers } from 'next/headers';
+const h = await headers();               // async since Next 15
+const country = h.get('x-geo-country');</code></pre>
+
+        <p>The catch: calling <code>headers()</code> in a server component opts that route out of static rendering entirely. You have made the page dynamic in order to read a value that middleware computed at the edge. On a product page that is a bad trade — you traded a 15ms cached response for a function invocation. Recognising this trap is most of what separates a fast Next.js storefront from a slow one.</p>
+
+        <p><strong><code>NextResponse.rewrite()</code></strong> — serve a different path without changing the URL. The critical detail is that the cache lookup happens against the rewritten path. So rewriting <code>/product/x</code> to <code>/en-gb/product/x</code> serves the cached copy of the latter, which is exactly what you want for locale segmentation. Rewriting to a path that is dynamically rendered, however, means you have just converted a static route into a function invocation for every visitor.</p>
+
+        <p><strong><code>NextResponse.redirect()</code></strong> — a real 301 or 302 issued from the PoP. Fast, and it removes a round trip to the origin compared with redirecting in a route handler.</p>
+
+        <p><strong><code>new NextResponse(body)</code></strong> — respond directly. Useful for blocking bots or serving a maintenance page. Do not use it to render anything substantial; you are in an isolate with a CPU budget.</p>
+
+        <p>What middleware cannot do: read or modify the response body of the route it is fronting. There is no <code>HTMLRewriter</code> equivalent in Next.js middleware. If you need to transform HTML in flight you are looking at a Cloudflare Worker in front of Vercel, which is a real architecture and a real operational cost, and I would want a strong reason.</p>
+
+        <h2>5. Choosing a Runtime Per Route</h2>
+
+        <p>The <code>runtime</code> segment config is a per-route decision and teams tend to make it globally, which is wrong in both directions.</p>
+
+        <pre><code class="language-javascript">// app/api/geo/route.ts — no database, pure header logic. Edge is ideal.
+export const runtime = 'edge';
+
+export async function GET(request) {
+  return Response.json({
+    country: request.headers.get('x-vercel-ip-country') ?? 'GB',
+    city:    request.headers.get('x-vercel-ip-city')
+  });
+}</code></pre>
+
+        <pre><code class="language-javascript">// app/api/checkout/route.ts — Stripe SDK, Prisma, a transaction.
+// Node runtime, and pinned to the region the database is in.
+export const runtime = 'nodejs';
+export const preferredRegion = ['dub1'];   // match the database, not the user
+export const dynamic = 'force-dynamic';</code></pre>
+
+        <p>My defaults, which I would defend:</p>
+
+        <p><strong>Edge for anything that answers from headers, cookies, or an edge KV store.</strong> Geo lookups, feature flag resolution, token validation, simple redirect endpoints.</p>
+
+        <p><strong>Node for anything that touches your primary database or a heavyweight SDK.</strong> Stripe, Prisma, an ERP client, image handling, PDF generation. The edge runtime will either refuse to bundle it or force you into an HTTP-driver workaround that adds latency, and the arithmetic in the fundamentals article says you lose.</p>
+
+        <p><strong>Neither, if the route can be static.</strong> This is the option people forget while arguing about the other two.</p>
+
+        <p><code>preferredRegion</code> is worth a sentence of its own because it is routinely left at the default. If your database is in Dublin and your functions default to Washington, every query crosses the Atlantic twice. I have found this on more projects than I would have guessed, including one where it accounted for 340ms on the cart endpoint and had been there for two years.</p>
+
+        <h2>6. What Breaks When You Set the Edge Runtime</h2>
+
+        <p>The failure modes are consistent enough to list.</p>
+
+        <p><strong>Your ORM.</strong> Prisma needs a query engine binary or the Accelerate proxy. Drizzle works with HTTP drivers. TypeORM does not work at all. If your data access layer was written for Node, moving a route to edge means rewriting it.</p>
+
+        <p><strong>Anything using <code>node:crypto</code> beyond hashing.</strong> The edge runtime exposes Web Crypto. Libraries that reach for <code>createHmac</code> will fail at build time, which is at least honest.</p>
+
+        <p><strong>Date and internationalisation libraries with large locale bundles.</strong> Edge functions have a bundle size limit — historically 1MB compressed on Hobby, 4MB on Pro. A full <code>moment</code> with locales or an unfiltered ICU dataset will blow it. The error message names the size and not the culprit, so budget an hour with the bundle analyser.</p>
+
+        <p><strong>Environment variables you assumed were there.</strong> Edge functions get their environment injected at build, not at runtime, so a value changed in the dashboard after a build is not picked up until you redeploy. Node functions read the runtime environment. This asymmetry has bitten me during an incident where rotating an API key appeared to do nothing.</p>
+
+        <p><strong>Long work.</strong> Edge functions have a shorter maximum duration than node functions and a much smaller CPU allowance. A route that aggregates six upstream calls will time out at the edge and be fine on node.</p>
+
+        <p>My rule: try edge, and the moment you find yourself installing a compatibility shim or an HTTP driver purely to satisfy the runtime, stop and use node. The shim is a signal that the work has a data dependency, and data dependencies belong near the data.</p>
+
+        <h2>7. How ISR Actually Works Here</h2>
+
+        <p>Incremental static regeneration is the reason most ecommerce teams choose this platform, and the mechanics are worth being precise about. I have written elsewhere about <a href="/blog/serverless-seo-performance/">why ISR matters for crawl budget and Core Web Vitals</a>; this is the operational layer.</p>
+
+        <p>A route with a <code>revalidate</code> value is generated on first request (or at build if it is in <code>generateStaticParams</code>), stored in the platform's ISR cache, and served from there. After the revalidation window elapses, the next request still gets the stale copy immediately while a regeneration runs in the background. Nobody waits, except the very first visitor to an ungenerated path.</p>
+
+        <pre><code class="language-javascript">// app/product/[sku]/page.tsx
+export const revalidate = 300;              // seconds
+export const dynamicParams = true;          // generate unlisted SKUs on demand
+
+export async function generateStaticParams() {
+  // Pre-render what people actually visit; let the tail generate lazily.
+  // 60,000 SKUs at build time is a 90-minute build and a bad idea.
+  const top = await getTopSellingSkus(1500);
+  return top.map(sku =&gt; ({ sku }));
+}</code></pre>
+
+        <p>Three details that are not in the obvious place in the documentation.</p>
+
+        <p><strong>The ISR cache is per-region, not global.</strong> A page generated because a customer in Singapore requested it is not automatically present in Frankfurt. The first visitor in each region pays the generation. On a catalogue with a long tail this means your "static" pages have a cold path more often than you expect, and it is one reason field data can look worse than your assumptions.</p>
+
+        <p><strong>Regeneration is a function invocation and you pay for it.</strong> A five-second revalidate on a page with steady traffic means twelve regenerations a minute, each running your data fetching. I have seen a team set <code>revalidate = 1</code> across the catalogue "to be safe" and effectively rebuild server-side rendering with extra steps and a larger bill.</p>
+
+        <p><strong>A deploy invalidates everything.</strong> Every deployment produces a new build ID and an empty ISR cache. Deploy at peak traffic on a large catalogue and every page regenerates on demand at once, which is a self-inflicted thundering herd against your commerce API. If you deploy several times a day and your catalogue is large, this matters more than the revalidate window ever will.</p>
+
+        <h2>8. On-Demand Revalidation Is the Part That Must Not Be an Afterthought</h2>
+
+        <p>A time window alone means serving stale prices for the duration of the window. For a five-minute window on a promotional launch, that is a customer service problem. The answer is invalidation driven by your source of truth.</p>
+
+        <pre><code class="language-javascript">// app/api/revalidate/route.ts — called by the PIM/ERP webhook.
+import { revalidatePath, revalidateTag } from 'next/cache';
+
+export const runtime = 'nodejs';
+
+export async function POST(request) {
+  const signature = request.headers.get('x-webhook-signature');
+  const raw = await request.text();
+  if (!(await verifySignature(raw, signature))) {
+    // An unauthenticated revalidate endpoint is a denial-of-wallet vector:
+    // anyone can force regeneration of your whole catalogue.
+    return new Response('unauthorised', { status: 401 });
+  }
+
+  const { sku, categoryIds = [], priceChanged } = JSON.parse(raw);
+
+  revalidatePath(`/product/${sku}`);
+  for (const id of categoryIds) revalidateTag(`category-${id}`);
+  // A price change also invalidates anywhere the price is embedded.
+  if (priceChanged) revalidateTag('sitemap-prices');
+
+  return Response.json({ ok: true, at: Date.now() });
+}</code></pre>
+
+        <p>Tags are the more maintainable half of this. Attach a tag at the fetch site and you can invalidate a concept rather than enumerating routes:</p>
+
+        <pre><code class="language-javascript">const res = await fetch(`${API}/products/${sku}`, {
+  next: { tags: [`product-${sku}`, `brand-${brandId}`], revalidate: 300 }
+});</code></pre>
+
+        <p>Then a brand-wide price update is one <code>revalidateTag</code> call on the brand tag rather than a loop over four hundred paths.</p>
+
+        <p>One organisational point, because it is the failure I see most: cache invalidation on a headless build sits between the commerce platform, the front end, and whoever owns the PIM. It therefore belongs to nobody by default. On every project where somebody's name was against it, it worked. On the ones where it was assumed, stale prices reached customers within a month.</p>
+
+        <h2>9. Next 15 Changed the Caching Defaults and It Matters</h2>
+
+        <p>If you are reading older material, be aware that the defaults inverted. In Next.js 13 and 14, <code>fetch</code> in a server component was cached by default and you opted out. Since Next.js 15, <code>fetch</code> is uncached by default and you opt in. Route handlers likewise are dynamic by default now rather than statically cached.</p>
+
+        <p>The practical consequence of upgrading without noticing is a large increase in origin traffic and function duration, because calls that used to hit the data cache now go to your API every time. It does not error. It does not warn. Your commerce API bill and your p75 both move.</p>
+
+        <pre><code class="language-javascript">// Next 15+: be explicit at every fetch site. Silence is now "no cache".
+const product = await fetch(url, { next: { revalidate: 300, tags: [tag] } });
+const config  = await fetch(cfgUrl, { cache: 'force-cache' });   // rarely changes
+const cart    = await fetch(cartUrl, { cache: 'no-store' });     // never cache</code></pre>
+
+        <p>I now grep for bare <code>fetch(</code> calls in server code during review. Every one of them should carry an explicit caching intent, the same way every database query should have a considered index.</p>
+
+        <p>For non-<code>fetch</code> data access — a database client, an SDK — wrap it, because the data cache only knows about <code>fetch</code>:</p>
+
+        <pre><code class="language-javascript">import { unstable_cache } from 'next/cache';
+
+export const getStockLevel = unstable_cache(
+  async (sku) =&gt; db.inventory.findFirst({ where: { sku } }),
+  ['stock'],                                  // key prefix
+  { revalidate: 60, tags: ['inventory'] }
+);</code></pre>
+
+        <h2>10. Streaming, Suspense, and Partial Prerendering</h2>
+
+        <p>The most useful thing streaming buys an ecommerce page is that one slow query stops holding the whole document hostage. Recommendations, reviews and stock indicators are exactly the sort of thing that is slow, non-critical, and — importantly — not needed for indexing.</p>
+
+        <pre><code class="language-jsx">export default async function ProductPage({ params }) {
+  const { sku } = await params;              // async params since Next 15
+  const product = await getProduct(sku);     // fast, cached, must be in the shell
+
+  return (
+    &lt;&gt;
+      {/* Everything search cares about is in the first flush. */}
+      &lt;ProductHeader product={product} /&gt;
+      &lt;script type="application/ld+json"
+              dangerouslySetInnerHTML={{ __html: JSON.stringify(schema(product)) }} /&gt;
+
+      {/* These stream in later and are not indexed content. */}
+      &lt;Suspense fallback={&lt;StockSkeleton /&gt;}&gt;
+        &lt;LiveStock sku={sku} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;ReviewsSkeleton /&gt;}&gt;
+        &lt;Reviews sku={sku} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+
+        <p>The rule I hold to: product name, price, availability, description and structured data go in the shell. Everything else may stream. Google does process streamed content, but the shell is what is guaranteed and immediate, and there is no upside to putting your price in a Suspense boundary.</p>
+
+        <p>Partial prerendering is the interesting development here — a static shell served instantly from the CDN with dynamic holes filled from a single streamed function response. It has been experimental for a long time and the flag has moved between releases, so I would not build a client's roadmap around it yet. When it is stable it makes the "static except for one personalised strip" case, which is the overwhelmingly common storefront case, a first-class thing rather than a workaround.</p>
+
+        <h2>11. The Interaction That Catches Everyone: Middleware and the ISR Cache</h2>
+
+        <p>Here is the specific trap, and I have watched three teams fall into it independently.</p>
+
+        <p>You have a beautifully static product page. You add middleware that reads a cookie and rewrites to a variant path, or sets a header for a server component to read. Suddenly your ISR hit rate collapses, or your pages start rendering as functions, and nobody can see why because the middleware itself is trivial.</p>
+
+        <p>The mechanisms, in order of how often they turn out to be the cause:</p>
+
+        <p><strong>A server component reads <code>headers()</code> or <code>cookies()</code>.</strong> This opts the route out of static rendering. Full stop. The route becomes dynamic and every request is a function invocation. You did not change the route file; you changed something a component in it does.</p>
+
+        <p><strong>The rewrite target is dynamic.</strong> Middleware rewriting to <code>/[locale]/product/[sku]</code> is fine if that route is statically generated for the locales you use, and a function invocation for every request if it is not.</p>
+
+        <p><strong>The rewrite target multiplies your cache entries.</strong> Rewriting on a value with high cardinality — a customer segment, a session id — produces one ISR entry per value. Four segments across 60,000 SKUs is 240,000 entries, each generated independently, each regenerating on its own schedule.</p>
+
+        <p><strong>Setting a cookie on the response.</strong> A <code>Set-Cookie</code> on a cached page is served to everyone who gets that cached copy, which is how the camping equipment retailer ended up reissuing a fresh cookie value to every visitor.</p>
+
+        <p>The diagnosis is quick once you know where to look. The build output tells you what each route is, and the response headers tell you what actually happened.</p>
+
+        <pre><code class="language-bash"># Build output legend: ○ static, ● SSG, ƒ dynamic. Anything you expected
+# to be static and shows as ƒ is a route that will invoke a function.
+next build | grep -E '^\s*[○●ƒλ]' | head -40
+
+# At runtime, the header that settles the argument:
+curl -sI https://shop.example.com/product/oak-side-table | grep -i x-vercel-cache
+# HIT      served from cache, no function ran
+# STALE    served from cache, regeneration running in background
+# MISS     generated now, visitor waited
+# BYPASS   route is dynamic; every request runs a function</code></pre>
+
+        <p>A route reporting <code>BYPASS</code> that you believed was static is the single highest-value finding available on this platform, and it takes one curl to get.</p>
+
+        <p>Doing this properly — segmenting without wrecking cacheability — is a large enough subject that I have given it <a href="/blog/edge-personalization/">its own article on edge personalisation</a>, including how to construct cache keys that vary on what matters and nothing else.</p>
+
+        <h2>12. Cache-Control Headers and Who Wins</h2>
+
+        <p>There are three caches involved and they respect different headers, which produces a lot of confusion.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Header</th><th>Vercel CDN</th><th>Browser</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Cache-Control</code></td><td>Yes, unless overridden</td><td>Yes</td><td>Applies to both; blunt instrument</td></tr>
+            <tr><td><code>CDN-Cache-Control</code></td><td>Yes, takes precedence</td><td>No</td><td>Any CDN honours it</td></tr>
+            <tr><td><code>Vercel-CDN-Cache-Control</code></td><td>Yes, highest precedence</td><td>No</td><td>Stripped before the browser</td></tr>
+            <tr><td><code>s-maxage</code></td><td>Yes</td><td>Ignored</td><td>Shared-cache lifetime</td></tr>
+            <tr><td><code>stale-while-revalidate</code></td><td>Yes</td><td>Partially</td><td>Serve stale, refresh behind</td></tr>
+          </tbody>
+        </table>
+
+        <p>The pattern I use on a dynamic-but-shareable route — a category listing with a filter, say — is to cache hard at the CDN and not at all in the browser, so a customer navigating back sees fresh content while the CDN absorbs the load:</p>
+
+        <pre><code class="language-javascript">return new Response(html, {
+  headers: {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'private, no-cache',                 // browser: always revalidate
+    'vercel-cdn-cache-control': 'max-age=300, stale-while-revalidate=86400'
+  }
+});</code></pre>
+
+        <p>Do not set <code>Cache-Control</code> manually on a page that uses ISR. You will either fight the platform's own header or accidentally make a page cacheable in browsers that should not be, and browser caches cannot be purged. That last point deserves emphasis: an over-long <code>max-age</code> on an HTML document is not recoverable. You cannot invalidate it, and the customer will keep seeing a stale price until it expires. I have watched a team discover this on a Black Friday price they could not retract.</p>
+
+        <h2>13. The Cost Model, Line by Line</h2>
+
+        <p>The bill has a specific shape and the surprises are consistent.</p>
+
+        <p><strong>Edge middleware invocations.</strong> Scale with total requests, not with cache misses. This is the line that moves when someone forgets a matcher. It is also the line that a bot problem shows up in first.</p>
+
+        <p><strong>Function invocations and duration.</strong> Since the shift to Fluid compute, billing leans on active CPU time rather than pure wall-clock, which is a genuine improvement for storefront work — a function awaiting a slow commerce API is mostly idle, and you used to pay for the waiting. It does not change the fact that a route which should have been static is costing you an invocation per visitor.</p>
+
+        <p><strong>Image optimisation.</strong> Priced per source image transformed, not per delivered image. A catalogue refresh that changes 60,000 product photos is a bill on the day it lands. Two mitigations: set <code>images.minimumCacheTTL</code> high, and constrain <code>deviceSizes</code> so you are not generating eight widths of every image nobody requests at those sizes.</p>
+
+        <pre><code class="language-javascript">// next.config.js — fewer variants, cached longer.
+module.exports = {
+  images: {
+    deviceSizes: [640, 828, 1080, 1920],   // four, not the default eight
+    imageSizes: [96, 256],
+    formats: ['image/avif', 'image/webp'],
+    minimumCacheTTL: 60 * 60 * 24 * 31     // product photos do not change hourly
+  }
+};</code></pre>
+
+        <p><strong>Bandwidth.</strong> Frequently the largest line on an image-heavy catalogue, and the one people never think of as an application concern.</p>
+
+        <p><strong>ISR writes and reads.</strong> A very short revalidate window across a large catalogue generates a lot of both.</p>
+
+        <p><strong>Build minutes.</strong> Statically generating a large catalogue on every deploy costs time proportional to catalogue size, and you deploy more often than you rebuild the catalogue. This is the argument for pre-rendering the top slice and letting the tail generate on demand.</p>
+
+        <p>One number worth computing before you commit: what fraction of your requests are bots. On a large indexed catalogue it is routinely a third, sometimes more once you count the scrapers. Every one of those is a middleware invocation, and a fair share are ISR misses on long-tail URLs that no human has requested in a month. Bot management is a cost control on this platform, not just a security measure.</p>
+
+        <h2>14. Preview Deployments, Skew, and the Boring Operational Bits</h2>
+
+        <p>Two platform behaviours worth handling deliberately.</p>
+
+        <p><strong>Every branch gets a public URL.</strong> Left alone, those get discovered and indexed, producing duplicate content across dozens of hostnames and occasionally outranking production for long-tail queries. Turn on deployment protection, and belt-and-braces it in middleware:</p>
+
+        <pre><code class="language-javascript">export function middleware(request) {
+  const res = NextResponse.next();
+  if (process.env.VERCEL_ENV !== 'production') {
+    res.headers.set('x-robots-tag', 'noindex, nofollow');
+  }
+  return res;
+}</code></pre>
+
+        <p><strong>Version skew.</strong> A customer with your site open when you deploy has old client JavaScript requesting chunks that no longer exist, and old server action ids that the new deployment does not recognise. The symptom is a burst of client errors in the minutes after every deploy that everyone learns to ignore. Skew protection pins a session to its original deployment for a configured window and makes the problem go away; it is off by default and I turn it on for every commerce project.</p>
+
+        <p>While we are on boring things that pay: set <code>preferredRegion</code> deliberately, check it after every project someone else set up, and put it in the pull request template if you can. It is a one-line change with a bigger effect than most optimisation work.</p>
+
+        <h2>15. Worked Example: 41,000 SKUs, Four Markets</h2>
+
+        <p>A homeware and small-furniture retailer, Shopify Plus as the commerce backend, custom Next.js storefront on Vercel, App Router, selling into the UK, Ireland, Germany and the Netherlands. They came to me with a p75 largest contentful paint of 4.1 seconds and a Vercel bill of about £2,800 a month, which was more than their Shopify subscription and felt wrong to them. It was.</p>
+
+        <p><strong>What we found.</strong> Every product page was rendering as a function. The build output showed <code>ƒ</code> against the product route, which nobody had ever looked at. The cause was two levels deep: a <code>&lt;CurrencyProvider&gt;</code> in the layout called <code>cookies()</code> to read a currency preference. That one call made the layout dynamic, and a dynamic layout makes every page under it dynamic. 41,000 product pages, all server-rendered on demand, all fetching from the Shopify Storefront API on every request.</p>
+
+        <p>Second finding: middleware with no matcher, running on everything, for a piece of logic that applied to four paths.</p>
+
+        <p>Third: <code>revalidate = 10</code> on category pages, set during development and never revisited, generating a regeneration every ten seconds per category across 300 categories.</p>
+
+        <p><strong>What we changed.</strong> Currency moved out of the server render entirely. The page ships prices in the store's base currency in the HTML, with the numeric value and currency code in a data attribute, and a small client component swaps the display for visitors whose preference differs. The structured data keeps the base currency, which is correct and also what Google prefers to see consistently. This removed <code>cookies()</code> from the layout and the whole route tree went static.</p>
+
+        <p>The top 2,000 SKUs by revenue were added to <code>generateStaticParams</code>; the remaining 39,000 generate on demand with a thirty-minute window plus webhook invalidation from Shopify's product and inventory topics. Category revalidate went from 10 seconds to 15 minutes with tag-based invalidation.</p>
+
+        <p>Middleware got a matcher covering four path prefixes, and its only remaining job is a locale redirect for visitors with no locale in the path and no locale cookie.</p>
+
+        <p>Images: device sizes cut from eight to four, minimum cache TTL raised to a month.</p>
+
+        <p><strong>The result, measured over the following six weeks.</strong> p75 LCP went from 4.1s to 1.3s. Time to first byte at p75 from 890ms to 96ms. The Vercel bill settled at about £610 a month — a 78% reduction, of which roughly half was function invocations, a quarter middleware, and a quarter image optimisation. Shopify Storefront API call volume dropped by 94%, which mattered because they had been intermittently hitting rate limits during traffic spikes and nobody had connected the two.</p>
+
+        <p><strong>What went wrong along the way.</strong> The client-side currency swap caused a visible flash on slow connections: base-currency price rendered, then replaced about 400ms later. On a furniture site where the number is large, that flash reads as a price change and it generated actual support tickets. We fixed it by writing the preferred currency into a cookie that middleware turns into a rewrite to a per-currency variant path — four cache variants, which is a cardinality we can afford — so the correct price is in the HTML for returning visitors and only genuinely new visitors see the base currency. That is the right answer and it is the one I should have proposed first instead of reaching for the client-side fix because it was quicker to ship.</p>
+
+        <p>The other misstep: we set the thirty-minute revalidate window before wiring the Shopify webhooks, on the theory that we would do invalidation in the following sprint. A promotional price went live and took twenty-six minutes to appear on the long-tail pages, during which the marketing team was sending traffic to it. Do the invalidation first. The window is the backstop, not the mechanism.</p>
+
+        <h2>16. Traps Worth Knowing Before You Hit Them</h2>
+
+        <p>A list I have accumulated, roughly ordered by how much time each has cost somebody.</p>
+
+        <p><strong>A single <code>cookies()</code> or <code>headers()</code> call in a shared layout makes every page dynamic.</strong> The worked example above. Check the build output after every release; it is the cheapest regression test on this platform.</p>
+
+        <p><strong><code>searchParams</code> makes a page dynamic.</strong> Reading it in a server component means the route cannot be static. On a category page with filters this is often unavoidable, but handle the unfiltered case as a static route and treat filtered views separately.</p>
+
+        <p><strong><code>generateStaticParams</code> returning too much.</strong> Build time is roughly linear in the number of paths, and a 40-minute build changes how often a team deploys, which changes everything else.</p>
+
+        <p><strong><code>dynamic = 'force-dynamic'</code> copied from a tutorial.</strong> It appears in a lot of example code as a way to make something work during development, and then it ships. Grep for it.</p>
+
+        <p><strong>Server actions on high-traffic paths.</strong> A server action is a POST to your deployment and it is never cached. Fine for a form; not a way to fetch data on render.</p>
+
+        <p><strong>Middleware size limits.</strong> Middleware bundles have a tight ceiling. Importing a large i18n library or a full analytics SDK into middleware fails at build with a message about size, and the fix is always to move the work rather than to trim the import.</p>
+
+        <p><strong>Unauthenticated revalidation endpoints.</strong> Covered above, and worth repeating because I have found two live ones during audits.</p>
+
+        <p><strong>Soft 404s on generated pages.</strong> A missing SKU that renders a "not found" component with a 200 status is thin content in the index. Call <code>notFound()</code> so the framework sets the status, and verify with curl rather than with your eyes.</p>
+
+        <pre><code class="language-javascript">import { notFound } from 'next/navigation';
+
+const product = await getProduct(sku);
+if (!product) notFound();       // real 404 status, not a 200 with sad text</code></pre>
+
+        <h2>17. When I Would Not Use This Stack</h2>
+
+        <p>Because the honest version includes the cases against.</p>
+
+        <p><strong>A team without a JavaScript specialist.</strong> The caching model has real depth and the failure modes are silent. A Shopify theme, or Magento with Hyvä, will get a small team further with less risk than a headless build they cannot debug.</p>
+
+        <p><strong>Very high steady traffic with predictable load.</strong> Per-invocation pricing is excellent for spiky traffic and mediocre for a flat, high baseline. Model it against your actual traffic shape rather than the marketing curve.</p>
+
+        <p><strong>Heavy back-office functionality in the same application.</strong> Bulk exports, report generation and long-running imports fit function timeouts badly. Put them on something without a timeout and let the storefront be a storefront.</p>
+
+        <p><strong>Regulatory data residency requirements.</strong> You can pin functions to a region, but the ISR cache, the edge network and the logging pipeline are all part of the picture, and satisfying an auditor about all of it is more work than pinning one config value.</p>
+
+        <h2>18. Questions That Come Up</h2>
+
+        <p><strong>"Should middleware be edge or node?"</strong> Edge, in practice. Node middleware exists behind a flag in recent versions and is useful if you genuinely need a Node-only library in the request path, but it reintroduces cold starts on a code path that runs on every request. If you need Node in middleware, my first question is whether that work belongs in a route handler instead.</p>
+
+        <p><strong>"Is ISR safe for prices?"</strong> Only with on-demand invalidation wired to your source of truth. A revalidation window on its own means serving a stale price for the length of the window, which is a customer-service problem and in some jurisdictions worse than that. Invalidate on change; use the window as a backstop.</p>
+
+        <p><strong>"Why is my page dynamic when I did not make it dynamic?"</strong> Something in its tree called <code>cookies()</code>, <code>headers()</code>, <code>searchParams</code>, <code>draftMode()</code>, or an uncached <code>fetch</code> under Next 15 defaults. The build output identifies which routes; finding the call is a matter of bisecting the component tree, and it is nearly always in a layout or a provider rather than the page.</p>
+
+        <p><strong>"Can I use Vercel with Shopify or Magento?"</strong> Yes, and it is the common shape — commerce backend for catalogue, cart and orders, Next.js for the storefront. The thing to plan properly is invalidation from the backend's webhooks, and the thing to watch is API rate limits, which headless storefronts hit far sooner than themes do because every uncached render is an API call.</p>
+
+        <p><strong>"Do I need Vercel to run Next.js?"</strong> No. It self-hosts, and Next 15 improved the self-hosting story considerably, including a supported way to plug in your own ISR cache handler. What you take on is running that cache handler, the image optimiser, and the edge layer yourself. For a team with platform engineers that can be cheaper. For a team of four it is a false economy.</p>
+
+        <p><strong>"Is the App Router worth migrating to from Pages?"</strong> If you are shipping features on Pages Router and it is fast, no urgency. If you are starting fresh, yes. Halfway migrations are the expensive state — two routers, two data-fetching models, two caching models, and every new developer confused about which rules apply.</p>
+
+        <p><strong>"How do I stop deploys nuking my ISR cache?"</strong> You mostly cannot on the managed platform; a new build ID means a new cache. What you can do is reduce the blast radius: pre-render the pages that carry most of the traffic so they are warm at deploy, and avoid deploying into peak hours on a large catalogue.</p>
+
+        <h2>19. Where I Would Start</h2>
+
+        <p>Five things, in order, all of which take less than a day.</p>
+
+        <p>Run <code>next build</code> and read the route table. Every route marked dynamic that you believed was static is a function invocation per visitor and a slower page. This is the highest-yield twenty minutes available on this platform, and in the worked example above it was the entire finding.</p>
+
+        <p>Curl your top ten pages and look at <code>x-vercel-cache</code>. If you see <code>BYPASS</code> on a product page, you have the same problem the retailer had. If you see <code>MISS</code> repeatedly on the same URL, something is invalidating more aggressively than you think.</p>
+
+        <p>Open <code>middleware.ts</code> and check the matcher. Then look at your middleware invocation count next to your total request count. If those two numbers are close, you are running code on assets and paying for it.</p>
+
+        <p>Check <code>preferredRegion</code> against where your database and commerce API actually live. Then count the sequential awaits on your slowest route and parallelise what has no dependency between the calls.</p>
+
+        <p>Wire on-demand revalidation from your commerce backend's webhooks before you touch a revalidate window. Everything else here is performance; this one is correctness, and stale prices cost more than slow pages.</p>
+
+        <p>Then stop and measure for two weeks before doing anything cleverer. Streaming boundaries, partial prerendering, edge runtime migrations and bundle trimming are all real techniques and all worth less than moving a route out of the function path entirely. The platform's defaults are good. What costs money and speed is the small number of places where an innocuous line of application code quietly changes which of the five execution contexts your page lives in — and once you know to look for those, this is a genuinely excellent way to build a storefront.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -229,12 +682,11 @@ export const config = { matcher: '/products/:path*' };</code></pre>
               <p>Vercel Edge functions and KV storage.</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO & Performance Strategies</a></strong>
+              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
               <p>Next.js ISR static regeneration.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -268,6 +720,6 @@ export const config = { matcher: '/products/:path*' };</code></pre>
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

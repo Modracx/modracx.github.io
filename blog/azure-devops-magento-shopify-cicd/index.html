@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Azure DevOps CI/CD Pipelines for Enterprise E-Commerce | MODRACX</title>
-  <meta name="description" content="Technical guide on creating automated Azure Pipelines (`azure-pipelines.yml`) for Magento 2 and Shopify theme deployments." />
+  <meta name="description" content="Build-once-deploy-many Azure Pipelines for Magento 2 and Shopify themes: artefacts, static content deploy, Key Vault secrets, symlink releases and rollback." />
   <meta property="og:title" content="Azure DevOps CI/CD Pipelines for Enterprise E-Commerce | MODRACX" />
   <meta property="og:description" content="Technical guide on Azure DevOps CI/CD pipelines by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Azure DevOps CI/CD Pipelines for Enterprise E-Commerce</h1>
-        <p class="lede">Azure Pipelines automate static asset bundling, unit tests, and production deployments for multi-tenant e-commerce repositories.</p>
+        <p class="lede">A manual Magento deploy at four in the afternoon cost a client £6,000 in lost orders. Here is the Azure Pipelines setup that replaced it, and the migration that still went wrong three weeks later.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,29 +205,579 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Azure Pipelines Yaml Configuration Code</h2>
+        <h2>1. The Deploy That Took The Store Down At Four In The Afternoon</h2>
 
-        <pre><code class="language-yaml"># azure-pipelines.yml for Enterprise Magento 2 Build
+        <p>An electrical parts retailer I worked with ran their Magento 2 deploys the way most mid-sized merchants do: someone SSH'd into the production box, pulled the branch, ran <code>setup:upgrade</code>, ran <code>setup:static-content:deploy</code>, flushed the cache, and watched the site come back. It worked for three years. Then on a Thursday in November it did not.</p>
+
+        <p>The static content deploy took eleven minutes because the theme had grown and nobody had noticed. For eleven minutes, every request that needed a CSS or JS bundle got a 404, because the old <code>pub/static</code> directory had been cleared and the new one was still being written. The site was up in the sense that PHP responded. It was down in the sense that it rendered as unstyled HTML with a broken cart. Four in the afternoon, the busiest hour of their week, and they lost about £6,000 in orders before someone thought to restore from the previous night's tarball.</p>
+
+        <p>Nothing about that failure was exotic. The deploy process had no build stage, no artefact, no rollback, and no way to test the thing you were about to ship anywhere other than production. It had grown organically from a set of commands someone typed in 2019 and then wrote into a wiki page.</p>
+
+        <p>We moved them onto Azure Pipelines over about six weeks. This article is what I learned doing that and half a dozen similar migrations since — Magento 2 on Azure VMs, Shopify themes, and in two cases both in the same repository because the business ran a wholesale Magento store and a DTC Shopify store off shared brand assets. I have opinions about most of it, and a couple of things I got wrong the first time.</p>
+
+        <h2>2. Why Azure DevOps And Not Something Else</h2>
+
+        <p>Let me be honest about this up front: if you are starting from nothing and your code lives on GitHub, GitHub Actions is the easier choice. The YAML is simpler, the marketplace is bigger, and you do not have to explain to anyone what a "service connection" is. I would not migrate a working Actions setup to Azure Pipelines for its own sake.</p>
+
+        <p>Azure DevOps earns its place in three situations, and they are common enough in enterprise ecommerce that I keep coming back to it.</p>
+
+        <p>The first is when the rest of the business already lives there. If your finance team's integration work, your warehouse middleware and your ERP connectors are all in Azure Repos with Azure Boards tracking the work, putting the storefront somewhere else means two sets of permissions, two audit trails and two places to look when something breaks. Consolidation has real value, and it is mostly invisible until you lose it.</p>
+
+        <p>The second is approvals and auditability. Azure DevOps environments with approval gates, combined with branch policies that require a linked work item, give you a defensible answer to "who authorised this change and what did they test". If you take card payments and someone is going to ask you PCI DSS questions about change control, this matters. I have sat in that meeting. Having the pipeline produce the evidence automatically is worth a great deal more than a spreadsheet somebody updates after the fact.</p>
+
+        <p>The third is self-hosted agents inside a private network. If your Magento database sits behind a firewall with no public ingress — which it should — then your migration steps need to run from inside that network. Azure Pipelines self-hosted agents are straightforward to run on a VM in the same VNet, and the agent polls outbound so you do not have to open any inbound ports. Hosted runners on any provider mean either a VPN tunnel or a jump box, both of which are more moving parts.</p>
+
+        <p>If none of those three apply to you, use whatever your team already knows. The pipeline design in this article translates almost directly to Actions or GitLab CI; only the YAML dialect changes.</p>
+
+        <h2>3. Two Platforms, Two Completely Different Deploy Problems</h2>
+
+        <p>People say "our CI/CD covers Magento and Shopify" as if it were one job. It is two jobs that happen to be triggered by the same commit.</p>
+
+        <p>Magento 2 is a PHP application you own end to end. Deploying it means compiling dependency injection, generating static assets, running schema and data migrations against a live database, and swapping the running code without dropping requests. The failure modes are the failure modes of any large application deploy: a migration that locks a table, a cache that serves stale class maps, a PHP version mismatch between build and run.</p>
+
+        <p>Shopify is somebody else's application. You deploy Liquid templates, JSON settings and theme assets into a hosted platform via an API. There is no compilation you control, no database migration, no server. The failure modes are entirely different: a theme setting overwritten by a merchandiser's change in the admin, a metafield your template assumes exists but does not on the live store, an app block that only renders on the theme it was installed against.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Concern</th><th>Magento 2</th><th>Shopify theme</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Build artefact</td><td>Compiled code + static assets, 300MB–1.5GB</td><td>Theme directory, 2–20MB</td></tr>
+            <tr><td>Typical build time</td><td>8–25 minutes</td><td>30–90 seconds</td></tr>
+            <tr><td>Deploy mechanism</td><td>rsync/symlink or container image swap</td><td>Admin API theme push</td></tr>
+            <tr><td>Schema changes</td><td>Yes, irreversible in practice</td><td>None</td></tr>
+            <tr><td>Rollback</td><td>Symlink flip, plus database question</td><td>Publish previous theme, near-instant</td></tr>
+            <tr><td>Source of truth drift</td><td>Rare — code is authoritative</td><td>Constant — merchants edit live</td></tr>
+            <tr><td>Downtime risk</td><td>Real</td><td>Low, but preview themes accumulate</td></tr>
+          </tbody>
+        </table>
+
+        <p>That last row is the one that catches teams out. On Magento, the repository is the truth and the server is a projection of it. On Shopify, the live theme is a shared mutable object that non-engineers edit through a web UI, and every deploy you do risks stamping over somebody's Tuesday afternoon work. Any pipeline that treats the two identically will either be too heavy for Shopify or too light for Magento.</p>
+
+        <h2>4. The Shape Of A Magento 2 Pipeline</h2>
+
+        <p>The single most important idea, and the one that would have prevented the four o'clock outage, is <strong>build once, deploy many</strong>. The build stage produces an artefact. The deploy stage moves that artefact onto servers. Nothing is compiled on a production host, ever.</p>
+
+        <p>Magento supports this properly. The build can run <code>setup:di:compile</code> and <code>setup:static-content:deploy</code> without a database, provided you give it a config file that knows which modules are enabled and which locales and themes to generate. That file is <code>app/etc/config.php</code>, and it belongs in version control. If it is in your <code>.gitignore</code>, fix that before you write a line of pipeline YAML.</p>
+
+        <pre><code class="language-yaml"># azure-pipelines.yml — the top of a Magento 2 pipeline
 trigger:
-- main
+  branches:
+    include: [ main, release/* ]
+  paths:
+    exclude: [ docs/*, README.md ]
 
-pool:
-  vmImage: 'ubuntu-latest'
+variables:
+  - group: magento-shared          # variable group, non-secret defaults
+  - name: PHP_VERSION
+    value: '8.3'
+  - name: COMPOSER_CACHE_DIR
+    value: $(Pipeline.Workspace)/.composer-cache
 
-steps:
-- task: UsePHP@0
-  inputs:
-    versionOption: '8.2'
-- script: |
-    composer install --no-dev --optimize-autoloader
-    bin/magento setup:di:compile
-  displayName: 'Compile Magento Dependencies'</code></pre>
+stages:
+  - stage: Build
+    jobs:
+      - job: build_artifact
+        pool:
+          vmImage: ubuntu-22.04
+        timeoutInMinutes: 40
+        steps:
+          - task: Cache@2
+            displayName: Restore composer cache
+            inputs:
+              # Key on the lock file: a dependency change invalidates it,
+              # a code change does not.
+              key: 'composer | "$(Agent.OS)" | composer.lock'
+              restoreKeys: 'composer | "$(Agent.OS)"'
+              path: $(COMPOSER_CACHE_DIR)
 
-        <hr />
+          - script: |
+              sudo update-alternatives --set php /usr/bin/php$(PHP_VERSION)
+              php -v
+            displayName: Pin PHP version
+
+          - script: |
+              composer install --no-dev --no-interaction \
+                --prefer-dist --optimize-autoloader
+            displayName: Composer install
+            env:
+              COMPOSER_AUTH: $(COMPOSER_AUTH_JSON)   # Adobe repo keys, secret</code></pre>
+
+        <p>Two details in there are worth pausing on. <code>--no-dev</code> means PHPUnit and friends are not in the artefact, which cuts several hundred megabytes and removes a class of supply-chain exposure from production. But it also means your test job cannot use that install — so run tests in a separate job with a full <code>composer install</code>, and treat the production install as a distinct output. I have seen teams skip <code>--no-dev</code> to keep one install step, and then ship a debugging toolbar to production.</p>
+
+        <p>The PHP version pin looks pedantic until the hosted image updates its default and your build starts producing bytecode your production servers cannot read. Pin it. Pin the image tag too — <code>ubuntu-22.04</code>, not <code>ubuntu-latest</code>. "Latest" is a promise that your pipeline will break on a date you did not choose.</p>
+
+        <h2>5. Static Content Deploy Is Where The Time Goes</h2>
+
+        <p>On every Magento pipeline I have profiled, static content generation is the longest single step, usually by a factor of three. It is also the step people configure worst.</p>
+
+        <p>The default behaviour generates every theme for every enabled locale. If you have Luma still enabled because nobody removed it, and you support English and German, you are generating four full theme trees when you need two. Each is thousands of files.</p>
+
+        <pre><code class="language-bash"># Generate only what you actually serve.
+# -f forces regeneration; --no-html-minify keeps the build honest for diffing
+bin/magento setup:static-content:deploy en_GB de_DE \
+  --theme Acme/storefront \
+  --theme Magento/blank \
+  --jobs $(nproc) \
+  --no-parent \
+  -f
+
+# The compile step benefits from a big memory limit far more than from cores
+php -d memory_limit=4G bin/magento setup:di:compile</code></pre>
+
+        <p><code>--jobs</code> genuinely helps: static deploy parallelises across themes and locales reasonably well, and moving from one job to four took a client's step from 9 minutes to 3 minutes 40. <code>--no-parent</code> stops it walking up the theme inheritance chain and generating parent themes you never serve directly. Keeping <code>Magento/blank</code> in the list is deliberate — the admin panel falls back to it, and if you omit it the admin renders unstyled, which is a fun thing to discover after a release.</p>
+
+        <p>Once the assets exist, do not ship the raw directory. Half a million small files over rsync is slow and the transfer itself becomes a source of partial states. Package it.</p>
+
+        <pre><code class="language-yaml">          - script: |
+              # Strip the things production never reads before packaging
+              rm -rf var/cache/* var/page_cache/* generated/metadata/*
+              tar --use-compress-program='zstd -T0 -3' \
+                  -cf $(Build.ArtifactStagingDirectory)/release.tar.zst \
+                  --exclude='./.git' \
+                  --exclude='./var/log' \
+                  .
+            displayName: Package release
+
+          - publish: $(Build.ArtifactStagingDirectory)/release.tar.zst
+            artifact: magento-release
+</code></pre>
+
+        <p>zstd at level 3 with all threads compresses a 900MB Magento tree to roughly 180MB in about twenty seconds. gzip at default settings takes ninety and produces a larger file. This is a small win but it is free, and it applies to every deploy for the life of the project.</p>
+
+        <h2>6. Agents, Caching And The Twenty-Five Minute Build</h2>
+
+        <p>A Magento build that takes twenty-five minutes will not be run often, and a pipeline that is not run often is a pipeline nobody trusts. Getting under ten minutes changes team behaviour. Here is where the time actually goes on an unoptimised build, from a real profile I took on a mid-sized catalogue with two custom modules and a heavily customised theme:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Step</th><th>Cold</th><th>With cache/tuning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Composer install</td><td>3m 10s</td><td>48s</td></tr>
+            <tr><td>di:compile</td><td>4m 25s</td><td>4m 05s</td></tr>
+            <tr><td>static-content:deploy</td><td>11m 40s</td><td>3m 40s</td></tr>
+            <tr><td>Node/webpack theme build</td><td>2m 50s</td><td>1m 05s</td></tr>
+            <tr><td>Package and upload</td><td>2m 15s</td><td>50s</td></tr>
+            <tr><td><strong>Total</strong></td><td><strong>24m 20s</strong></td><td><strong>10m 28s</strong></td></tr>
+          </tbody>
+        </table>
+
+        <p>Note what did not improve much. <code>di:compile</code> is stubbornly slow and does not cache usefully between builds, because it reflects over the whole codebase and a one-line change in a plugin can legitimately alter the generated factories. I have seen people try to cache <code>generated/</code> and it produces the worst possible bug: a stale interceptor for a class you changed, which behaves correctly on the developer's machine and wrongly in production. Do not cache <code>generated/</code>. Pay the four minutes.</p>
+
+        <p>The bigger lever is agent hardware. Microsoft-hosted agents give you two vCPUs and 7GB of RAM. A self-hosted agent on a modest VM with eight vCPUs and 32GB cuts the same build roughly in half again, because both <code>di:compile</code> and static deploy are CPU-bound and the parallel job count is capped by cores. For a team deploying multiple times a day, a persistently running agent VM costs less per month than the engineering time lost waiting. It also lets you keep a warm Composer cache on local disk rather than restoring it from artefact storage every run.</p>
+
+        <p>The trade-off with self-hosted agents is state. A hosted agent is clean every time; a self-hosted one accumulates. I now always add a cleanup step and treat a "works on the agent, fails on a fresh checkout" report as a build bug, not a flake.</p>
+
+        <h2>7. The Shopify Side: Themes Are Not Applications</h2>
+
+        <p>Shopify theme deployment is technically trivial and organisationally hard. The technical part is one command.</p>
+
+        <pre><code class="language-yaml">  - stage: DeployShopifyStaging
+    dependsOn: BuildTheme
+    jobs:
+      - deployment: push_theme
+        environment: shopify-staging
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: npm install -g @shopify/cli@3
+                  displayName: Install Shopify CLI
+
+                - script: |
+                    # Push to a named unpublished theme, never to the live one.
+                    shopify theme push \
+                      --store "$SHOP_DOMAIN" \
+                      --theme "CI $(Build.BuildNumber)" \
+                      --path ./dist \
+                      --json &gt; push-result.json
+                  env:
+                    SHOPIFY_CLI_THEME_TOKEN: $(SHOPIFY_THEME_TOKEN)
+                    SHOP_DOMAIN: $(SHOP_DOMAIN)
+                  displayName: Push preview theme</code></pre>
+
+        <p>The organisational part is settings drift. <code>config/settings_data.json</code> holds every choice a merchandiser made in the theme editor: the homepage hero image, the section order, which collections appear where. If you push that file from your repository, you overwrite their work. If you never push it, you cannot version-control genuine template changes that add new settings.</p>
+
+        <p>The approach I have settled on, after getting this wrong twice, is to treat settings as merchant-owned and schema as developer-owned. The pipeline ignores <code>config/settings_data.json</code> on push and pulls it back into the repo on a nightly job so the history exists for reference.</p>
+
+        <pre><code class="language-bash"># .shopifyignore — what CI must never overwrite on a live store
+config/settings_data.json
+templates/*.json
+sections/*.json
+locales/*.json
+
+# Nightly reverse-sync so the repo has a record of merchant changes.
+# --only limits the pull to exactly those files.
+shopify theme pull --store "$SHOP_DOMAIN" --theme "$LIVE_THEME_ID" \
+  --only config/settings_data.json --only templates/*.json --path ./theme
+</code></pre>
+
+        <p>JSON templates are the same problem in a newer wrapper. With Online Store 2.0, section layout lives in <code>templates/*.json</code>, and merchants rearrange those constantly. Anything a merchant can edit in the admin should be pulled, not pushed. Anything only an engineer can change — Liquid, CSS, JS, section schema — is pushed.</p>
+
+        <p>The one exception is a genuinely new template you are introducing. That has to be pushed once, and then it becomes merchant-owned. I handle it with an explicit, manually triggered pipeline parameter rather than trying to be clever about detecting new files, because the clever version will eventually decide a file is new when it is not.</p>
+
+        <h2>8. Publishing, Preview Themes And The Twenty-Theme Limit</h2>
+
+        <p>Shopify caps a store at twenty themes. A pipeline that creates a preview theme per pull request will hit that ceiling within a fortnight on an active team, and then deploys start failing with an error nobody on the team has seen before.</p>
+
+        <p>So the pipeline has to garbage-collect. Delete the theme when the PR closes, and sweep anything older than a week as a backstop.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# sweep-themes.sh — remove CI preview themes older than 7 days
+set -euo pipefail
+
+cutoff=$(date -u -d '7 days ago' +%s)
+
+shopify theme list --store "$SHOP_DOMAIN" --json \
+  | jq -r '.[] | select(.role == "unpublished")
+           | select(.name | startswith("CI "))
+           | [.id, .updated_at] | @tsv' \
+  | while IFS=$'\t' read -r id updated; do
+      ts=$(date -u -d "$updated" +%s)
+      if [ "$ts" -lt "$cutoff" ]; then
+        echo "deleting theme $id (updated $updated)"
+        shopify theme delete --store "$SHOP_DOMAIN" --theme "$id" --force
+      fi
+    done
+</code></pre>
+
+        <p>Going live is a publish, not a push. Push the build to a fresh unpublished theme, smoke-test it against its preview URL, then publish. Publishing is atomic from a shopper's perspective and it makes rollback a single click — the previously live theme is still sitting there. This is one of the few places where Shopify's deployment story is genuinely better than anything you can build yourself on Magento, and it is worth structuring the pipeline to use it rather than pushing straight to the live theme to save a step.</p>
+
+        <h2>9. Secrets, Service Connections And The Token That Leaked</h2>
+
+        <p>Here is a mistake I made. Early on, a Shopify Admin API token was stored as a plain pipeline variable rather than a secret one, because someone had set it up quickly and it worked. Plain variables are printed in the environment dump when a script runs with <code>set -x</code>. Someone added <code>set -x</code> to debug a failing step, the token went into the build log, and the build logs were readable by everyone in the organisation — about forty people, including contractors.</p>
+
+        <p>Nothing bad came of it, we rotated the token within the hour, but it was avoidable and it was my fault for not auditing the variables when I inherited the setup.</p>
+
+        <p>Azure DevOps masks secret variables in logs, which helps but is not a defence — masking is string matching, and a base64-encoded or JSON-embedded secret will not match. The stronger pattern is to keep nothing in pipeline variables at all and pull from Key Vault at run time, so that access is logged, rotation is central, and the pipeline definition contains no credential material.</p>
+
+        <pre><code class="language-yaml">          - task: AzureKeyVault@2
+            inputs:
+              azureSubscription: 'sc-prod-deploy'   # workload identity federation
+              KeyVaultName: 'kv-acme-prod'
+              # Fetch only what this stage needs. Wildcards here are how
+              # a staging job ends up holding production credentials.
+              SecretsFilter: 'shopify-theme-token,magento-deploy-key'
+              RunAsPreJob: true
+</code></pre>
+
+        <p>Two rules I now apply without exception. Service connections use workload identity federation rather than a stored client secret, so there is no long-lived credential to leak in the first place. And every service connection is restricted to specific pipelines — the default is to allow all pipelines in the project, which means any engineer who can create a pipeline can use your production deploy identity. That default is wrong for anything touching a live store.</p>
+
+        <p>Scope the tokens themselves too. A Shopify theme token needs <code>write_themes</code> and nothing else. If your CI token can read orders, it can read customer PII, and now your build agent is in scope for a conversation you did not plan to have. The same logic applies to the Magento deploy user: it needs write access to one directory tree and permission to restart PHP-FPM, not sudo.</p>
+
+        <h2>10. Database Migrations And The Rollback That Is Not A Rollback</h2>
+
+        <p>Every deployment guide says "always have a rollback plan". For Magento, the honest version is: you can roll back code in seconds and you usually cannot roll back the database at all.</p>
+
+        <p><code>setup:upgrade</code> runs schema patches and data patches, records them in <code>patch_list</code>, and most of them have no reverse. A patch that adds a column is harmless to leave in place. A patch that rewrites the format of a serialised attribute value is not — the old code cannot read the new data, so flipping the symlink back gives you a broken site rather than the previous one.</p>
+
+        <p>What actually works is discipline about what a migration is allowed to do during a deploy:</p>
+
+        <p><strong>Additive only during deploy.</strong> New columns, new tables, new indexes. Nothing dropped, nothing renamed, no data rewritten in a way the previous release cannot read. If you need to remove a column, that is a separate release a week later, after the code that referenced it is definitely gone from every server.</p>
+
+        <p><strong>Expand and contract for renames.</strong> Add the new column, write to both, backfill in a background job, switch reads, and only then drop the old one — across three or four releases. Slow, tedious, and the only version that lets you roll back at any point.</p>
+
+        <p><strong>Long backfills do not belong in the pipeline.</strong> A data patch that updates two million rows will hold the deploy open for twenty minutes and can lock tables under load. Put the backfill in a queue consumer or a cron job triggered after the deploy completes, and make the new code tolerate both old and new data while it runs.</p>
+
+        <pre><code class="language-yaml">          # Take a schema snapshot before migrations so the shape is
+          # recoverable even though the data may not be.
+          - script: |
+              mysqldump --no-data --single-transaction \
+                --host="$DB_HOST" --user="$DB_USER" "$DB_NAME" \
+                &gt; "$(Build.ArtifactStagingDirectory)/schema-pre-$(Build.BuildId).sql"
+            displayName: Snapshot schema
+
+          - script: |
+              # Dry-run first: prints what would run without applying it.
+              bin/magento setup:db:status
+              bin/magento setup:upgrade --keep-generated --no-interaction
+            displayName: Apply migrations
+</code></pre>
+
+        <p><code>--keep-generated</code> is essential when you have already compiled in the build stage. Without it, <code>setup:upgrade</code> cheerfully wipes <code>generated/</code> on your production host and the next request triggers on-the-fly compilation, which on a busy store means several thousand requests all trying to compile at once. That is a slower and more confusing outage than the one I opened this article with, and I have watched it happen.</p>
+
+        <p><code>setup:db:status</code> in a preceding step is a cheap gate. If it reports nothing to do, you can skip the maintenance window entirely for that release, and most releases have no schema change at all.</p>
+
+        <h2>11. Environments, Approvals And Gates</h2>
+
+        <p>Azure DevOps environments are the feature that most repays learning properly. An environment is a named deployment target with its own approval rules, checks and history. A <code>deployment</code> job targeting an environment gets you an audit trail for free: who approved, when, which build, which commit.</p>
+
+        <p>The check I get most value from is not the human approval — people approve things reflexively — but the business hours gate. A rule that production deploys can only run between 07:00 and 15:00 on weekdays removes an entire category of incident, because the four o'clock deploy in my opening story is a decision nobody should be allowed to make at four o'clock.</p>
+
+        <pre><code class="language-yaml">  - stage: DeployProduction
+    dependsOn: DeployStaging
+    condition: succeeded()
+    jobs:
+      - deployment: prod
+        environment: magento-production   # approvals + business-hours check
+        pool: { name: 'SelfHosted-Prod-VNet' }
+        strategy:
+          runOnce:
+            preDeploy:
+              steps:
+                - download: current
+                  artifact: magento-release
+            deploy:
+              steps:
+                - template: templates/release-magento.yml
+                  parameters:
+                    releaseId: $(Build.BuildId)
+            on:
+              failure:
+                steps:
+                  - script: ./scripts/rollback-symlink.sh
+                    displayName: Revert to previous release</code></pre>
+
+        <p>The <code>on: failure</code> hook is worth wiring up early. An automated rollback that runs in four seconds beats a human rollback that starts after someone reads a Slack message, and the symlink flip is safe enough to automate precisely because it does not touch the database.</p>
+
+        <p>One thing I would do differently: I used to gate staging deploys behind approval too, on the theory that consistency is good. It is not. Staging should deploy automatically on every merge to main, with no human in the loop, or it drifts from production and stops being a useful signal. Save the friction for the environment where friction is warranted. If you want a broader treatment of the release-safety side of this, the material on <a href="/blog/zero-downtime-deployment/">zero-downtime deployment</a> covers the request-draining and health-check mechanics that sit underneath these gates.</p>
+
+        <h2>12. Symlink Releases And Making The Switch Atomic</h2>
+
+        <p>The deploy script itself is the least glamorous part of the pipeline and the part that determines whether customers notice. The shape is the standard Capistrano-style layout, and it works because the final step is a single atomic operation.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# release-magento.sh — run on each web node
+set -euo pipefail
+
+RELEASE_ID="$1"
+BASE=/var/www/acme
+RELEASE="$BASE/releases/$RELEASE_ID"
+
+mkdir -p "$RELEASE"
+tar --use-compress-program=unzstd -xf /tmp/release.tar.zst -C "$RELEASE"
+
+# Shared state that must survive releases
+for d in var/log var/report pub/media app/etc/env.php; do
+  rm -rf "${RELEASE:?}/$d"
+  ln -s "$BASE/shared/$d" "$RELEASE/$d"
+done
+
+# Warm the opcache-relevant paths before any traffic sees them
+php "$RELEASE/bin/magento" cache:enable &gt;/dev/null
+
+# ln -sfn onto a temp name then mv is atomic; ln -sfn onto the live
+# path directly is not, and there is a window where it does not exist.
+ln -sfn "$RELEASE" "$BASE/current.tmp"
+mv -Tf "$BASE/current.tmp" "$BASE/current"
+
+# PHP-FPM caches realpaths; without this it keeps serving the old tree
+sudo systemctl reload php8.3-fpm
+
+# Prune: keep five releases, which is about a week of deploys
+ls -1dt "$BASE/releases"/* | tail -n +6 | xargs -r rm -rf
+</code></pre>
+
+        <p>The <code>ln -sfn</code> then <code>mv -Tf</code> dance is the detail that matters. Replacing a symlink in place is implemented as unlink-then-create, and there is a window — small, but real under load — where the path does not exist and requests 500. Creating a temporary symlink and renaming it over the target is a single atomic syscall. I have had this argument several times with people who point out that they have never seen it fail. They have never seen it fail at 30 requests per second.</p>
+
+        <p>The FPM reload is the other one people skip. PHP-FPM caches resolved real paths, so it will keep executing files from the old release directory until it is reloaded — and then, five deploys later, that directory gets pruned and the site collapses in a way that looks completely unrelated to the deploy that caused it.</p>
+
+        <h2>13. What Is Worth Testing In The Pipeline</h2>
+
+        <p>I have a bias here: most Magento test suites I inherit are slow, flaky and test the framework rather than the business. A pipeline stage that fails randomly one time in six trains everyone to click "re-run" without reading the output, which is worse than having no tests.</p>
+
+        <p>What earns its place, in the order I add it:</p>
+
+        <p><strong>Static analysis, always.</strong> It is fast, deterministic, and catches the class of error that actually reaches production in PHP — a typo in a method name that a dynamic language will happily let you ship.</p>
+
+        <pre><code class="language-yaml">      - job: static_checks
+        steps:
+          - script: |
+              vendor/bin/phpcs --standard=Magento2 --severity=8 app/code
+              vendor/bin/phpstan analyse --level=5 --memory-limit=2G app/code
+              # Magento's own compatibility scanner for the target version
+              vendor/bin/phpcs --standard=Magento2 \
+                --sniffs=Magento2.Legacy.ObsoleteConnection app/code
+            displayName: PHPCS + PHPStan
+</code></pre>
+
+        <p><strong>Unit tests on your own modules only.</strong> Not the whole Magento suite. Your <code>app/code</code> namespace, running in under two minutes, with no database.</p>
+
+        <p><strong>A build-integrity check.</strong> Cheaper than integration tests and catches more real problems: after the build, assert that the compiled output contains what it should. Did static deploy actually produce the theme's main CSS bundle? Is <code>generated/code</code> non-empty? Does <code>bin/magento module:status</code> agree with <code>config.php</code>? Three assertions, ten seconds, and they would have caught the incident that opened this article.</p>
+
+        <pre><code class="language-bash"># build-check.sh — assertions about the artefact, not the code
+set -euo pipefail
+
+test -s pub/static/frontend/Acme/storefront/en_GB/css/styles-m.css \
+  || { echo "FAIL: storefront CSS missing from static output"; exit 1; }
+
+find generated/code -name '*.php' | head -1 | grep -q . \
+  || { echo "FAIL: generated/code is empty — di:compile did not run"; exit 1; }
+
+# Modules enabled in config.php must all exist in the build
+php bin/magento module:status --enabled | tail -n +2 | while read -r m; do
+  [ -n "$m" ] &amp;&amp; grep -q "\"$m\"" app/etc/config.php \
+    || { echo "FAIL: $m enabled but not in config.php"; exit 1; }
+done
+</code></pre>
+
+        <p><strong>A synthetic smoke test after deploy to staging.</strong> Load the homepage, a category, a product, add to cart, reach the shipping step. Five requests, real HTTP, asserting on status code and a string in the body. This catches integration failures that no unit test will.</p>
+
+        <p><strong>A performance budget, if you will act on it.</strong> Lighthouse CI against the staging URL with a hard failure threshold on Largest Contentful Paint and Total Blocking Time. This is only worth adding if the team agrees in advance that a regression blocks the release; otherwise it becomes a warning everyone ignores. The measurement discipline in <a href="/blog/core-web-vitals-optimization/">measuring Core Web Vitals in CI</a> applies directly — run it against a URL with a warmed cache, several times, and compare medians rather than single runs.</p>
+
+        <h2>14. One Repository, Two Platforms, Path Filters</h2>
+
+        <p>The dual-platform clients are where pipeline design gets interesting. A monorepo with <code>magento/</code> and <code>shopify-theme/</code> and a shared <code>design-tokens/</code> package means a change to a brand colour should rebuild both, but a change to a Magento module should rebuild neither the theme nor anything Shopify-shaped.</p>
+
+        <p>Azure Pipelines does not have first-class conditional stages based on changed paths within a single pipeline, which is genuinely annoying. There are two workable answers.</p>
+
+        <p>The straightforward one is separate pipeline files with their own path triggers. Two YAML files, two pipelines, each triggered by its own subtree. Shared code lives in a third path that appears in both triggers. This duplicates a little configuration and is completely obvious to read, which counts for a lot when someone new joins.</p>
+
+        <pre><code class="language-yaml"># magento-pipeline.yml
+trigger:
+  branches: { include: [ main ] }
+  paths:
+    include: [ magento/*, packages/design-tokens/* ]
+
+# shopify-pipeline.yml
+trigger:
+  branches: { include: [ main ] }
+  paths:
+    include: [ shopify-theme/*, packages/design-tokens/* ]
+</code></pre>
+
+        <p>The clever one is a single pipeline with a first job that diffs against the previous successful build and sets output variables that later stages condition on. It is more elegant and it fails in an interesting way: when a build is retried, or when the previous successful build is several commits back, the diff range is wrong and you either skip a stage you needed or run everything. I built this, ran it for four months, and then replaced it with two files. If you want it anyway, compute the range from the merge base rather than from <code>HEAD~1</code>, and default to "build everything" whenever the range cannot be determined.</p>
+
+        <pre><code class="language-yaml">  - stage: Detect
+    jobs:
+      - job: changed
+        steps:
+          - checkout: self
+            fetchDepth: 0        # shallow clones make the diff meaningless
+          - bash: |
+              BASE=$(git merge-base origin/main HEAD)
+              CHANGED=$(git diff --name-only "$BASE"...HEAD || echo "ALL")
+              echo "$CHANGED" | grep -q '^magento/' \
+                &amp;&amp; echo "##vso[task.setvariable variable=buildMagento;isOutput=true]true"
+            name: detect
+</code></pre>
+
+        <h2>15. Knowing Whether The Deploy Actually Worked</h2>
+
+        <p>A pipeline that goes green tells you the commands exited zero. It does not tell you the store is fine. The gap between those two things is where most post-deploy incidents live.</p>
+
+        <p>Three signals, in increasing order of usefulness.</p>
+
+        <p>A health endpoint that exercises the real dependencies — database read, cache write, search connection — and returns structured JSON. Poll it after the symlink flip and fail the deploy if it does not come good within thirty seconds. Keep it cheap enough to call every ten seconds forever, and keep it out of your sitemap.</p>
+
+        <pre><code class="language-php">&lt;?php
+// pub/health.php — deliberately outside the framework so it still
+// responds when the application layer is broken.
+declare(strict_types=1);
+
+$checks = [];
+$start  = microtime(true);
+
+try {
+    $env = require __DIR__ . '/../app/etc/env.php';
+    $db  = $env['db']['connection']['default'];
+    $pdo = new PDO(
+        sprintf('mysql:host=%s;dbname=%s', $db['host'], $db['dbname']),
+        $db['username'], $db['password'],
+        [PDO::ATTR_TIMEOUT =&gt; 2]
+    );
+    $pdo-&gt;query('SELECT 1');
+    $checks['db'] = 'ok';
+} catch (Throwable $e) {
+    $checks['db'] = 'fail';
+}
+
+$redis = @fsockopen($env['cache']['frontend']['default']['backend_options']['server'] ?? '127.0.0.1', 6379, $n, $s, 1);
+$checks['cache'] = $redis ? 'ok' : 'fail';
+
+// The release identifier lets the pipeline confirm it is talking to
+// the version it just shipped, not a node that missed the deploy.
+$checks['release'] = trim(@file_get_contents(__DIR__ . '/../RELEASE_ID') ?: 'unknown');
+$checks['ms']      = (int) round((microtime(true) - $start) * 1000);
+
+http_response_code(in_array('fail', $checks, true) ? 503 : 200);
+header('Content-Type: application/json');
+echo json_encode($checks);
+</code></pre>
+
+        <p>That <code>release</code> field has saved me twice. On a four-node cluster, one node's deploy failed silently and it kept serving the previous release for a day and a half. Nobody noticed because the site worked — just differently, on a quarter of requests, in a way that made a bug report impossible to reproduce.</p>
+
+        <p>The second signal is a deployment marker in whatever you use for monitoring. An annotation on the error-rate graph at the moment of each release turns "errors went up sometime this week" into "errors went up ninety seconds after build 4471".</p>
+
+        <p>The third, and the one teams skip, is a post-deploy check on real user data twenty minutes later. Order rate compared with the same window yesterday. If it has dropped by more than a third, page someone. Checkout breaks in ways that produce no server errors at all — a JavaScript exception in a payment iframe, a shipping method that silently returns no rates — and the only instrument that detects those is the money.</p>
+
+        <h2>16. A Worked Example, Including The Part That Went Wrong</h2>
+
+        <p>The electrical parts retailer from the opening. Magento 2.4.6 on three web nodes behind an Azure load balancer, a Shopify Plus store for their DTC brand, roughly 9,000 SKUs, deploys previously done by hand about once a fortnight because everyone was afraid of them.</p>
+
+        <p>Where we landed after six weeks:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Measure</th><th>Before</th><th>After</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Deploys per month</td><td>2</td><td>17</td></tr>
+            <tr><td>Time from merge to production</td><td>~3 hours, manual</td><td>22 minutes</td></tr>
+            <tr><td>Customer-visible downtime per deploy</td><td>4–11 minutes</td><td>0</td></tr>
+            <tr><td>Failed deploys needing manual recovery</td><td>roughly 1 in 4</td><td>2 in 6 months</td></tr>
+            <tr><td>Mean time to roll back</td><td>40+ minutes</td><td>~15 seconds</td></tr>
+            <tr><td>Build minutes cost</td><td>0</td><td>£61/month agent VM</td></tr>
+          </tbody>
+        </table>
+
+        <p>Now the part that went wrong, because a case study where everything worked is not a case study.</p>
+
+        <p>Three weeks in, a release went out that included a data patch reformatting a custom product attribute used by their configurator. The patch ran in 40 seconds on staging, where the database was a six-month-old sanitised copy with about a third of the production row count. On production it took eleven minutes and held a metadata lock on <code>catalog_product_entity_varchar</code>, which meant the indexer backed up, which meant category pages started serving stale stock for the next two hours.</p>
+
+        <p>No downtime, no errors, pipeline green throughout. Just wrong data on the site, and a support inbox filling up with people ordering things that were not in stock.</p>
+
+        <p>Two changes came out of it. Staging now restores a full production database nightly rather than using a stale sanitised copy — sanitised, still, but current in shape and size. And any patch touching more than 100,000 rows has to be written as a queued backfill rather than a synchronous data patch. That second rule is enforced by a code review checklist rather than by tooling, which is unsatisfying, and I have not found a good automated check for it. If you have, I would like to hear it.</p>
+
+        <p>The other honest note: the seventeen-deploys-a-month figure is partly a behavioural effect and not entirely a good one. When deploying is easy, people deploy half-finished things on a Friday. We added the business-hours gate two months in for exactly that reason.</p>
+
+        <h2>17. What This Actually Costs</h2>
+
+        <p>Worth being concrete, because "invest in CI/CD" is easy to say and someone has to sign off the spend.</p>
+
+        <p>Microsoft-hosted parallel jobs are free for one concurrent job with a monthly minute allowance on private projects, and that allowance evaporates fast on Magento builds — a 20-minute build run eight times a day is 4,800 minutes a month. A self-hosted agent on a modest VM removes the minute cap entirely and is generally the cheaper answer past about two deploys a day, with the added benefit of persistent caches.</p>
+
+        <p>Artefact storage adds up more than people expect. A 180MB artefact retained for 30 days across 400 builds is 72GB. Set retention policies deliberately: keep production releases for 90 days, keep pull request builds for three. The default retention on a new project is more generous than you need.</p>
+
+        <p>The real cost is the six weeks of engineering time to build it, and the ongoing tax of maintaining pipeline YAML that nobody enjoys reading. I would still take that trade for any store doing meaningful revenue, but I would not pretend it is free. For a small store deploying twice a month with one developer, a well-written shell script and a checklist is a defensible answer, and I have told clients so.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Should we containerise Magento and deploy images instead of tarballs?"</strong> If you already run Kubernetes for other things, yes — an immutable image is a better artefact than a tarball, and the deploy becomes a rolling update you did not have to write. If you do not already run Kubernetes, adopting it to solve deployment is a very large amount of new operational surface to solve a problem that a symlink solves. The <a href="/blog/containerization-docker-kubernetes/">container and orchestration side</a> is worth reading before committing either way. My rough rule: fewer than four application nodes, stay with symlinks.</p>
+
+        <p><strong>"Can the pipeline run <code>setup:upgrade</code> on all three web nodes?"</strong> No. It must run exactly once, from one node or from a dedicated job. Concurrent <code>setup:upgrade</code> against one database is a race over <code>patch_list</code> and it will corrupt state. Structure it as a single job that runs migrations, followed by a parallel job that deploys code to every node.</p>
+
+        <p><strong>"Do we need maintenance mode?"</strong> For an additive-only deploy with a symlink flip, no, and enabling it costs you the orders that would have been placed during it. For a release with a schema change that the old code genuinely cannot tolerate, yes — and that is a signal you should have split the release rather than a signal you need better maintenance-page design.</p>
+
+        <p><strong>"How do we handle Magento's <code>app/etc/env.php</code> across environments?"</strong> Never in the repository. It holds database credentials and cryptographic keys. Keep it in the shared directory on each server, symlinked into every release, and manage its contents with configuration management rather than the pipeline. If you want configuration in version control, use <code>app/etc/config.php</code> for the parts that are not secret and <code>bin/magento config:set --lock-env</code> for the rest.</p>
+
+        <p><strong>"Our Shopify theme has a Node build step. Where does that run?"</strong> In the build stage, producing a <code>dist/</code> directory that gets pushed. Do not commit build output to the repository — you will get merge conflicts in minified files, which is a special kind of miserable. Cache <code>node_modules</code> keyed on the lock file and the whole thing takes under a minute.</p>
+
+        <p><strong>"Is it worth deploying to a canary node first?"</strong> On three nodes, marginally. The useful version is not "one node gets the new code" but "one node gets the new code and we watch its error rate for five minutes before the rest follow". That requires per-node error metrics, which most teams do not have, and without them a canary is just a slower deploy.</p>
+
+        <h2>19. What I Would Do First</h2>
+
+        <p>If you are starting from a manual deploy and a wiki page, in this order:</p>
+
+        <p><strong>One.</strong> Get <code>app/etc/config.php</code> into version control and confirm you can run <code>di:compile</code> and <code>static-content:deploy</code> on a machine with no database. Everything else depends on this. If it does not work, that is a day of unpicking module state, and it is a day well spent.</p>
+
+        <p><strong>Two.</strong> Build an artefact in CI and publish it. Do not deploy it anywhere yet. Just prove that a build produces a reproducible tarball, and put the build-integrity assertions in immediately — they are ten lines and they catch the worst failures.</p>
+
+        <p><strong>Three.</strong> Restructure the servers for symlink releases, with shared directories for media, logs and <code>env.php</code>. Do this by hand once, deploying the current release into the new layout, before automating it. You will find surprises — a cron job with a hardcoded path, an upload directory nobody documented — and you want to find them without a pipeline in the mix.</p>
+
+        <p><strong>Four.</strong> Automate deploy to staging on every merge, with no approvals. Live with it for a fortnight. This is where you learn what your pipeline gets wrong, cheaply.</p>
+
+        <p><strong>Five.</strong> Add the production environment with approvals, a business-hours gate, and the automatic symlink rollback on failure. Only now is it worth writing.</p>
+
+        <p><strong>Six.</strong> Add the post-deploy health check and the release-ID assertion across every node. This is the step that catches the silent partial failure, and it is the one people leave until after it has bitten them.</p>
+
+        <p><strong>Seven.</strong> Only then bring Shopify in, as a separate pipeline, with the ignore rules for merchant-owned files written before the first push. Getting that wrong is a phone call from a marketing director, and it is much easier to prevent than to explain.</p>
+
+        <p>The pieces after that — performance budgets, canaries, matrix builds across PHP versions — are refinements. The first six steps are the ones that stop you losing six thousand pounds on a Thursday afternoon.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -238,7 +790,6 @@ steps:
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -272,6 +823,6 @@ steps:
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>
