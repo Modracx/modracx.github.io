@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS & Azure | MODRACX</title>
-  <meta name="description" content="Step-by-step engineering roadmap for migrating legacy monolithic e-commerce platforms to AWS and Azure cloud infrastructure with zero downtime." />
+  <meta name="description" content="A working engineer&#x27;s cloud migration guide: cost modelling that survives the first bill, database cutover mechanics, a timed runbook, and honest limits on zero downtime." />
   <meta property="og:title" content="Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS & Azure | MODRACX" />
   <meta property="og:description" content="Step-by-step engineering roadmap for migrating legacy monolithic e-commerce platforms by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS & Azure</h1>
-        <p class="lede">Migrating on-premise ecommerce infrastructure to AWS auto-scaling target groups and RDS Aurora multi-AZ clusters ensures 99.99% uptime during Black Friday peak loads.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS &amp; Azure</h1>
+        <p class="lede">The business case said £2,600 a month. The first bill was £6,940, and none of it came from the instances. What actually goes wrong when a monolithic storefront moves to AWS or Azure.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 37 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 28 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,27 +205,642 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>AWS Terraform Infrastructure as Code Snippet</h2>
+        <h2>1. The Migration That Doubled the Hosting Bill</h2>
 
-        <pre><code class="language-hcl"># Terraform Infrastructure Setup for Auto-Scaling AWS ECS Cluster
-resource "aws_autoscaling_group" "ecommerce_asg" {
-  name                = "ecommerce-prod-asg"
-  min_size            = 4
-  max_size            = 64
-  desired_capacity    = 8
-  vpc_zone_identifier = [aws_subnet.private_a.id, aws_subnet.private_b.id]
-  target_group_arns   = [aws_lb_target_group.ecommerce_tg.arn]
+        <p>A specialist tools distributor moved off a managed dedicated-server arrangement onto AWS over five months. Magento 2, roughly 90,000 SKUs, about 40,000 orders a month. The old bill was £3,100 a month on two beefy machines with a load balancer in front and a colocated database server. The business case said cloud would land around £2,600 with better resilience.</p>
+
+        <p>The first full month on AWS came in at £6,940.</p>
+
+        <p>Nobody had done anything obviously stupid. The instances were sensibly sized. The database was on RDS with a reasonable class. What nobody had modelled was the shape of the bill rather than its headline: £1,180 of NAT Gateway charges because every image resize worker pulled from an S3 bucket through a private subnet with no VPC endpoint; £890 of cross-AZ data transfer because the application servers and the primary database had been spread across availability zones for resilience and were chatting hundreds of times per page render; £640 of provisioned IOPS on a database volume sized from a peak that occurred during the migration itself; and about £900 of non-production environments that nobody switched off at night.</p>
+
+        <p>All of it was fixable. Four months later they were at £2,850 with better performance than the old setup. But for four months the finance director's view of the project was that engineering had promised a saving and delivered a 120% increase, and that is a difficult position to do good work from.</p>
+
+        <p>I have run or rescued about a dozen of these migrations. The technical failures are rarely the interesting part — restoring a database in a new place is a solved problem. What goes wrong is the modelling, the sequencing, and the cutover, and this article is mostly about those.</p>
+
+        <h2>2. Reasons to Migrate That Hold Up, and Ones That Don't</h2>
+
+        <p>Before anything else, be honest about why. The reason determines the destination architecture, and a bad reason produces a migration that technically succeeds and commercially disappoints.</p>
+
+        <p><strong>Reasons that hold up.</strong></p>
+
+        <p>Your traffic is genuinely spiky. If Black Friday needs six times normal capacity for three days, paying for that capacity year-round is real money and elasticity is worth real money back. This is the strongest case there is.</p>
+
+        <p>Your hardware refresh is due. A £70,000 capital outlay concentrates the mind, and comparing that against a monthly figure is a fair comparison rather than a rhetorical one.</p>
+
+        <p>You need geographic distribution you cannot currently build. Serving customers in three continents from one datacentre in Slough has a latency floor you cannot engineer around.</p>
+
+        <p>You have a compliance requirement that a hyperscaler satisfies more cheaply than you can. Certifications, audit trails, encryption-at-rest guarantees, region residency.</p>
+
+        <p>Your operations team is spending its time on things a managed service would do. If two engineers spend a day a week on database patching and backup verification, that time has a price.</p>
+
+        <p><strong>Reasons that do not hold up.</strong></p>
+
+        <p>"Cloud is cheaper." For a steady-load ecommerce workload with predictable traffic, it is frequently more expensive, and anyone who tells you otherwise without seeing your utilisation graphs is guessing. Cloud is cheaper for variable load and for workloads where you can genuinely retire operational effort. A monolith that runs at 40% CPU all day will cost more on demand pricing than on a dedicated box, and that is not a failure of implementation.</p>
+
+        <p>"We need to modernise." Migration and modernisation are separate projects, and combining them is the most reliable way to fail at both. Move first, refactor second. I will defend this position against almost any objection, because I have watched two teams try to containerise, decompose into services, and change hosting simultaneously, and neither shipped inside a year.</p>
+
+        <p>"Our competitors are on cloud." Not a reason.</p>
+
+        <p>"It will make us faster." It might, if your current setup is genuinely constrained. It will not fix a slow application. A Magento install with 400ms of uncached backend time will have 400ms of uncached backend time on any infrastructure, and the migration will get blamed for the performance nobody fixed.</p>
+
+        <h2>3. The Assessment Nobody Wants To Do</h2>
+
+        <p>Every migration I have seen go badly skipped or rushed this. You cannot move what you have not inventoried, and the things that break at cutover are almost always the things nobody knew existed.</p>
+
+        <p>What the inventory needs to contain, and the awkward questions attached to each.</p>
+
+        <p><strong>Every process running on every machine.</strong> Not just the application. Cron jobs, log rotation, a Python script someone wrote in 2019 that emails a supplier a CSV every Tuesday. Read the actual crontabs on every host, including the ones you think are idle.</p>
+
+        <p><strong>Every outbound integration, with source IP dependencies.</strong> Payment gateways, ERP, couriers, marketplaces. The question that matters: which of these have your current IP addresses allow-listed? Every one of those needs coordination weeks in advance, and at least one supplier will take six weeks to change an allow-list entry.</p>
+
+        <p><strong>Every inbound integration.</strong> Webhooks from payment providers, marketplace callbacks, supplier feeds hitting an endpoint. These break silently at cutover.</p>
+
+        <p><strong>Everything on local disk.</strong> Product images, generated PDFs, import files, a directory of scanned invoices. On a single server, local disk is invisible infrastructure. In cloud, it is the thing that makes horizontal scaling impossible.</p>
+
+        <p><strong>Every DNS record, with TTL.</strong> Including the ones pointing at things you forgot about.</p>
+
+        <p><strong>Every certificate, with expiry.</strong> Including client certificates for bank integrations, which are the ones that expire during a migration and cannot be reissued quickly.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# Run on every host before planning anything. The output of this script
+# has found something unexpected on every migration I have worked on.
+set -euo pipefail
+OUT="inventory-$(hostname)-$(date +%F).txt"
+{
+  echo "== crontabs (all users, not just root) =="
+  for u in $(cut -f1 -d: /etc/passwd); do
+    crontab -l -u "$u" 2&gt;/dev/null | sed "s/^/[$u] /" || true
+  done
+  echo "== systemd timers =="
+  systemctl list-timers --all --no-pager
+
+  echo "== listening sockets =="
+  ss -tulpn
+
+  echo "== outbound connections, sampled over 60s =="
+  # Catches integrations that only fire periodically; a single snapshot misses them
+  timeout 60 tcpdump -nn -q 'tcp[tcpflags] &amp; tcp-syn != 0 and not dst net 10.0.0.0/8' \
+    2&gt;/dev/null | awk '{print $5}' | sort -u
+
+  echo "== files written outside the deploy path in the last 30 days =="
+  find / -xdev -type f -mtime -30 \
+       -not -path '/proc/*' -not -path '/sys/*' -not -path '/var/log/*' \
+       -not -path '/opt/app/releases/*' 2&gt;/dev/null | head -500
+
+  echo "== certificates and expiry =="
+  find /etc /opt -name '*.pem' -o -name '*.crt' 2&gt;/dev/null | while read -r c; do
+    printf '%s ' "$c"; openssl x509 -enddate -noout -in "$c" 2&gt;/dev/null || echo "unreadable"
+  done
+} &gt; "$OUT"</code></pre>
+
+        <p>The 60-second outbound capture is the line that earns its place. On the tools distributor, it caught a connection to a supplier's SFTP server that appeared in no documentation, no crontab visible to root, and no runbook. It was a job running under a service account, importing a price list nightly. Missing it would have meant stale supplier pricing discovered about a week after cutover.</p>
+
+        <h2>4. The Six Rs, and Which One I Actually Pick</h2>
+
+        <p>The standard framework — rehost, replatform, refactor, repurchase, retire, retain — is useful mostly as a checklist for making the decision explicitly rather than by drift.</p>
+
+        <p><strong>Rehost</strong> is lift-and-shift onto equivalent instances. Fastest, lowest risk, captures the least benefit. Universally sneered at and usually correct as a first move.</p>
+
+        <p><strong>Replatform</strong> keeps the application but swaps infrastructure components for managed equivalents: your MySQL becomes RDS, your Redis becomes ElastiCache, your local images become object storage behind a CDN. This is where I land on most ecommerce migrations, and I will explain why in a moment.</p>
+
+        <p><strong>Refactor</strong> is rewriting to suit cloud-native patterns. Highest benefit, highest risk, and a different project.</p>
+
+        <p><strong>Repurchase</strong> means replacing the thing with SaaS. For an ecommerce platform this means moving to Shopify Plus or BigCommerce, and it is a genuine option that deserves consideration rather than reflexive dismissal. If your customisation is mostly cosmetic, it may be the cheapest path to everything you actually want.</p>
+
+        <p><strong>Retire</strong> and <strong>retain</strong> are the two everyone forgets. Every migration inventory contains things nobody uses — a reporting tool three people have logins for, a staging environment for a project cancelled in 2021. Turn them off rather than moving them. And some things should stay put: an ERP on hardware with a maintenance contract running to 2029 does not need to move because the storefront did.</p>
+
+        <p>My default recommendation for a monolithic ecommerce platform is replatform, specifically: application on instances or containers, database on the managed service, cache and sessions on managed Redis, media on object storage behind a CDN, and nothing else changed. That combination removes the operational work that actually costs you time, makes horizontal scaling possible, and does not require the application team to change how anything works.</p>
+
+        <p>The reason I resist a full refactor as part of a migration is that the two projects have incompatible risk profiles. A migration has a hard cutover with a rollback plan, and success is "nothing changed except where it runs". A refactor is incremental with no single cutover, and success is "many things changed". Running them together means you cannot roll back — because rolling back the infrastructure now also rolls back six months of application changes — and losing the ability to roll back is the single most expensive thing you can do to a migration.</p>
+
+        <h2>5. Modelling the Cost Before You Commit</h2>
+
+        <p>The bill at the top of this article was not an accident of implementation. It was a modelling failure, and it is the most common one in this whole area.</p>
+
+        <p>Instance costs are easy to estimate and are usually the smaller half of a cloud bill for a migrated monolith. The costs that surprise people:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Cost</th><th>Why it surprises</th><th>How to model it</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Egress to internet</td><td>Not charged at all on most dedicated hosting</td><td>Bytes served from origin per month, times the per-GB rate</td></tr>
+            <tr><td>NAT Gateway</td><td>Per-hour AND per-GB processed</td><td>All private-subnet outbound traffic, including to object storage</td></tr>
+            <tr><td>Cross-AZ transfer</td><td>Charged both directions, invisible in architecture diagrams</td><td>App-to-database chattiness times request volume</td></tr>
+            <tr><td>Provisioned IOPS</td><td>Sized from a peak, billed continuously</td><td>Steady-state IOPS from current disk metrics, not peak</td></tr>
+            <tr><td>Backups and snapshots</td><td>Retention multiplies volume size</td><td>Volume size × retention days × change rate</td></tr>
+            <tr><td>Load balancer capacity units</td><td>Priced on connections and processed bytes</td><td>Concurrent connections at peak, not average</td></tr>
+            <tr><td>Non-production</td><td>Runs 24/7 by default</td><td>Assume full cost unless you build the scheduler</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two of these deserve a specific warning.</p>
+
+        <p><strong>NAT Gateway is the one that catches everyone.</strong> Anything in a private subnet talking to anything outside the VPC — including AWS's own services — goes through it and is charged per gigabyte on top of the hourly rate. An image processing pipeline pulling originals from S3, resizing, and writing back can push a terabyte a month through it without anyone noticing. VPC endpoints fix it, they cost very little, and almost nobody configures them on day one.</p>
+
+        <pre><code class="language-hcl"># Gateway endpoints for S3 and DynamoDB are free and remove the largest
+# accidental NAT charge on a media-heavy storefront. Add them on day one.
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = aws_route_table.private[*].id
+}
+
+# Interface endpoints are not free but are cheaper than NAT for anything
+# with volume. Measure before adding all of them; each has an hourly cost.
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${var.region}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.endpoints.id]
+  private_dns_enabled = true
 }</code></pre>
 
-        <hr />
+        <p><strong>Cross-AZ transfer punishes chatty applications.</strong> Spreading application servers across availability zones is correct for resilience. It also means that on average a good fraction of your database queries cross an AZ boundary and are charged in both directions. A Magento page render issuing 300 queries makes this material. It is not a reason to abandon multi-AZ; it is a reason to fix the query count, which you wanted to do anyway.</p>
+
+        <p>Build the model as a spreadsheet with your actual measured numbers — bytes egressed last month, queries per page, current disk IOPS from your monitoring — before you commit to an architecture. And add 30% for what you have not thought of, because you have not thought of something.</p>
+
+        <h2>6. AWS or Azure, Honestly</h2>
+
+        <p>Teams spend far too long on this. For a migrating ecommerce monolith, the platforms are close enough that the decision should turn on non-technical factors.</p>
+
+        <p>Pick <strong>Azure</strong> if you are a Microsoft shop: existing enterprise agreement, Active Directory you want to keep, SQL Server licences you can bring, a team that knows the tooling. The commercial terms available through an existing agreement are frequently better than list, and that discount is worth more than any architectural preference. The <a href="/blog/azure-cloud-architecture-magento/">Azure architecture for a Magento estate</a> is well-trodden, and App Service plus Azure Database for MySQL will run it perfectly well.</p>
+
+        <p>Pick <strong>AWS</strong> if you have no existing relationship, if your team's experience leans that way, or if you depend on a third-party service with better AWS integration. The ecosystem is larger and the ecommerce-specific tooling is deeper.</p>
+
+        <p>Things that should not decide it: benchmark differences, which has more services, and which one a conference talk preferred. For this workload the meaningful differences are commercial and organisational.</p>
+
+        <p>What I would push back on is multi-cloud as an initial goal. Running the same storefront across two providers for resilience means every component built twice, every abstraction lowest-common-denominator, and an operational burden that a mid-sized retailer cannot staff. Multi-region on one provider gives you most of the resilience for a fraction of the complexity. Multi-cloud is a strategy for organisations with a platform team large enough to have opinions about Kubernetes federation, and if that is not you, it is a way of having two providers you are equally bad at.</p>
+
+        <h2>7. The Landing Zone</h2>
+
+        <p>Before workloads move, the account structure and network need to exist, and these are the decisions that are painful to change later.</p>
+
+        <p>Separate accounts (AWS) or subscriptions (Azure) per environment. Not separate VPCs in one account — separate accounts. The blast radius of a mistake, the clarity of the bill, and the simplicity of access control all improve enormously, and the cost is some setup effort with an organisation-level tool.</p>
+
+        <p>Network layout that will not need renumbering. Pick a CIDR range that does not collide with your office network, your VPN, or any partner you might connect to. I have seen a migration stall for three weeks because the chosen VPC range overlapped with the range the ERP vendor used, and renumbering a live VPC is not a thing you can do.</p>
+
+        <pre><code class="language-hcl"># Deliberately large and deliberately unusual: 10.0.0.0/16 is what
+# everyone picks, which guarantees a collision the first time you peer
+# with a partner. Pick something nobody else picked.
+variable "vpc_cidr" { default = "10.183.0.0/16" }
+
+locals {
+  azs = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+}
+
+resource "aws_subnet" "public" {
+  count                   = length(local.azs)
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 4, count.index)       # /20
+  availability_zone       = local.azs[count.index]
+  map_public_ip_on_launch = false   # nothing gets a public IP by default
+}
+
+resource "aws_subnet" "private" {
+  count             = length(local.azs)
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index + 4)
+  availability_zone = local.azs[count.index]
+}
+
+# Database subnets separate from application subnets, so a routing or
+# security-group mistake in the app tier cannot expose the data tier.
+resource "aws_subnet" "data" {
+  count             = length(local.azs)
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index + 8)
+  availability_zone = local.azs[count.index]
+}</code></pre>
+
+        <p>Everything in code from the first commit. Not "we'll import it into Terraform later" — later never arrives, and a hand-built environment cannot be rebuilt, which means your disaster recovery plan is a wish. The discipline that makes this work is the same one behind a proper <a href="/blog/cicd-pipeline-ecommerce/">deployment pipeline</a>: if it is not reproducible from a repository, it is not infrastructure, it is a pet.</p>
+
+        <p>And set up cost allocation tags on day one, enforced by policy. Retrofitting tags across a running estate is miserable, and without them the bill is one large undifferentiated number that nobody can act on.</p>
+
+        <h2>8. The Database Is the Migration</h2>
+
+        <p>Everything else can be rebuilt from a repository. The database is the one thing that has to move with its state intact, and its cutover is what determines your downtime window.</p>
+
+        <p>Three approaches, in increasing order of sophistication and decreasing order of downtime.</p>
+
+        <h3>Dump and restore</h3>
+
+        <p>Stop writes, take a dump, transfer, restore, point the application at the new one. Simple, reliable, and the downtime is however long the whole sequence takes. On a 200GB MySQL database that is somewhere between four and ten hours depending on how the restore is done, which for many retailers is an acceptable overnight window and is a completely respectable choice.</p>
+
+        <p>Do not underestimate the restore. A logical dump restores by executing statements and rebuilding indexes, which on a large table is far slower than the dump was. Test it end to end and time it before you plan the window, because "the dump took 40 minutes so the restore will take about 40 minutes" is wrong by a factor that has ruined maintenance windows.</p>
+
+        <h3>Replication with a cutover</h3>
+
+        <p>Set up the cloud database as a replica of the existing primary, let it catch up, then stop writes, wait for the replica to drain, promote it, and repoint. Downtime is measured in minutes rather than hours.</p>
+
+        <pre><code class="language-sql">-- On the source: a dedicated replication user, restricted to the
+-- cloud provider's egress addresses. Do not reuse the app's credentials.
+CREATE USER 'repl_cloud'@'%' IDENTIFIED BY '...';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'repl_cloud'@'%';
+
+-- Confirm the binlog settings BEFORE dumping. Changing them needs a
+-- restart, and discovering that mid-migration costs you the window.
+SHOW VARIABLES WHERE Variable_name IN
+  ('log_bin','binlog_format','binlog_row_image','gtid_mode',
+   'enforce_gtid_consistency','binlog_expire_logs_seconds');
+-- Wanted: log_bin=ON, binlog_format=ROW, gtid_mode=ON,
+-- and expiry long enough to cover the full seed-plus-catch-up period.</code></pre>
+
+        <p>That last point about binlog retention is the one that bites. If seeding the replica takes six hours and your binlogs expire after four, replication cannot start from the dump's position and you begin again. Set retention to comfortably longer than your worst-case seed time, and check the disk has room for it.</p>
+
+        <pre><code class="language-bash"># Consistent seed with GTID position recorded, without locking the whole
+# database for the duration. --single-transaction gives a consistent
+# snapshot on InnoDB; --master-data records where to resume.
+mysqldump \
+  --single-transaction \
+  --set-gtid-purged=ON \
+  --routines --triggers --events \
+  --hex-blob \
+  --max-allowed-packet=512M \
+  --databases magento \
+  | pigz -p 8 &gt; magento-seed.sql.gz
+
+# Restore into the managed instance with the session tuned for bulk load.
+# Turning these back on afterwards is not optional.
+zcat magento-seed.sql.gz | mysql -h "$RDS_HOST" -u admin -p magento \
+  --init-command="SET SESSION foreign_key_checks=0, unique_checks=0, sql_log_bin=0;"</code></pre>
+
+        <p>For PostgreSQL, logical replication is cleaner and lets you replicate a subset, which matters if the database contains large tables you would rather archive than migrate.</p>
+
+        <pre><code class="language-sql">-- Source
+CREATE PUBLICATION shop_pub FOR ALL TABLES;
+-- wal_level must be 'logical' and max_replication_slots high enough;
+-- both need a restart, so verify weeks ahead of the window.
+
+-- Target
+CREATE SUBSCRIPTION shop_sub
+  CONNECTION 'host=old-db.internal dbname=shop user=repl password=...'
+  PUBLICATION shop_pub
+  WITH (copy_data = true, streaming = on);
+
+-- Watch the lag. Cut over when this is consistently under a second.
+SELECT slot_name,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn))
+         AS lag_bytes
+  FROM pg_replication_slots;</code></pre>
+
+        <p>One thing logical replication does not carry: sequences. After promoting, every sequence needs advancing past the maximum value in its table, and forgetting this produces primary key collisions on the first inserts after cutover. It is a well-known trap and people still hit it, because it works fine in testing where the tables are small and the sequence happens to be ahead.</p>
+
+        <h3>Managed migration services</h3>
+
+        <p>AWS DMS and Azure Database Migration Service handle the seed-and-replicate sequence for you, including heterogeneous migrations. They are genuinely useful and they have edge cases: DMS's ongoing replication does not carry secondary indexes or foreign keys by default, and validating that the target matches is a separate task you must actually run.</p>
+
+        <p>Whatever the approach, validate before cutting over. Not "the row counts match" — row counts match while the data is wrong.</p>
+
+        <pre><code class="language-bash"># Checksum comparison on the tables that carry money and stock.
+# Row counts agreeing proves almost nothing; a per-row checksum does.
+for t in sales_order sales_order_item quote quote_item \
+         cataloginventory_stock_item customer_entity; do
+  for host in "$OLD_HOST" "$NEW_HOST"; do
+    printf '%s %s ' "$t" "$host"
+    mysql -h "$host" -N -e "
+      SELECT COUNT(*), COALESCE(SUM(CRC32(CONCAT_WS('|', t.*))),0)
+      FROM magento.$t t" 2&gt;/dev/null
+  done
+done | awk 'NR%2{a=$0; next} {print (substr(a,index(a,$3))==substr($0,index($0,$3)) \
+     ? "OK  " : "DIFF") , a, $0}'</code></pre>
+
+        <h2>9. Media, and Why Local Disk Is the Real Blocker</h2>
+
+        <p>On a single server, product images live on disk and everything works. In cloud, that assumption is what stops you running two application servers, and it is usually the largest application change the migration requires.</p>
+
+        <p>The target is object storage behind a CDN, with the application writing there instead of to disk. For Magento there is a well-supported path via remote storage configuration; for a bespoke application it means changing every write path, which is more work than it sounds because some of those write paths are in code nobody has looked at for years.</p>
+
+        <p>The transfer itself is the easy part, and it wants to be done in two passes.</p>
+
+        <pre><code class="language-bash"># Pass one, days before cutover: bulk copy while the site is live.
+# Slow, and it does not matter, because nothing depends on it yet.
+aws s3 sync /var/www/media s3://shop-media-prod/media \
+  --storage-class STANDARD \
+  --exclude "cache/*" \            # regenerable; do not pay to move it
+  --exclude "tmp/*" \
+  --only-show-errors
+
+# Pass two, during the window: catch the delta. Minutes, not hours,
+# because pass one moved the bulk.
+aws s3 sync /var/www/media s3://shop-media-prod/media \
+  --exclude "cache/*" --exclude "tmp/*" --delete --only-show-errors
+
+# Verify a sample rather than trusting the exit code.
+find /var/www/media -type f -not -path '*/cache/*' | shuf -n 500 | while read -r f; do
+  key="media/${f#/var/www/media/}"
+  local_md5=$(md5sum "$f" | cut -d' ' -f1)
+  remote_md5=$(aws s3api head-object --bucket shop-media-prod --key "$key" \
+                 --query 'ETag' --output text 2&gt;/dev/null | tr -d '"')
+  # Multipart uploads have compound ETags; skip those rather than
+  # reporting false failures on large files.
+  [[ "$remote_md5" == *-* ]] &amp;&amp; continue
+  [[ "$local_md5" != "$remote_md5" ]] &amp;&amp; echo "MISMATCH $key"
+done</code></pre>
+
+        <p>Excluding the image cache directory is worth calling out. On a mature Magento install the resized-image cache is frequently larger than the originals — I have seen 340GB of cache against 90GB of source images. It regenerates on demand. Copying it is paying transfer costs and hours of wall-clock time to move something the application will happily rebuild, and the only cost of not copying it is a slower first few hours after cutover, which you can mitigate by warming the important categories.</p>
+
+        <h2>10. Sessions, Cache, and the Things That Assume One Server</h2>
+
+        <p>Beyond media, a monolith accumulates assumptions about running on one machine. Find them before cutover, because each one is a bug that only appears once there are two servers.</p>
+
+        <p><strong>Sessions on local disk or in a local file store.</strong> Move to Redis. On Magento this is configuration; on a bespoke app it is a session handler change. The failure mode if you miss it is customers being randomly logged out as the load balancer moves them between servers, which reads as an infuriating intermittent bug and destroys conversion.</p>
+
+        <p><strong>Cache in APCu or a local filesystem.</strong> Same fix, same reasoning, but with a nastier failure mode: two servers with independent caches serve different content, so a cache invalidation appears to work when you test it and does not for half your customers.</p>
+
+        <p><strong>Cron running on every server.</strong> The moment there are two application servers, every scheduled job runs twice. Order exports duplicate, emails send twice, and a stock adjustment job applies its adjustment two times. Either designate one node, or move scheduled work to a dedicated worker with locking.</p>
+
+        <pre><code class="language-php">&lt;?php
+// Distributed lock so a job runs once across the fleet. The TTL must
+// exceed the job's worst-case runtime, or a second worker starts while
+// the first is still going -- which is the exact bug you were preventing.
+function withLock(Redis $redis, string $key, int $ttlSeconds, callable $fn) {
+    $token = bin2hex(random_bytes(16));
+    if (!$redis-&gt;set("lock:$key", $token, ['nx', 'ex' =&gt; $ttlSeconds])) {
+        return false;   // someone else holds it; this is normal, not an error
+    }
+    try {
+        return $fn();
+    } finally {
+        // Release only if we still own it: a lock that expired mid-job
+        // may now belong to another worker, and deleting it blindly
+        // would let a third worker in.
+        $lua = "if redis.call('get', KEYS[1]) == ARGV[1] "
+             . "then return redis.call('del', KEYS[1]) else return 0 end";
+        $redis-&gt;eval($lua, ["lock:$key", $token], 1);
+    }
+}</code></pre>
+
+        <p><strong>Hardcoded paths and hostnames.</strong> Grep for the old server's hostname and IP across the entire codebase and configuration. There will be some. On the tools distributor there were eleven, including one in a database row that generated PDF invoice URLs.</p>
+
+        <p><strong>The search index.</strong> Elasticsearch or OpenSearch needs to exist in the new environment with a fully built index before cutover. Reindexing 90,000 products takes time; doing it during the window because you forgot is how a two-hour window becomes six.</p>
+
+        <h2>11. The Cutover</h2>
+
+        <p>The window is where all the preparation is tested, and the single most useful thing you can do is write it as a timed runbook with named owners and rehearse it at least twice.</p>
+
+        <p>A structure that has worked for me, for a replication-based cutover with a target of under 20 minutes of write downtime:</p>
+
+        <p><strong>T-14 days.</strong> DNS TTLs dropped to 60 seconds. This is the step teams do last and should do first — TTL changes only take effect after the old TTL expires, so a record with a 24-hour TTL needs a day of lead time before its new TTL is even observed. Also: submit every IP allow-list change to every partner.</p>
+
+        <p><strong>T-7 days.</strong> Full rehearsal against a copy. Restore into a clone environment, run the whole runbook, time each step, and fix what broke. The first rehearsal always breaks. If yours does not, you rehearsed the wrong thing.</p>
+
+        <p><strong>T-2 days.</strong> Second rehearsal. Freeze deployments to the old environment.</p>
+
+        <p><strong>T-0.</strong> The window itself:</p>
+
+        <pre><code class="language-bash"># 1. Enter maintenance: reject writes, keep serving cached reads.
+#    A read-only storefront is much better than a 503 page for anyone
+#    who lands mid-window, and it keeps organic traffic from bouncing.
+ssh old-web "php bin/magento maintenance:enable --ip=$OFFICE_IP"
+
+# 2. Drain in-flight work. Do not skip this: a half-processed order in a
+#    queue that never gets consumed is a customer who paid and got nothing.
+ssh old-worker "supervisorctl stop all"
+./wait-for-queue-drain.sh --max-wait 300
+
+# 3. Final media delta.
+aws s3 sync /var/www/media s3://shop-media-prod/media \
+  --exclude "cache/*" --delete --only-show-errors
+
+# 4. Confirm replication has caught up, then stop it and promote.
+mysql -h "$OLD_HOST" -e "SHOW MASTER STATUS\G"
+aws rds promote-read-replica --db-instance-identifier shop-prod
+./wait-for-zero-lag.sh --timeout 600
+
+# 5. Smoke test against the new stack, bypassing DNS entirely.
+curl -sS --resolve "shop.example.com:443:$NEW_LB_IP" \
+     https://shop.example.com/health/full | tee /tmp/health.json
+jq -e '.database=="ok" and .redis=="ok" and .search=="ok" and .media=="ok"' \
+   /tmp/health.json || { echo "ABORT: health check failed"; exit 1; }
+
+# 6. Switch DNS. With a 60s TTL, most traffic moves within two minutes.
+aws route53 change-resource-record-sets --hosted-zone-id "$ZONE" \
+  --change-batch file://cutover-dns.json
+
+# 7. Leave the old environment running and reachable by IP for 72 hours.
+#    It is the rollback, and it costs a few pounds a day to keep.</code></pre>
+
+        <p>The health endpoint in step five deserves to be real. Not a 200 from the web server — an endpoint that actually queries the database, writes and reads a Redis key, performs a search, and fetches a media object. Ten minutes to write, and it is the difference between discovering a broken search index during the window with the rollback still available, and discovering it from customers an hour later.</p>
+
+        <p><strong>T+1 hour to T+72 hours.</strong> Watch, do not change. The instinct after a successful cutover is to start optimising. Resist it for three days. Every change you make during that window is a change you have to consider when something behaves oddly, and something will behave oddly.</p>
+
+        <h2>12. Proving Capacity Before You Depend On It</h2>
+
+        <p>The new environment behaves correctly with three people clicking around. That tells you almost nothing about how it behaves at 400 concurrent sessions, and the first time you find out should not be the morning after cutover.</p>
+
+        <p>Two tests are worth the effort, and a third one people run that is largely theatre.</p>
+
+        <p><strong>A replayed-traffic load test.</strong> Take a day of real access logs from the old environment, filter to GET requests, and replay them against the new stack at the real rate and then at three times the real rate. Synthetic tests that hammer the homepage tell you about the homepage; replayed logs exercise the long tail of category filters and search queries that actually cost you database time.</p>
+
+        <pre><code class="language-bash"># Convert an access log into a replay file, preserving relative timing.
+# Filtering to GET matters: replaying POSTs against a live-ish
+# environment will place orders, and somebody will have to explain that.
+awk '$6 ~ /"GET/ {print $4, $7}' /var/log/nginx/access.log \
+  | sed 's/\[//' \
+  &gt; replay.txt
+
+# Replay at 3x the observed rate against the new load balancer,
+# resolving the hostname directly so DNS is not part of the test.
+vegeta attack \
+  -targets=&lt;(awk '{print "GET https://shop.example.com" $2}' replay.txt) \
+  -rate=180/s -duration=15m \
+  -connections=400 \
+  -resolvers="$NEW_LB_IP" \
+  | vegeta report -type='hist[0,100ms,300ms,1s,3s]'</code></pre>
+
+        <p>What you are looking for is not the average. It is the shape of the histogram and, more importantly, what the database does. Watch connection counts, slow query log volume, and CPU credit balances if you are on a burstable instance class — burstable instances are a common and expensive mistake here, because they perform beautifully in a short test and then exhaust their credits forty minutes into real traffic.</p>
+
+        <p><strong>A failure injection test.</strong> Terminate an application instance during load and confirm the autoscaling group replaces it and the load balancer drains connections properly. Fail over the database — RDS multi-AZ failover is a button, and you should press it before a Tuesday night presses it for you. Time it. Multi-AZ failover is typically 60 to 120 seconds, during which every database connection is dropped, and you want to know whether your application reconnects cleanly or needs a restart.</p>
+
+        <p>The theatre: a load test against a scaled-down environment "to save cost", with the results extrapolated. Scaling is not linear, connection pools do not extrapolate, and the whole exercise produces a number that feels reassuring and means nothing. Test at production size for a few hours and pay the few pounds.</p>
+
+        <h2>13. Observability You Will Actually Use</h2>
+
+        <p>On the old server, debugging meant SSH and reading a log. That habit does not survive an autoscaling group where the instance holding the evidence has already been terminated.</p>
+
+        <p>Configure before cutover, not after: centralised logs shipped off the instances, metrics with enough dimensions to attribute a problem to a component, and a health endpoint that means something. The dimension that matters most and gets forgotten is instance identity — when one instance out of six is misbehaving, an aggregate graph looks fine.</p>
+
+        <pre><code class="language-yaml"># Structured application logs, shipped rather than stored locally.
+# The instance id and deployment version on every line are what let you
+# answer "is this one host or all of them" in ten seconds.
+fields:
+  instance_id: "${EC2_INSTANCE_ID}"
+  az:          "${EC2_AVAILABILITY_ZONE}"
+  release:     "${APP_RELEASE_SHA}"
+  env:         "production"
+
+processors:
+  - drop_event:
+      when:
+        or:
+          - contains: { url.path: "/health" }     # otherwise health checks
+          - contains: { url.path: "/static/" }    # dominate the volume</code></pre>
+
+        <p>Keep one thing from the old world: a way to get a shell onto a running instance. Session Manager or the Azure equivalent, working and tested, before you need it. The first genuinely strange problem after a migration is always easier to diagnose with a terminal, and discovering that your access path does not work while the site is behaving oddly is a bad half hour.</p>
+
+        <h2>14. Rollback, and Being Honest About It</h2>
+
+        <p>Every migration plan contains a rollback section. Most of them are fiction, and the tell is that they do not say what happens to orders placed after cutover.</p>
+
+        <p>The honest position: rollback is genuinely easy for a defined period after cutover and becomes impossible fairly quickly, and the transition between those states is a business decision you should make in advance rather than under pressure.</p>
+
+        <p>Rollback is easy while no writes have happened on the new system that you are unwilling to lose. In practice this is the first few minutes, and if you catch a problem at the health-check stage it is trivial: DNS back, maintenance off, nothing lost.</p>
+
+        <p>Once real orders are on the new database, rolling back means either losing them or reverse-migrating them, and reverse migration under time pressure with a live site is not something I would attempt. So the plan should say, explicitly: rollback is available until the first customer order is placed on the new stack, after which we fix forward.</p>
+
+        <p>Some teams try to preserve reversibility with bidirectional replication. I would not, for a storefront. The conflict resolution is genuinely hard, auto-increment collisions are a real risk, and the complexity you add to the cutover to preserve an option you will probably not take is complexity that can fail during the window.</p>
+
+        <p>What I do instead: keep the old environment running, untouched, reachable by IP, for at least 72 hours. It is a read-only reference you can query when something looks wrong, and it is the fastest possible answer to "was this broken before we moved?". Keep a final snapshot of the old database for months. Both are cheap and both have saved investigations.</p>
+
+        <h2>15. What Breaks in Week Two</h2>
+
+        <p>The cutover goes fine and everyone relaxes. The interesting failures arrive later, because they are attached to things that only happen occasionally.</p>
+
+        <p><strong>The monthly job.</strong> A report, a VAT export, a supplier reconciliation that runs on the first of the month. It ran on the old box under a user that does not exist on the new one, or it wrote to a path that is now object storage. You find out when finance asks where the report is.</p>
+
+        <p><strong>The certificate nobody owned.</strong> A client certificate for a payment or banking integration, installed in 2022, expiring in six weeks. On the old server it was in a directory somebody would have noticed. It got copied without being understood.</p>
+
+        <p><strong>The IP allow-list you missed.</strong> One supplier out of fourteen. Their nightly feed fails silently for nine days because it was never monitored, and the failure surfaces as stale pricing.</p>
+
+        <p><strong>Email deliverability.</strong> New IP addresses have no sending reputation. Transactional email starts landing in spam, order confirmations stop arriving, and support tickets rise without anybody connecting it to the migration. Use a dedicated sending service with a warmed reputation rather than sending from your own instances, and set up SPF, DKIM and DMARC before cutover rather than in response to the problem.</p>
+
+        <p><strong>Backups that were never verified.</strong> Automated backups are configured and enabled. Nobody has restored one. The first time you need it, you discover the retention window is seven days and the corruption started nine days ago.</p>
+
+        <p>The countermeasure for all of these is the same and it is unglamorous: a post-migration checklist with dated items running out to 45 days, with an owner per item, reviewed weekly. Include "restore a backup into a scratch environment and query it" as an actual task with a date.</p>
+
+        <h2>16. Getting the Bill Back Down</h2>
+
+        <p>Assume the first month is high. The work to bring it down is largely mechanical, and doing it in the right order matters because the big items are not the obvious ones.</p>
+
+        <p><strong>Read the bill by service, then by usage type.</strong> Not the summary — the detailed usage types. This is where NAT processing, cross-AZ transfer and IOPS charges become visible, and they are invisible at the summary level.</p>
+
+        <pre><code class="language-sql">-- Against Cost and Usage Report data in Athena. Usage type is the
+-- dimension that reveals the accidental charges; service alone hides them.
+SELECT line_item_product_code   AS service,
+       line_item_usage_type     AS usage_type,
+       ROUND(SUM(line_item_unblended_cost), 2) AS cost
+FROM cur.cost_and_usage
+WHERE line_item_usage_start_date &gt;= DATE '2026-07-01'
+  AND line_item_usage_start_date &lt;  DATE '2026-08-01'
+GROUP BY 1, 2
+HAVING SUM(line_item_unblended_cost) &gt; 25
+ORDER BY cost DESC
+LIMIT 40;</code></pre>
+
+        <p><strong>Fix the transfer charges first.</strong> VPC endpoints for object storage, and check whether your chattiest component genuinely needs to be in a different AZ from the database. These are usually the largest single wins and they require no capacity changes.</p>
+
+        <p><strong>Then rightsize, using two weeks of real data.</strong> Not the sizes you chose from the old hardware's specifications, which were themselves chosen for a peak in 2021. Look at p95 CPU and memory over a fortnight that includes a weekend.</p>
+
+        <p><strong>Then schedule non-production.</strong> Stopping development and staging outside working hours removes roughly 70% of their cost for zero inconvenience, once someone builds the scheduler.</p>
+
+        <p><strong>Only then commit to reserved capacity or savings plans.</strong> This is deliberately last. Committing to a size you are about to change locks in the mistake for a year. Run for two months, rightsize, then commit on the steady-state footprint — and commit to less than you think, because partial coverage plus on-demand is cheaper than over-committing.</p>
+
+        <h2>17. The Distributor, With Numbers</h2>
+
+        <p>Back to the tools distributor, because the recovery is more instructive than the failure.</p>
+
+        <p><strong>Starting point.</strong> Magento 2.4.6, 90,000 SKUs, about 40,000 orders a month, £3,100/month on dedicated hardware with a hardware refresh due and a single-datacentre failure mode nobody was comfortable with. Genuinely good reasons to move.</p>
+
+        <p><strong>Approach.</strong> Replatform. Application on EC2 behind an ALB in an autoscaling group, database on RDS MySQL multi-AZ, ElastiCache for sessions and cache, S3 plus CloudFront for media, OpenSearch managed. No application refactoring beyond what the move required — remote storage configuration, session handler, and the cron consolidation.</p>
+
+        <p><strong>Timeline.</strong> Five months. Assessment and cost modelling took three weeks. Landing zone and Terraform, four weeks. Application changes for object storage and sessions, six weeks — the longest single item, and the one estimated at two. Data migration setup and three rehearsals, five weeks. Cutover on a Tuesday at 02:00.</p>
+
+        <p><strong>The window.</strong> Planned 30 minutes, took 41. The extra eleven minutes were replication lag draining more slowly than in rehearsal, because a large report query was running on the source that nobody had accounted for. No customer-visible errors. Two orders were placed during the read-only window and queued correctly.</p>
+
+        <p><strong>Results after six months.</strong> Cost settled at £2,850 against £3,100 before — a saving, but a modest one, and not the reason the project was worth doing. Peak-period capacity was the real win: the following November they scaled to 14 application instances for four days and back down, which the old setup could not have done at any price they would have paid. Time-to-first-byte improved about 18%, mostly from ElastiCache replacing a filesystem cache. Two unplanned outages in the previous year became zero in the following twelve months.</p>
+
+        <p><strong>What went wrong, beyond the bill.</strong> Three things worth recording.</p>
+
+        <p>The application changes were estimated at two weeks and took six. Every estimate I have seen for "move media to object storage" on a mature Magento install has been optimistic, because the write paths are scattered across core code, third-party modules and custom code written by people who left. Budget three times what it looks like.</p>
+
+        <p>We tested the restore but not at production scale. The rehearsal used a 30GB subset because a full copy was inconvenient to obtain. The real restore behaved differently — index rebuild time is not linear — and that is why the first rehearsal timing was wrong. Rehearse with a full-size copy or accept that your timings are decorative.</p>
+
+        <p>And I did not push hard enough on the cost model at the start. I flagged NAT and egress in a document. I did not build the spreadsheet with their actual numbers and walk the finance director through it, and a document nobody reads is not a warning. That is the thing I would do differently: cost modelling is a meeting, not an appendix.</p>
+
+        <h2>18. Compliance and Security Through the Move</h2>
+
+        <p>A migration is a rare opportunity to improve the security posture, and an even better opportunity to accidentally degrade it.</p>
+
+        <p>The degradations I look for specifically: security groups that were opened wide during the migration to unblock something and never closed; a database made publicly accessible during testing; credentials pasted into user-data scripts or Terraform variables; and logging that existed on the old servers and was never configured on the new ones.</p>
+
+        <p>The improvements worth taking while you have the opportunity: secrets in a managed secret store rather than configuration files, encryption at rest enabled everywhere by default, all traffic on TLS including between the load balancer and the application, and audit logging turned on before rather than after you need it.</p>
+
+        <pre><code class="language-hcl"># Encryption and access defaults, set at creation because changing some
+# of these later requires recreating the instance -- which on a database
+# means another migration you did not plan.
+resource "aws_db_instance" "primary" {
+  identifier            = "shop-prod"
+  engine                = "mysql"
+  engine_version        = "8.0.36"
+  instance_class        = "db.r6g.xlarge"
+  allocated_storage     = 500
+  max_allocated_storage = 2000        # autoscale rather than over-provision
+  storage_type          = "gp3"       # gp3 before io2: cheaper for most workloads
+
+  multi_az               = true
+  publicly_accessible    = false
+  storage_encrypted      = true
+  kms_key_id             = aws_kms_key.rds.arn
+  deletion_protection    = true
+  backup_retention_period = 14
+  copy_tags_to_snapshot  = true
+
+  # Enforce TLS from the application via the parameter group, not by
+  # trusting every client to opt in.
+  parameter_group_name = aws_db_parameter_group.tls_required.name
+
+  enabled_cloudwatch_logs_exports = ["error", "slowquery"]
+}</code></pre>
+
+        <p>If you handle card data, involve your QSA before the design is finalised rather than after. Cloud does not remove PCI scope; it changes where the boundaries sit, and network segmentation that satisfied an assessor on dedicated hardware needs re-demonstrating in a VPC. Doing that conversation early costs a meeting. Doing it late costs a re-architecture.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"Should we containerise as part of the migration?"</strong> Only if you already run containers. Adding containerisation to a migration doubles the number of new things and makes it impossible to attribute a problem to either. Move first on instances, containerise later when the environment is stable and you have a reason. The <a href="/blog/containerization-docker-kubernetes/">container path</a> is a good destination and a bad travelling companion.</p>
+
+        <p><strong>"Can we really achieve zero downtime?"</strong> For reads, yes. For writes, honestly no — not without application-level dual-writing that costs more to build and verify than the few minutes it saves. I aim for a short read-only window rather than claiming zero, because a read-only storefront during a 20-minute window at 3am costs almost nothing, and the engineering to avoid it costs weeks. Anyone promising true zero-downtime on a monolithic database cutover is either dual-writing, using a proxy layer with careful buffering, or being imprecise.</p>
+
+        <p><strong>"How long should this take?"</strong> For a mid-sized ecommerce monolith with an experienced team: three to five months from assessment to cutover, of which roughly a third is application changes nobody expected. Under two months is possible for a genuine lift-and-shift with no architectural change. Over eight months usually means modernisation crept in.</p>
+
+        <p><strong>"Do we need a migration partner?"</strong> If nobody on the team has done one, having someone who has is worth it — not to do the work but to tell you which step you are underestimating. Be careful with partners whose incentive is ongoing managed services, because that incentive favours complexity.</p>
+
+        <p><strong>"What about the CDN — before or after?"</strong> Before, ideally weeks before. Putting a CDN in front of the existing site early lets you validate cache behaviour with the old infrastructure still available to debug against, and it means the cutover changes one thing instead of two. It also gives you a lever during the window: raise TTLs beforehand and the CDN absorbs read traffic while the origin is in maintenance.</p>
+
+        <p><strong>"Should we move the ERP too?"</strong> Almost certainly not at the same time. Two migrations at once means an integration failure could be caused by either end. Move the storefront, stabilise, then consider the back office as a separate project with its own justification.</p>
+
+        <p><strong>"Our developers want Kubernetes. Should I let them?"</strong> Not as part of the migration. Ask what problem it solves that the migration itself does not, and whether you can staff the operational commitment permanently. If the honest answers are "deployment consistency" and "we have one platform engineer", the answer is no for now. This is not a technical objection to Kubernetes; it is an objection to learning it during a cutover.</p>
+
+        <p><strong>"How do we know it worked?"</strong> Decide the success criteria before you start, in numbers: cost within a stated range, p95 response time no worse than baseline, error rate unchanged, and a specific capability you could not previously do. Without those written down beforehand, the retrospective becomes a vibe check and whoever speaks loudest defines whether it succeeded.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>If a migration is on your roadmap for this year, in order:</p>
+
+        <p><strong>One.</strong> Write down the specific reason and the number that proves it. "Elasticity for a peak we cannot currently serve" with the traffic graph attached. If the reason is "cloud is cheaper", stop and model it properly, because it may not be, and finding that out now is a good outcome.</p>
+
+        <p><strong>Two.</strong> Run the inventory script on every host and read the output line by line. Expect to find something nobody knew about. Chase every outbound connection to a named owner.</p>
+
+        <p><strong>Three.</strong> Build the cost model in a spreadsheet with your measured numbers, including egress, NAT, cross-AZ and non-production. Present it to whoever signs the bill, in person, before the architecture is fixed. Add 30% for the unknown.</p>
+
+        <p><strong>Four.</strong> Submit every IP allow-list change to every partner. This has the longest lead time of anything in the project and it is free to start today.</p>
+
+        <p><strong>Five.</strong> Build the landing zone in Terraform, with VPC endpoints, a CIDR nobody else picked, and cost allocation tags enforced from the first resource.</p>
+
+        <p><strong>Six.</strong> Do the application changes — object storage, sessions, cron locking — and deploy them to the <em>old</em> environment first. This is the step most plans get wrong. Every change you can validate in production before the cutover is a change that cannot fail during it.</p>
+
+        <p><strong>Seven.</strong> Rehearse the full cutover twice, at full data scale, with the runbook timed and owners named.</p>
+
+        <p>The framing I would leave you with: a migration is not an engineering achievement, it is a risk-management exercise with some engineering in it. The measure of a good one is that customers never knew, finance was not surprised, and six months later nobody talks about it. That last part is the real test. The migrations people still discuss a year later are the ones that went wrong.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability & Cost Optimization</a></strong>
+              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
               <p>AWS Lambda and API Gateway auto-scaling.</p>
             </li>
             <li>
@@ -232,7 +849,6 @@ resource "aws_autoscaling_group" "ecommerce_asg" {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -266,6 +882,6 @@ resource "aws_autoscaling_group" "ecommerce_asg" {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

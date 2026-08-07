@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Headless Commerce: Architecture, SEO & Performance Strategies | MODRACX</title>
-  <meta name="description" content="Comprehensive architectural breakdown of Headless Commerce. Learn how Next.js, Hydrogen, and GraphQL decoupled backends unlock sub-second load times." />
+  <meta name="description" content="How headless commerce backends actually perform: Storefront API budgets, persisted queries, cache invalidation by webhook, cart isolation and replatform redirects." />
   <meta property="og:title" content="Headless Commerce: Architecture, SEO & Performance Strategies | MODRACX" />
   <meta property="og:description" content="Comprehensive architectural breakdown of Headless Commerce by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Headless Commerce: Architecture, SEO & Performance Strategies</h1>
-        <p class="lede">Decoupling presentation layers from backend e-commerce engines unlocks complete front-end flexibility, eliminating monolithic rendering bottlenecks.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Headless Commerce: Architecture, SEO &amp; Performance Strategies</h1>
+        <p class="lede">Decoupling the storefront from the commerce engine trades template flexibility for network hops. Here is where those hops cost you, and how to remove them from the request path.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,34 +205,626 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Next.js Incremental Static Regeneration (ISR)</h2>
+        <h2>1. The Replatform That Lost 12,000 Indexed Pages</h2>
 
-        <pre><code class="language-javascript">// Next.js App Router Page with Revalidation (ISR)
-export const revalidate = 3600; // Revalidate static page every 1 hour
+        <p>A fastenings retailer I worked with went headless in the spring of 2023. Magento 2 stayed as the commerce engine, a Next.js storefront went in front of it, and the launch itself was uneventful — the site was measurably faster, the team was pleased, and the Lighthouse score on the homepage went from 41 to 96.</p>
+
+        <p>Eleven weeks later organic sessions were down 34%. Search Console showed 12,400 URLs that had moved from "Indexed" to "Crawled — currently not indexed". Nobody had touched the content. The products were the same products, the descriptions were the same descriptions, and the new pages loaded in under a second.</p>
+
+        <p>The cause turned out to be embarrassingly mundane. The old Magento site served category pages with a query-string pagination scheme, <code>?p=2</code>, and the new storefront used path segments, <code>/page/2/</code>. The redirect map covered products and categories. It did not cover the 12,000-odd paginated category URLs, because nobody had exported them — they weren't in the CMS, they weren't in the product table, they existed only as a consequence of how the old theme rendered a catalogue. Googlebot hit thousands of 404s over a month, decided the section had been abandoned, and started dropping the products it had reached through those pages.</p>
+
+        <p>That is the shape of most headless commerce failures I have been called in to fix. Not the rendering. Not the framework. The seams — the places where the storefront and the commerce backend disagree about what a URL is, what a price is, or when a page is allowed to change.</p>
+
+        <p>This article is about the commerce side of headless: the Storefront API, the GraphQL layer, the cart, the cache keys, and the decoupled rendering strategies that make a catalogue fast without making it wrong. If what you're wrestling with is the editorial layer — Sanity, Strapi, Contentful and how their content models interact with rendering — that's a different set of problems and I've written about them separately in <a href="/blog/headless-cms-seo-performance/">the piece on headless CMS performance</a>. Here I'm assuming your content layer is whatever it is and your commerce engine is the thing under pressure.</p>
+
+        <h2>2. What Headless Commerce Actually Decouples</h2>
+
+        <p>The word "headless" gets used for three quite different separations and they have almost nothing in common performance-wise.</p>
+
+        <p><strong>Presentation from commerce logic.</strong> Your storefront is a separate application that talks to a commerce backend over an API. The backend still owns products, pricing, inventory, carts, checkout, taxes and orders. This is the version most people mean, and it's the one this article is about.</p>
+
+        <p><strong>Checkout from storefront.</strong> A weaker form where you build custom category and product pages but hand off to the platform's hosted checkout. Shopify stores do this constantly. It removes the hardest and most compliance-heavy part of the build and it is very often the right call.</p>
+
+        <p><strong>Everything from everything.</strong> Composable commerce: separate services for search, pricing, promotions, inventory, subscriptions, tax, all stitched together in a frontend orchestration layer. This is where the latency budget goes to die, because your page render now depends on the slowest of six vendors rather than the slowest of one.</p>
+
+        <p>The performance consequence of decoupling is simple and rarely stated plainly. In a monolith, the template and the data live in the same process. Fetching a product is a function call. In a headless setup, fetching a product is a network request across the public internet to a system you do not control, with TLS, with rate limits, with a cold cache, and with a p99 you will discover the hard way. You have traded rendering flexibility for network hops. Everything that follows is about paying for as few of those hops as possible on the request path.</p>
+
+        <h2>3. The Storefront API Is Not Your Database</h2>
+
+        <p>The single most common architectural mistake I see is treating the commerce backend's API as if it were a local database — querying it freely, on every request, for whatever the template happens to need.</p>
+
+        <p>Shopify's Storefront API has documented rate limits based on a leaky-bucket cost model. Magento's GraphQL endpoint will happily serve you a query that takes 4 seconds because it resolved 40 layered attributes across a 200-product category. BigCommerce, commercetools and Salesforce Commerce Cloud all have their own throttles, and all of them are enforced per-token in ways that get interesting once you have real traffic.</p>
+
+        <p>Two numbers I keep in my head when designing this layer. First, a Storefront API round trip from a function in the same cloud region is typically 80–250ms for a simple product query and 400ms–1.5s for a category query with facets. Second, your entire server-side budget for a good TTFB is about 200ms. Those numbers do not fit together. Which means the correct architecture is not "call the API faster" — it's "do not call the API on the request path at all for anything that isn't personal to this visitor".</p>
+
+        <p>Concretely, on a well-built headless storefront the request path for an anonymous visitor hitting a product page touches: the CDN, and nothing else. The commerce API was consulted at build time or at revalidation time, minutes or hours ago. The only live calls are the ones that must be live — inventory for a variant, cart state, a personalised block — and those happen client-side, after the document has already painted.</p>
+
+        <pre><code class="language-javascript">// The shape you want: the API call happens during generation, not during the request.
+// This runs on a schedule or on a webhook, never while a customer is waiting.
+export const revalidate = 900; // 15 minutes
 
 export async function generateStaticParams() {
-  const products = await fetchProductsFromMagento();
-  return products.map(p => ({ slug: p.url_key }));
+  // Pre-render what people actually visit. The tail generates on demand.
+  const slugs = await topProductSlugsByRevenue({ limit: 800 });
+  return slugs.map(slug =&gt; ({ slug }));
+}
+
+export default async function ProductPage({ params }) {
+  // Cached at the data layer AND at the page layer. Two different caches,
+  // both of which need an explicit invalidation story.
+  const product = await storefront.query(PRODUCT_QUERY, {
+    variables: { handle: params.slug },
+    cache: { revalidate: 900, tags: [`product:${params.slug}`] },
+  });
+  return &lt;ProductView product={product} /&gt;;
 }</code></pre>
 
-        <hr />
+        <h2>4. Where the Latency Actually Goes</h2>
+
+        <p>When a headless storefront is slow, people reach for the frontend first — bundle size, images, hydration. Sometimes that's right. More often, on a commerce site, the time is in the data path, and the frontend work is rearranging deckchairs.</p>
+
+        <p>Here is the breakdown I measured on a mid-sized Hydrogen storefront during a debugging session in October 2024. Category page, 24 products, uncached, server-rendered in a function in <code>us-east-1</code> against a Shopify Storefront API in the same region.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Stage</th><th>Time</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Function cold start</td><td>310ms</td><td>Only on cold; ~0 when warm</td></tr>
+            <tr><td>Collection query</td><td>420ms</td><td>24 products, 3 variants each, images</td></tr>
+            <tr><td>Filter/facet query</td><td>260ms</td><td>Issued in parallel — did not add</td></tr>
+            <tr><td>Shop policy + menu query</td><td>180ms</td><td>Issued serially. Should not have been</td></tr>
+            <tr><td>React render to string</td><td>90ms</td><td/></tr>
+            <tr><td>Network to browser (UK user)</td><td>140ms</td><td>Origin in Virginia</td></tr>
+            <tr><td><strong>TTFB observed</strong></td><td><strong>~1.14s</strong></td><td>Warm; 1.45s cold</td></tr>
+          </tbody>
+        </table>
+
+        <p>Three things jump out. The commerce API is 60% of the budget. The serial menu query was pure waste — it's the same for every page on the site and had no business being fetched per request. And the geography penalty is real but small compared to the data penalty, which is the opposite of what most people assume when they start moving things to the edge.</p>
+
+        <p>After fixing exactly two things — hoisting the menu and policy data into a build-time constant refreshed by webhook, and putting the page behind a 15-minute regeneration window — the same page served in 40ms from cache. The React render never happened. Neither did the API calls.</p>
+
+        <h2>5. Rendering Strategies, Ranked by How Often I Use Them</h2>
+
+        <p>Every headless framework offers roughly the same menu of rendering modes with different names. What matters is picking per route rather than per site, and most teams pick once for everything.</p>
+
+        <h3>Static with incremental regeneration</h3>
+
+        <p>Default for product pages, category pages, brand pages, everything in the indexable catalogue. The page is built once, served from the CDN, and regenerated in the background on a timer or on a webhook. TTFB in the tens of milliseconds, no commerce API call on the request path, and Googlebot gets the same fast response on its ten-thousandth crawl request as on its first.</p>
+
+        <p>The objection is always price and stock accuracy. It's a real objection and it has a real answer, covered below where I talk about the freshness boundary.</p>
+
+        <h3>Server rendering</h3>
+
+        <p>Correct for cart, checkout, account, order history, and any page with genuinely per-customer pricing — B2B accounts with negotiated rates, trade portals, anything behind a login. These pages should carry <code>noindex</code> anyway, so their TTFB is a UX concern rather than a search one.</p>
+
+        <p>The mistake is server-rendering a product page because 3% of it varies. A "recently viewed" strip and a stock badge are not reasons to make a page dynamic. They're reasons to make a page static with two client-side fills.</p>
+
+        <h3>Edge rendering</h3>
+
+        <p>Useful for routing decisions, market detection, A/B assignment and personalisation shims — work that is cheap, fast, and must happen before the response is chosen. Not useful for full page rendering against a commerce API, because the edge runtime is close to the user and far from your commerce backend, which usually means you've made the network penalty worse rather than better. I've watched a team move SSR to the edge and increase TTFB by 300ms because every one of their eleven API calls now crossed an ocean instead of a datacentre.</p>
+
+        <h3>Client-side rendering</h3>
+
+        <p>Fine for things that must not be cached and must not be indexed: cart contents, live stock, personalised recommendations, recently viewed. Not fine for product content, price, availability schema, or anything you want ranked. Yes, Google renders JavaScript. It renders it on a second pass, on a queue, with no guarantee about latency, and every intermediate step is a chance to lose something.</p>
+
+        <h2>6. The Freshness Boundary</h2>
+
+        <p>This is the design decision that determines whether a headless storefront works commercially, and I've never seen it written down in a spec. Which facts on a product page are allowed to be stale, and for how long?</p>
+
+        <p>My default split, which I'd defend for almost any retailer:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Fact</th><th>Where it renders</th><th>Acceptable staleness</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Title, description, images, specs</td><td>Static HTML</td><td>Hours; webhook on change</td></tr>
+            <tr><td>Price</td><td>Static HTML</td><td>Minutes; webhook on change, mandatory</td></tr>
+            <tr><td>In stock / out of stock</td><td>Static HTML</td><td>Minutes; webhook on change</td></tr>
+            <tr><td>Exact quantity remaining</td><td>Client fetch</td><td>Never cached</td></tr>
+            <tr><td>Variant-level availability grid</td><td>Client fetch</td><td>Seconds</td></tr>
+            <tr><td>Cart contents, customer pricing</td><td>Client fetch</td><td>Never cached</td></tr>
+            <tr><td>Recommendations</td><td>Client fetch</td><td>Whatever the vendor gives you</td></tr>
+          </tbody>
+        </table>
+
+        <p>Price and coarse availability go in the HTML because they go in the structured data, and structured data that disagrees with the visible page gets your rich results suppressed. Merchant Center is stricter still — it re-crawls landing pages, compares the price it finds against the feed, and disables items on mismatch. I have seen a whole shopping account go dark because a storefront cached prices for 24 hours and the feed updated hourly.</p>
+
+        <p>So the rule is: anything that appears in JSON-LD must be in the server-rendered HTML, and must be invalidated by webhook rather than by timer alone. A timer is your safety net for the webhooks you miss, not your primary mechanism.</p>
+
+        <pre><code class="language-javascript">// Webhook receiver. Shopify/Magento/commercetools all emit something like this.
+// Verify the signature first — an unauthenticated purge endpoint is a free DoS.
+import crypto from 'node:crypto';
+import { revalidateTag } from 'next/cache';
+
+export async function POST(request) {
+  const raw = await request.text();
+  const sig = request.headers.get('x-shopify-hmac-sha256') ?? '';
+  const digest = crypto
+    .createHmac('sha256', process.env.WEBHOOK_SECRET)
+    .update(raw, 'utf8')
+    .digest('base64');
+
+  // timingSafeEqual throws on length mismatch, so guard it
+  const ok = digest.length === sig.length &amp;&amp;
+    crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(sig));
+  if (!ok) return new Response('bad signature', { status: 401 });
+
+  const product = JSON.parse(raw);
+  revalidateTag(`product:${product.handle}`);
+  // A price change also changes every collection page the product appears on
+  for (const c of product.collections ?? []) revalidateTag(`collection:${c}`);
+  return Response.json({ ok: true });
+}</code></pre>
+
+        <p>The second half of that handler is the part people forget. A product's price appears on its own page and on every category page, search result and cross-sell block that lists it. Invalidating one page and not the others gives you a site that contradicts itself, and Google will find the contradiction because it crawls category pages more often than product pages.</p>
+
+        <h2>7. Query Design Is Performance Design</h2>
+
+        <p>On a headless storefront your GraphQL queries are your database queries, and the same discipline applies. The difference is that the cost is charged to you as latency and to the backend as complexity points, and neither shows up in your frontend profiler.</p>
+
+        <p>Four rules I apply without much debate.</p>
+
+        <p><strong>Ask for exactly what the template renders.</strong> A collection query pulling <code>descriptionHtml</code> for 24 products when the card shows a title and a price is downloading maybe 300KB of prose to throw away. On Shopify it also burns query cost, and query cost is what throttles you at Black Friday scale.</p>
+
+        <p><strong>Cap connections explicitly.</strong> Every <code>first:</code> is a decision. <code>first: 250</code> because it was the maximum is a decision to make the query ten times slower than it needed to be.</p>
+
+        <p><strong>Colocate fragments with components.</strong> If the card component owns its fragment, the query changes when the component changes, and you don't end up with a query fetching fields for a component that was deleted in 2023.</p>
+
+        <p><strong>Watch nesting depth.</strong> Products → variants → metafields → references is four levels of resolution, and on most backends each level is a separate fan-out. This is the N+1 problem in a new costume; I go into the server-side mechanics of it in <a href="/blog/graphql-rest-api-performance/">the GraphQL and REST performance piece</a>.</p>
+
+        <pre><code class="language-graphql"># Bad: everything, for everyone, forever
+query Collection($handle: String!) {
+  collection(handle: $handle) {
+    products(first: 250) {
+      nodes {
+        id title handle descriptionHtml vendor productType tags
+        images(first: 20) { nodes { url altText width height } }
+        variants(first: 100) {
+          nodes { id title availableForSale price { amount currencyCode }
+                  metafields(identifiers: [{namespace: "custom", key: "spec"}]) { value } }
+        }
+      }
+    }
+  }
+}
+
+# Better: a card needs six fields and one image
+fragment ProductCard on Product {
+  id
+  handle
+  title
+  featuredImage { url altText width height }
+  priceRange { minVariantPrice { amount currencyCode } }
+  availableForSale
+}
+
+query Collection($handle: String!, $first: Int = 24, $cursor: String) {
+  collection(handle: $handle) {
+    products(first: $first, after: $cursor) {
+      nodes { ...ProductCard }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}</code></pre>
+
+        <p>The second query on the same catalogue returned in 190ms against 420ms, and the response was 61KB instead of 940KB. No caching involved — just not asking for things.</p>
+
+        <h2>8. Persisted Queries and Why They Matter More Here</h2>
+
+        <p>GraphQL over POST is uncacheable by any HTTP intermediary, because the request body is the query and no CDN keys on request bodies. That is a serious problem in a headless architecture where the same collection query runs for every visitor.</p>
+
+        <p>Persisted queries fix it. You register the query text with the backend ahead of time, get back a hash, and at runtime send the hash as a GET parameter. Now the request is a cacheable URL.</p>
+
+        <pre><code class="language-bash"># Automatic persisted queries: try the hash first, fall back to sending the
+# document once if the server has not seen it. The hash is sha256 of the query
+# string, byte-for-byte, including whitespace.
+QUERY='query ProductByHandle($handle:String!){product(handle:$handle){id title}}'
+HASH=$(printf '%s' "$QUERY" | shasum -a 256 | cut -d' ' -f1)
+
+curl -sG "https://shop.example.com/api/2025-01/graphql.json" \
+  --data-urlencode "variables={\"handle\":\"oak-side-table\"}" \
+  --data-urlencode "extensions={\"persistedQuery\":{\"version\":1,\"sha256Hash\":\"$HASH\"}}" \
+  -H 'X-Shopify-Storefront-Access-Token: '"$TOKEN"</code></pre>
+
+        <p>Two caveats worth knowing before you commit. First, a GET request has a URL length ceiling — around 8KB on most proxies — so large variable payloads still need POST. Second, if any part of your variables is customer-specific you've just made a per-customer cache key, and your hit rate collapses. Persisted queries pay off for anonymous catalogue reads and almost nowhere else.</p>
+
+        <h2>9. Caching: Four Layers, Four Invalidation Stories</h2>
+
+        <p>A headless storefront ends up with more cache layers than anyone plans for. I count them explicitly on every project, because an uninvalidated layer is a stale price waiting to happen.</p>
+
+        <p><strong>The CDN's HTML cache.</strong> Fastest, coarsest. Keyed on URL plus whatever you add with <code>Vary</code>. Invalidated by purge API.</p>
+
+        <p><strong>The framework's data cache.</strong> Next.js's fetch cache, Hydrogen's <code>cache</code> option, Nuxt's <code>useAsyncData</code> — a memoisation layer around API calls, usually tag-keyed. Invalidated by tag.</p>
+
+        <p><strong>The commerce backend's own cache.</strong> Shopify's CDN in front of the Storefront API, Magento's Varnish and Redis, whatever your platform does internally. You mostly cannot invalidate this and mostly do not need to.</p>
+
+        <p><strong>The browser.</strong> <code>Cache-Control</code> on the document itself. My default is <code>public, max-age=0, s-maxage=900, stale-while-revalidate=86400</code> — never trusted in the browser, cached hard at the CDN, and allowed to serve stale for a day while it refreshes if the origin is down.</p>
+
+        <pre><code class="language-javascript">// Hydrogen: cache policy is per-query, and the defaults are conservative.
+// CacheLong() is roughly max-age 3600 / swr 82800. For a catalogue that is
+// webhook-invalidated, that is fine. For anything cart-shaped, use CacheNone().
+const [collection, menu] = await Promise.all([
+  storefront.query(COLLECTION_QUERY, {
+    variables: { handle, first: 24 },
+    cache: storefront.CacheCustom({
+      mode: 'public',
+      maxAge: 900,
+      staleWhileRevalidate: 86400,
+    }),
+  }),
+  storefront.query(MENU_QUERY, { cache: storefront.CacheLong() }),
+]);
+
+// Note Promise.all. Two serial awaits here cost you the sum, not the max —
+// this single change removed 180ms from the category route on one build.</code></pre>
+
+        <p>The failure mode I've hit personally: <code>stale-while-revalidate</code> with a long window plus a webhook purge that silently 500s. The CDN kept serving a two-week-old page and nobody noticed, because the page looked completely normal. It was advertising a discontinued product at a price we no longer honoured. Now I alert on webhook receipt failures the same way I alert on checkout errors, and I log the age of every cache hit into the response headers so I can see drift in the field.</p>
+
+        <h2>10. Hydrogen and Oxygen, Specifically</h2>
+
+        <p>Shopify's Hydrogen deserves its own treatment because it makes different trade-offs than a general framework, and the differences matter.</p>
+
+        <p>Hydrogen is a Remix application. Its data loading model is route loaders, which run on the server and can be parallelised naturally, and the framework nudges you toward the right shape: a <code>loader</code> that fetches, a component that renders, and deferred data for the slow stuff. The deferred pattern is the important one — you return a promise rather than an awaited value, the shell streams immediately, and the slow block fills in.</p>
+
+        <pre><code class="language-javascript">import { defer } from '@shopify/remix-oxygen';
+import { Await, useLoaderData } from '@remix-run/react';
+import { Suspense } from 'react';
+
+export async function loader({ params, context }) {
+  const { storefront } = context;
+
+  // Critical: must be in the HTML for SEO and for the price in JSON-LD.
+  const product = await storefront.query(PRODUCT_QUERY, {
+    variables: { handle: params.handle },
+  });
+  if (!product?.product) throw new Response(null, { status: 404 });
+
+  // Non-critical: recommendations can arrive late. No await.
+  const recommended = storefront.query(RECOMMENDED_QUERY, {
+    variables: { productId: product.product.id },
+  });
+
+  return defer({ product: product.product, recommended });
+}
+
+export default function Product() {
+  const { product, recommended } = useLoaderData();
+  return (
+    &lt;&gt;
+      &lt;ProductMain product={product} /&gt;
+      &lt;Suspense fallback={&lt;SkeletonRow /&gt;}&gt;
+        &lt;Await resolve={recommended}&gt;
+          {(data) =&gt; &lt;Recommendations items={data.productRecommendations} /&gt;}
+        &lt;/Await&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+
+        <p>Oxygen, Shopify's hosting for Hydrogen, runs your code as a worker at the edge with a sub-cloud connection back to Shopify's infrastructure. That last part is the reason Oxygen usually beats self-hosting a Hydrogen app on a general platform: the Storefront API call doesn't traverse the public internet. On a build I measured in early 2025, the same query took 210ms from a Vercel function in Virginia and 95ms from Oxygen. Not magic, just proximity plus a warm connection pool.</p>
+
+        <p>What I don't love about Hydrogen: the worker runtime means no Node built-ins that touch the filesystem or raw sockets, which rules out a category of libraries and makes some third-party SDKs unusable server-side. And Oxygen's cache purge story is coarser than I'd like — you get more control over sub-request caching than over the full-page cache. If your catalogue changes constantly, budget time for that. I've written more about the framework-level ergonomics in <a href="/blog/headless-shopify-hydrogen/">the Hydrogen build notes</a>.</p>
+
+        <h2>11. The Cart Is the Hardest Part</h2>
+
+        <p>Everything above is about read paths, which cache beautifully. The cart is a write path attached to a session, and it breaks every assumption the read path relies on.</p>
+
+        <p>A cart in a headless architecture lives on the commerce backend and is referenced by an ID in a cookie. Every add-to-cart is a mutation, a network round trip, and a UI state change. Three things go wrong reliably.</p>
+
+        <p><strong>The cart request blocks the page.</strong> If your root layout awaits the cart before rendering, every page on your site — including every product page Googlebot crawls — now has a commerce API call on the critical path, and is uncacheable. I've found this in about half the headless builds I've reviewed. The cart should be fetched client-side after paint, or streamed in with Suspense. Nothing above the fold should wait on it.</p>
+
+        <p><strong>The cart cookie poisons the cache.</strong> If the cart ID is in a cookie and your CDN varies on <code>Cookie</code>, every visitor with a cart has a unique cache key and your hit rate goes to zero. Vary narrowly, or better, never vary on cookie for indexable routes and read the cart cookie only in client code.</p>
+
+        <p><strong>Optimistic UI drifts from reality.</strong> You increment the count locally, the mutation fails, and now the badge says 3 and the cart has 2. Reconcile from the server response, always, and treat the local state as a hint.</p>
+
+        <pre><code class="language-javascript">// Client-side cart hydration. The document was static; this runs after paint.
+export function useCart() {
+  const [cart, setCart] = useState(null);
+  useEffect(() =&gt; {
+    const id = readCookie('cart_id');
+    if (!id) { setCart({ lines: [], totalQuantity: 0 }); return; }
+    fetch('/api/cart', { headers: { 'x-cart-id': id } })
+      .then(r =&gt; r.ok ? r.json() : { lines: [], totalQuantity: 0 })
+      .then(setCart)
+      .catch(() =&gt; setCart({ lines: [], totalQuantity: 0 }));
+  }, []);
+  return cart;
+}
+
+// Server route. Never cached, never indexed, explicit about it.
+export async function GET(request) {
+  const cart = await storefront.query(CART_QUERY, {
+    variables: { id: request.headers.get('x-cart-id') },
+    cache: storefront.CacheNone(),
+  });
+  return Response.json(cart, {
+    headers: { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex' },
+  });
+}</code></pre>
+
+        <p>One thing I got wrong on an early build: I put the cart line-item count into the page's static HTML for a "you have N items" nudge, cached the page, and served one customer's basket count to everyone in that region for fifteen minutes. It leaked no personal data, but it was a genuinely alarming bug report to receive. Anything session-shaped stays out of cacheable HTML. No exceptions, no clever exceptions.</p>
+
+        <h2>12. URLs, Redirects and the Replatform Tax</h2>
+
+        <p>Back to the failure at the top. Replatforming is where headless projects lose their organic traffic, and it is almost never the architecture's fault.</p>
+
+        <p>What I do now, on every migration, before a line of storefront code is written:</p>
+
+        <p>Export every URL that has ever received an impression. Search Console's Performance report, 16 months, page dimension, exported through the API rather than the UI so you get more than 1,000 rows. Then the server logs for the last 90 days, filtered to Googlebot, deduplicated. Then the old sitemap. Then a crawl of the live site with Screaming Frog or a scripted crawler. Union all four. The union is always bigger than anyone expects — on that homeware project it was 41,000 URLs against a catalogue of 9,000 products.</p>
+
+        <pre><code class="language-bash"># Every URL Googlebot actually requested, with counts, from raw access logs.
+# Verify the bot properly in production; UA matching alone is spoofable.
+zcat access-*.log.gz \
+  | grep -F 'Googlebot' \
+  | awk '{print $7}' \
+  | sed 's/?.*$//' \
+  | sort | uniq -c | sort -rn &gt; googlebot-urls.txt
+
+# Then check which of them the new site answers with something other than 200
+cut -c9- googlebot-urls.txt | head -5000 | while read -r p; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -L "https://staging.example.com$p")
+  [ "$code" != "200" ] &amp;&amp; printf '%s\t%s\n' "$code" "$p"
+done &gt; broken.tsv</code></pre>
+
+        <p>Then the rules. Not a 41,000-row lookup table — patterns first, exceptions second. Pagination, facet parameters, legacy category paths, old product URL formats, image paths, feed endpoints. And test the redirect chain length: a 301 to a 301 to a 200 works but wastes crawl budget, and I've seen chains four deep after two successive replatforms.</p>
+
+        <p>Keep the redirects forever. Not for six months. I still have redirects live from a 2019 migration because they still receive traffic from links on suppliers' sites that will never be updated.</p>
+
+        <h2>13. Structured Data When the Backend Owns the Truth</h2>
+
+        <p>Product schema on a headless storefront has a specific hazard: the data comes from the API, the markup is generated in the frontend, and nobody owns the mapping. Fields go missing during a refactor and nothing visibly breaks — the page renders fine, the rich result quietly disappears, and you find out in a quarterly report.</p>
+
+        <p>Generate the JSON-LD from the same object the template renders, never from a second fetch, and validate its shape in a test rather than trusting it.</p>
+
+        <pre><code class="language-javascript">export function productSchema(product, url) {
+  const v = product.variants.nodes[0];
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.title,
+    description: stripHtml(product.descriptionHtml).slice(0, 5000),
+    sku: v?.sku,
+    gtin13: v?.barcode || undefined,   // omit the key rather than send null
+    brand: { '@type': 'Brand', name: product.vendor },
+    image: product.images.nodes.map(i =&gt; i.url).slice(0, 8),
+    offers: {
+      '@type': 'Offer',
+      url,
+      priceCurrency: v.price.currencyCode,
+      price: v.price.amount,           // string, two decimals, no symbol
+      availability: v.availableForSale
+        ? 'https://schema.org/InStock'
+        : 'https://schema.org/OutOfStock',
+      priceValidUntil: addDays(new Date(), 30).toISOString().slice(0, 10),
+      itemCondition: 'https://schema.org/NewCondition',
+    },
+  };
+}</code></pre>
+
+        <p>The <code>price</code> field must match what a human sees on the page, to the penny, in the same currency. If you run multi-currency with client-side conversion, the server-rendered schema and the client-rendered display will disagree for every visitor outside your base market. That's a rich-result suppression and a Merchant Center warning, and the fix is to make currency a server-side routing concern rather than a client-side preference.</p>
+
+        <p>A test I put in CI on every commerce build:</p>
+
+        <pre><code class="language-javascript">// Fails the build if the schema loses a field. Cheap insurance against
+// a refactor silently dropping gtin13 or availability.
+test('product schema keeps required offer fields', async () =&gt; {
+  const html = await renderRoute('/products/oak-side-table');
+  const blocks = [...html.matchAll(
+    /&lt;script type="application\/ld\+json"&gt;([\s\S]*?)&lt;\/script&gt;/g
+  )].map(m =&gt; JSON.parse(m[1]));
+  const product = blocks.find(b =&gt; b['@type'] === 'Product');
+
+  expect(product).toBeDefined();
+  for (const key of ['name', 'sku', 'brand', 'image', 'offers']) {
+    expect(product[key]).toBeTruthy();
+  }
+  expect(product.offers.price).toMatch(/^\d+\.\d{2}$/);
+  expect(product.offers.availability).toContain('schema.org/');
+  // and the visible price must agree with the markup
+  expect(html).toContain(formatMoney(product.offers.price));
+});</code></pre>
+
+        <h2>14. Faceted Navigation Without an Index Explosion</h2>
+
+        <p>Give a headless storefront a filter UI and it will generate URLs. Colour, size, price band, brand, material, in-stock — six facets with five values each is 15,625 combinations per category, and if every combination is a crawlable, indexable URL you have built a crawl trap that will consume your budget and index nothing useful.</p>
+
+        <p>My rules, applied in this order:</p>
+
+        <p>Decide which facet combinations have search demand. Usually "brand + category" and "colour + category" do; "price band + material + in stock" does not. The ones with demand become real, statically generated, self-canonical landing pages with unique copy. Everything else is a filtered view.</p>
+
+        <p>Filtered views get <code>noindex, follow</code> and their links get no special treatment — you want the crawler to pass through them to products without indexing the view itself. Do not use canonical tags pointing at the unfiltered category for this; a canonical is a hint and Google frequently ignores it on faceted URLs, whereas <code>noindex</code> is an instruction.</p>
+
+        <p>Sort orders, view modes and pagination cursors go in query strings, and those parameters get blocked in <code>robots.txt</code> if they multiply. Blocking is a blunt instrument and it does prevent link equity flowing through the blocked URLs, so use it only for parameters that generate no discovery value.</p>
+
+        <pre><code class="language-javascript">// Route-level indexing decision, derived from the URL rather than sprinkled
+// through components. One place to reason about, one place to test.
+const INDEXABLE_FACETS = new Set(['brand', 'colour']);
+
+export function robotsFor(searchParams) {
+  const keys = [...searchParams.keys()].filter(k =&gt; k !== 'page');
+  if (keys.length === 0) return 'index,follow';
+  if (keys.length === 1 &amp;&amp; INDEXABLE_FACETS.has(keys[0])) return 'index,follow';
+  return 'noindex,follow';
+}</code></pre>
+
+        <p>Pagination itself: every paginated page should be self-canonical and indexable. Canonicalising page 2 to page 1 was never supported and it hides products from discovery. <code>rel="next"</code> and <code>rel="prev"</code> stopped being used by Google in 2019 — they're harmless, they just don't do anything.</p>
+
+        <h2>15. What Googlebot Actually Sees</h2>
+
+        <p>Headless means JavaScript, and JavaScript means a rendering step you should verify rather than assume.</p>
+
+        <p>Google's rendering is a two-pass process. The HTML is crawled and indexed, then the URL goes into a render queue, and at some later point — usually minutes, occasionally days — a headless Chromium renders it and the result is re-indexed. Content that exists only after render is not lost, but it is delayed and it is subject to whatever went wrong during rendering: a timed-out fetch, a blocked resource, a script error on a browser version you never tested.</p>
+
+        <p>For an ecommerce catalogue that delay is the problem. A product that comes into stock, or drops in price, and takes four days to be re-rendered has missed the window it mattered in.</p>
+
+        <p>The check I run before every headless launch, and quarterly after:</p>
+
+        <pre><code class="language-bash"># What is in the HTML before any JavaScript runs.
+# If the price and title are not in here, the architecture is wrong.
+curl -sL -A 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' \
+  https://www.example.com/products/oak-side-table \
+  | python3 -c 'import sys,re; h=sys.stdin.read(); \
+      print("title:", bool(re.search(r"&lt;h1[^&gt;]*&gt;", h))); \
+      print("price in html:", "£249.00" in h); \
+      print("ld+json blocks:", h.count("application/ld+json")); \
+      print("canonical:", re.search(r"rel=.canonical.[^&gt;]*", h).group(0) if "canonical" in h else None)'</code></pre>
+
+        <p>Then the same URL through the URL Inspection tool's live test, and compare the rendered HTML against the raw. Anything that appears only in the rendered version is on a delay. Decide deliberately whether that's acceptable for that element. For a review carousel, fine. For the price, never.</p>
+
+        <h2>16. Multi-Market Storefronts</h2>
+
+        <p>Headless makes internationalisation easier to build and easier to get wrong. The commerce backend usually models markets — Shopify Markets, Magento store views, commercetools channels — with per-market pricing, currency and availability. The storefront has to route to the right one, cache each separately, and tell Google how they relate.</p>
+
+        <p>Path-based routing, <code>/en-gb/</code>, <code>/de-de/</code>, is what I use almost always. Subdomains work but fragment your caching and your analytics. Cookie or IP-based switching with a single URL is the one to avoid entirely: Googlebot crawls from US IPs, sees only your US market, and your other markets never get indexed at all.</p>
+
+        <p>If you must geo-redirect, redirect on first visit only, remember the choice, and never redirect a request whose user agent is a crawler. Better: don't redirect, show a dismissible banner offering the switch.</p>
+
+        <pre><code class="language-javascript">// Middleware. Runs at the edge, decides the market, sets a cache key.
+export function middleware(request) {
+  const { pathname } = request.nextUrl;
+  const hasLocale = /^\/[a-z]{2}-[a-z]{2}\//.test(pathname);
+  if (hasLocale) return;
+
+  // Crawlers get the default market, never a geo redirect.
+  const ua = request.headers.get('user-agent') ?? '';
+  if (/bot|crawler|spider|googlebot|bingbot/i.test(ua)) {
+    return NextResponse.rewrite(new URL(`/en-gb${pathname}`, request.url));
+  }
+
+  const remembered = request.cookies.get('market')?.value;
+  const country = request.headers.get('x-vercel-ip-country')?.toLowerCase();
+  const market = remembered ?? MARKET_BY_COUNTRY[country] ?? 'en-gb';
+  return NextResponse.redirect(new URL(`/${market}${pathname}`, request.url), 302);
+}</code></pre>
+
+        <p>Note the 302. A geo redirect is not permanent — the same URL redirects differently for different visitors — and marking it 301 tells Google the original URL is gone, which it isn't.</p>
+
+        <p>Hreflang then goes in the HTML of every localised page, listing every variant including itself, with a self-consistent set of return links. Get one direction wrong and Google discards the whole cluster. I generate it from the market config rather than hand-maintaining it, because hand-maintained hreflang is wrong within two sprints.</p>
+
+        <h2>17. A Worked Example: 32,000 SKUs on Magento Plus Next.js</h2>
+
+        <p>A B2B-leaning distributor, industrial fittings, 32,000 active SKUs across 640 categories, Magento 2.4.6 as the commerce engine and a Next.js 14 storefront. Traffic around 210,000 sessions a month, with a long tail — the top 500 products accounted for 38% of pageviews and the bottom 20,000 for about 9%.</p>
+
+        <p>The starting position, measured over two weeks in November 2024:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Before</th><th>After</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>TTFB, p75, product pages</td><td>1.42s</td><td>180ms</td></tr>
+            <tr><td>LCP, p75, product pages</td><td>3.1s</td><td>1.6s</td></tr>
+            <tr><td>Magento GraphQL calls per minute</td><td>~4,100</td><td>~340</td></tr>
+            <tr><td>Googlebot avg response time (Crawl Stats)</td><td>1,840ms</td><td>310ms</td></tr>
+            <tr><td>Pages crawled per day</td><td>3,900</td><td>18,600</td></tr>
+            <tr><td>Build time, full</td><td>—</td><td>9 min (800 pages)</td></tr>
+          </tbody>
+        </table>
+
+        <p>What we changed, in the order we changed it, because the order mattered.</p>
+
+        <p><strong>Week one: stop calling Magento on the request path.</strong> Every product page had been server-rendered per request against Magento's GraphQL endpoint. We moved to static generation with a 20-minute revalidation window plus webhook invalidation on price, stock and content changes. We pre-rendered the top 800 products and let the other 31,200 generate on first request. That single change is most of the table above.</p>
+
+        <p><strong>Week two: fix the query.</strong> The product query was fetching 41 attributes because it had been copied from an admin integration. The template used 12. Dropping the rest took the uncached generation time from 900ms to 380ms, which matters because the long tail generates on demand and Googlebot is the one triggering it.</p>
+
+        <p><strong>Week three: the menu.</strong> A 640-category navigation tree was being fetched per page. It became a build artefact regenerated by webhook on category changes, which happened about twice a week.</p>
+
+        <p><strong>Week four: facets.</strong> 640 categories times an average of 11 filter values was generating a lot of crawlable URLs. We identified 190 facet combinations with genuine search demand, made those into proper landing pages, and <code>noindex</code>ed the rest.</p>
+
+        <p><strong>What went wrong.</strong> Two things, both mine.</p>
+
+        <p>The first was the revalidation stampede. When we deployed, the entire page cache invalidated at once, and Googlebot — which by then was crawling enthusiastically — hit 4,000 uncached product pages in about eleven minutes. Every one of them triggered a Magento query. Magento's database hit connection saturation and started returning 503s, which the storefront cached as error pages. We served 503s for nine minutes and Search Console logged a crawl anomaly spike. The fix was a small concurrency limiter around the generation path and a rule that a non-200 from the backend never gets cached.</p>
+
+        <pre><code class="language-javascript">// Bound how many uncached generations can hit the commerce backend at once.
+// Without this, a cache flush plus an eager crawler is a self-inflicted DoS.
+let active = 0;
+const queue = [];
+const MAX = 8;
+
+async function limited(fn) {
+  if (active &gt;= MAX) await new Promise(r =&gt; queue.push(r));
+  active++;
+  try {
+    return await fn();
+  } finally {
+    active--;
+    queue.shift()?.();
+  }
+}
+
+export async function getProduct(handle) {
+  const res = await limited(() =&gt; magento.query(PRODUCT_QUERY, { handle }));
+  // Never cache a failure. A cached 503 outlives the outage that caused it.
+  if (!res.ok) throw new UncacheableError(res.status);
+  return res.data;
+}</code></pre>
+
+        <p>The second was subtler and took three weeks to spot. Stock webhooks from Magento fired on every inventory movement, including internal warehouse transfers that didn't change sellable quantity. During a stocktake we received about 40,000 webhooks in an afternoon, each triggering a regeneration. The regeneration queue backed up, revalidation fell behind by hours, and prices went stale during exactly the period we'd built the whole mechanism to protect. Now the webhook handler compares the incoming sellable quantity against the last value it saw and drops the no-ops. Cost: a small Redis key per SKU. Benefit: a 96% reduction in regeneration volume.</p>
+
+        <p><strong>What I'd do differently.</strong> I'd have built the observability first. We spent two of those four weeks guessing, because we had no per-route breakdown of cache hit rate versus regeneration versus origin miss. Adding a response header with the cache status and the age, then charting it, would have taken half a day and saved several. If you're starting a headless build now, instrument the data layer before you optimise it — the approach I'd take is roughly what I describe in the piece on <a href="/blog/performance-monitoring/">building performance monitoring people actually use</a>.</p>
+
+        <h2>18. When I Would Not Go Headless</h2>
+
+        <p>I make a living building these and I still talk people out of them regularly.</p>
+
+        <p>If your team is two developers and one of them is part-time, headless doubles your surface area. You now own a frontend deployment pipeline, a caching strategy, a webhook infrastructure and a rendering budget, on top of the commerce platform you already had. Shopify with a good theme, or Magento with Hyvä, will get you 80% of the performance for 20% of the operational cost.</p>
+
+        <p>If your catalogue is under about 500 SKUs and your traffic is under 50,000 sessions a month, the performance difference will not show up in revenue. The bottleneck is somewhere else — probably your images, probably a tag manager loading 400KB of third-party scripts.</p>
+
+        <p>If your merchandising team edits the site daily and expects to see changes immediately, be honest about what a build-and-invalidate cycle does to their workflow. This is the objection that kills headless projects post-launch, and it's a people problem dressed as a technical one. Solve it with preview environments and instant on-demand invalidation, or don't do it.</p>
+
+        <p>Where headless earns its keep: large catalogues, multiple markets, a genuinely custom shopping experience, an existing frontend team, or a commerce backend you're planning to replace and want to decouple from first. That last one is underrated — headless as a migration strategy rather than a performance strategy is often the strongest business case.</p>
+
+        <h2>19. Questions I Get Asked</h2>
+
+        <p><strong>"Is a headless storefront inherently better for SEO?"</strong> No. It's better for performance if you build it correctly, and performance is one ranking input among many. A well-built headless site beats a badly-built monolith. A badly-built headless site — one that server-renders everything against a slow API, or client-renders product content — loses to a decent Shopify theme comfortably. The architecture gives you a higher ceiling and a lower floor.</p>
+
+        <p><strong>"Can we keep our existing URLs?"</strong> Almost always yes, and you should. Your framework's routing can be made to match anything, including ugly legacy patterns with file extensions. The pushback usually comes from developers who want clean URLs, and clean URLs are worth approximately nothing next to the traffic you lose in a migration. Keep the old shapes unless there's a real reason.</p>
+
+        <p><strong>"How fresh can prices be if pages are static?"</strong> Seconds, if your webhooks work. The invalidation is the freshness mechanism, not the timer. What you cannot do is guarantee freshness during a webhook outage, which is why the timer exists as a backstop and why you alert on webhook failures.</p>
+
+        <p><strong>"Should the storefront call the commerce API directly from the browser?"</strong> For cart operations, yes — that's what the Storefront API token is for, it's public by design and scoped to safe operations. For anything involving a private token or an Admin API, absolutely not; proxy it through your own server route. I've found Admin API tokens in client bundles twice, both times in code written by an agency in a hurry.</p>
+
+        <p><strong>"Does Google penalise client-side rendered content?"</strong> Not penalise. Delay and risk. It goes into the render queue, and when it comes out the other side it's indexed normally. The problem is the queue is not fast and not guaranteed, and for time-sensitive commerce data that's a business risk rather than a ranking one.</p>
+
+        <p><strong>"We're on Shopify Plus. Hydrogen or Next.js?"</strong> Hydrogen on Oxygen if your storefront is mostly Shopify data, because the sub-cloud connection to the Storefront API is a real advantage and the framework's defaults are commerce-shaped. Next.js if you're pulling significant data from other systems, if your team already knows it well, or if you need a Node runtime for something the worker environment won't run. Both are fine. The choice matters much less than the caching strategy you put behind it.</p>
+
+        <p><strong>"How do I know if my cache is actually working?"</strong> Put the cache status and age in a response header and chart them. If you can't answer "what percentage of product page requests were served from cache yesterday" in under a minute, you don't know whether any of this is working, and you'll optimise the wrong thing.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>If you're standing in front of a headless storefront that's underperforming, this is the order I work in. It's roughly cheapest-and-highest-impact first, and I've never regretted the sequence.</p>
+
+        <p><strong>One.</strong> Measure TTFB at the 75th percentile from field data, split by route type. Not lab data, not the homepage. If product pages are above 800ms, everything else on this list is premature.</p>
+
+        <p><strong>Two.</strong> Count the commerce API calls on the request path for an anonymous product page view. The target is zero. Whatever the number is, the difference between it and zero is your project plan.</p>
+
+        <p><strong>Three.</strong> Find the serial awaits. Every framework makes it easy to write two <code>await</code>s that should have been a <code>Promise.all</code>, and this is consistently the cheapest few hundred milliseconds available.</p>
+
+        <p><strong>Four.</strong> Audit the queries against the templates. Delete every field nothing renders. Cap every connection. This takes an afternoon and typically halves the uncached generation time.</p>
+
+        <p><strong>Five.</strong> Get webhook-driven invalidation working properly, with signature verification, no-op filtering, and an alert when receipts stop arriving. This is what lets you cache aggressively without lying to customers.</p>
+
+        <p><strong>Six.</strong> Fetch the raw HTML as Googlebot and confirm the title, price, availability and canonical are all present before any JavaScript runs. If they're not, fix that before touching anything else in this list — it's a correctness problem, not a performance one.</p>
+
+        <p><strong>Seven.</strong> Only then look at the frontend. Bundle size, hydration cost, image formats, third-party scripts. It matters, and it will matter a great deal once the data path stops being the bottleneck. But on a headless commerce site it is almost never where the first second went.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>GraphQL fetchers and edge caching.</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO & Performance</a></strong>
+              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
               <p>Sanity, Strapi, and Contentful integrations.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -264,6 +858,6 @@ export async function generateStaticParams() {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

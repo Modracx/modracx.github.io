@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Python Web Scraping & Competitive Intelligence | MODRACX</title>
-  <meta name="description" content="Technical guide on building scalable, proxy-rotated Python web scrapers using Playwright and BeautifulSoup for dynamic price tracking and catalog monitoring." />
+  <meta name="description" content="Competitor price monitoring in Python: robots.txt and terms, personal data limits, JSON-LD-first parsing, change detection, staleness canaries, and where to decline." />
   <meta property="og:title" content="Python Web Scraping & Competitive Intelligence | MODRACX" />
   <meta property="og:description" content="Technical guide on Python web scraping by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Python Web Scraping & Competitive Intelligence</h1>
-        <p class="lede">Monitoring competitor pricing in real time with Playwright and Scrapy allows e-commerce platforms to dynamically adjust product margins via algorithmic pricing engines.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Python Web Scraping &amp; Competitive Intelligence</h1>
+        <p class="lede">A pricing sheet fed by a scraper that had been returning eleven-week-old data with a 200 response and a clean parse. The engineering of competitor monitoring, and the parts where the honest answer is to stop.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 31 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,42 +205,765 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Playwright Async Python Scraper Script</h2>
+        <h2>1. The Spreadsheet That Was Quietly Wrong for Eleven Weeks</h2>
 
-        <pre><code class="language-python"># Python Async Playwright Competitive Price Monitor
-import asyncio
-from playwright.async_api import async_playwright
+        <p>A kitchenware distributor I work with — call them Harrow &amp; Vane, about 4,000 SKUs, mostly cookware and small appliances — ran a weekly pricing meeting off a Google Sheet. The sheet was fed by a Python job I had not written. Every Monday at 06:00 it collected prices for 380 competitor products across six retailers, wrote them into a tab, and the commercial team spent an hour deciding where to move.</p>
 
-async def scrape_price(url):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url)
-        price_text = await page.locator('.product-price').inner_text()
-        await browser.close()
-        return price_text
+        <p>In March 2025 their head of category asked me to look at why one competitor's prices "never seemed to move". I pulled the raw responses the job had stored — it stored them, which turned out to be the only reason this story has an ending. The last genuinely fresh response from that retailer was dated 6 January. For eleven weeks the job had been receiving a 200 response with a full-looking product page, parsing it successfully, and writing prices that were a snapshot of early January.</p>
 
-# Run scraper
-# asyncio.run(scrape_price('https://competitor.com/item'))</code></pre>
+        <p>The retailer had put a caching layer in front of a bot-classified request path. Requests that looked automated got served a stale edge copy. No error. No 403. No CAPTCHA. A perfectly valid page with prices from a season ago. The scraper's health check was "did the parse succeed", and the parse succeeded every single time.</p>
 
-        <hr />
+        <p>Harrow &amp; Vane had, in that window, matched a competitor down on 40-odd lines that the competitor had already moved back up. I have not calculated the margin they gave away and I have deliberately not asked, because the number would be depressing and it would not change the lesson: <strong>the hard part of competitor monitoring is not fetching pages. It is knowing whether what you fetched is true.</strong></p>
+
+        <p>That is most of what this article is about. But before any of the engineering, there is a set of questions about whether you should be collecting a given dataset at all, and I want to deal with those first rather than tucking them into a disclaimer at the bottom.</p>
+
+        <h2>2. What This Article Is Not</h2>
+
+        <p>This is not a guide to defeating bot detection. I am not going to show you how to rotate residential proxies through a target that has told you to go away, how to solve CAPTCHAs at scale, or how to fingerprint-spoof a headless browser past a commercial bot-management product.</p>
+
+        <p>Not because the techniques are secret — they are extensively documented and a determined person will find them in an afternoon — but because writing that guide would be arguing that the target's expressed wishes are an obstacle rather than an answer. They are an answer. Usually a clear one.</p>
+
+        <p>What I will do is describe how to build a competitor-intelligence pipeline that is useful, maintainable, and defensible: what to collect, how to collect it without being a nuisance, how to tell when your data has gone bad, and where I personally stop. I have turned down two pieces of scraping work in the last three years, and I will tell you what they were, because "which jobs to decline" is a more useful engineering skill than any parsing trick on this page.</p>
+
+        <p>I am an engineer, not a lawyer. Everything below about legal position is my working understanding as a practitioner, and where a project has real commercial stakes I have always sent the client to actual counsel first. If your legal advisor contradicts anything here, they are right and I am not.</p>
+
+        <h2>3. Read the Terms of Service Before You Read the HTML</h2>
+
+        <p>The first artefact I open on a new monitoring project is not the target's page source. It is their terms of service, and specifically the acceptable-use section.</p>
+
+        <p>You will find, roughly, three categories.</p>
+
+        <p><strong>Silent terms.</strong> Nothing about automated access at all. This is more common than people expect on smaller retailers and it puts you in the least constrained position — though "not prohibited" is not the same as "invited", and everything below about rate limiting still applies.</p>
+
+        <p><strong>Explicit prohibition.</strong> "You may not use any robot, spider, scraper or other automated means to access the Service." Extremely common on large marketplaces and on anyone who has ever had a scraping problem. This is an unambiguous statement of the operator's position. Where the terms are presented as a clickwrap that someone at your organisation actually accepted — you have a trade account, an API key, a seller login — you are looking at a contract term, and breaching it is a contract problem regardless of what any court has said about the public-web question generally.</p>
+
+        <p><strong>Conditional permission.</strong> Increasingly common and the most useful to find: automated access allowed for specified purposes, at a specified rate, with attribution, or via a named feed. Several retailers publish a product data feed for affiliates and comparison sites that contains exactly the price and availability data a monitoring project wants, cleanly, in a supported format, with no scraping at all. I have twice found that feed on a target after building half a scraper, which was an educational use of a week.</p>
+
+        <p>The practical rule I use: if a company has published an API or a feed that carries the data, use it, even when it is less convenient, even when it requires an application, even when the scraper would have been faster to write. Choosing to scrape around an available supported channel is the clearest possible signal that you know you are not welcome on the path you chose.</p>
+
+        <h2>4. robots.txt Is a Request. Treat It as an Instruction.</h2>
+
+        <p>Nobody enforces <code>robots.txt</code>. It has no legal force in most jurisdictions, and there is a whole genre of commentary pointing out that it is "just a text file". All true, and irrelevant to how I would behave.</p>
+
+        <p>It is the one place a site operator can state, in machine-readable form, which parts of their site they want automated clients to leave alone. When you ignore it you are not exploiting a technicality; you are reading a clear instruction and deciding it does not apply to you. If it ever comes to a conversation with the target — and on long-running monitoring projects it sometimes does — "we respected your robots.txt and rate limits" is a very different opening than the alternative.</p>
+
+        <p>Python has a parser in the standard library and there is no excuse for not wiring it in on day one.</p>
+
+        <pre><code class="language-python">import urllib.robotparser
+import time
+from urllib.parse import urlparse
+
+class RobotsGate:
+    """One parser per host, refreshed daily. Fails closed."""
+
+    def __init__(self, user_agent: str, ttl: int = 86400):
+        self.ua = user_agent
+        self.ttl = ttl
+        self._cache = {}   # host -&gt; (parser, fetched_at)
+
+    def _parser(self, host: str):
+        entry = self._cache.get(host)
+        if entry and time.time() - entry[1] &lt; self.ttl:
+            return entry[0]
+        rp = urllib.robotparser.RobotFileParser()
+        rp.set_url(f"https://{host}/robots.txt")
+        try:
+            rp.read()
+        except Exception:
+            # Could not read robots.txt. We do NOT assume permission.
+            rp = None
+        self._cache[host] = (rp, time.time())
+        return rp
+
+    def allowed(self, url: str) -&gt; bool:
+        host = urlparse(url).netloc
+        rp = self._parser(host)
+        if rp is None:
+            return False          # fail closed, not open
+        return rp.can_fetch(self.ua, url)
+
+    def crawl_delay(self, url: str, default: float = 5.0) -&gt; float:
+        rp = self._parser(urlparse(url).netloc)
+        if rp is None:
+            return default
+        # Honour the site's stated delay when it asks for one; never go below
+        # our own floor even when the site would tolerate more.
+        return max(default, float(rp.crawl_delay(self.ua) or 0))</code></pre>
+
+        <p>Two details in there that matter more than they look. The gate <strong>fails closed</strong>: if <code>robots.txt</code> cannot be fetched, nothing is allowed. The lazy version fails open and quietly starts crawling everything the first time a target has a DNS blip. And <code>crawl_delay</code> takes the <em>maximum</em> of the site's stated delay and your own floor, so a site declaring <code>Crawl-delay: 1</code> does not talk you into going faster than you had decided to go.</p>
+
+        <p>Set a real user agent while you are there. Not a copied Chrome string — a string that says who you are and how to reach you.</p>
+
+        <pre><code class="language-python">UA = ("HarrowVanePriceBot/1.2 "
+      "(+https://harrowvane.example/bot; ops@harrowvane.example)")</code></pre>
+
+        <p>Every objection to this is really the same objection: a real user agent makes you blockable. Yes. That is the point. If a site's operator sees your traffic, understands what it is, and decides to block it, they have made a decision they are entitled to make, and you have received an answer. Disguising yourself to prevent them answering is where a monitoring project turns into something else.</p>
+
+        <h2>5. The Legal Picture, As a Practitioner Understands It</h2>
+
+        <p>I will keep this short and non-authoritative, but you cannot make sensible engineering decisions without a rough map.</p>
+
+        <p>In the United States, the long-running <em>hiQ Labs v LinkedIn</em> litigation is the case everyone cites. The Ninth Circuit held in 2019, and again in 2022 after a Supreme Court remand, that scraping publicly available data — data behind no login — was unlikely to violate the Computer Fraud and Abuse Act, because there is no "authorisation" to circumvent where none is required. That reads like a green light and is quoted as one constantly. It is not. The case ended in 2022 with hiQ losing on <em>breach of contract</em>, because they had agreed to LinkedIn's user agreement. The CFAA question and the contract question are separate, and the contract question is the one that bit.</p>
+
+        <p>In the EU and UK, the <em>sui generis</em> database right protects substantial investment in obtaining, verifying or presenting a database's contents. Extracting a substantial part of a protected database is an infringement independent of copyright in the individual items. A retailer's full catalogue with prices is exactly the kind of thing that argument gets made about. Meanwhile <em>Ryanair v PR Aviation</em> (CJEU, 2015) established that where a database is <em>not</em> protected by copyright or database right, the owner may still restrict use by contract — which cut against the scraper.</p>
+
+        <p>Then there is everything that is not about the data at all: trespass-to-chattels claims based on load imposed on the target's systems, and the computer-misuse statutes that turn on circumventing a technical access control.</p>
+
+        <p>My working synthesis, worth exactly what you paid for it. Public pages, modest volume, respecting robots.txt, no account, factual data: low risk, and this describes most legitimate price monitoring. Behind a login you agreed terms for: contract risk regardless of anything else. Bulk extraction of a whole catalogue in Europe: database right risk. Circumventing a technical control: a category of risk I do not take.</p>
+
+        <h2>6. Personal Data Is the Line That Moves Fastest</h2>
+
+        <p>Price and availability are facts about products. Reviews are about people, and once your pipeline touches them you have gone from a commercial question to a data-protection one.</p>
+
+        <p>A review carries a reviewer name or handle, a timestamp, free text that routinely contains identifying detail, and sometimes a verified-purchase flag. Under GDPR and the UK GDPR that is personal data even when the name is a pseudonym, because the handle plus review history is perfectly capable of singling someone out. Collecting it makes you a controller with all that entails: a lawful basis, transparency obligations under Articles 13 and 14, retention limits, and the awkward reality that Article 14 expects you to inform the data subject that you hold their data, which is not a notice most scraping projects have ever sent.</p>
+
+        <p>Seller names on marketplaces are the same problem wearing a business hat. A sole trader's shop name is often their actual name, and a dataset of sellers, their turnover proxies, and their pricing behaviour is a profile.</p>
+
+        <p>What I do in practice, and it has never cost a client anything they actually needed:</p>
+
+        <p><strong>Aggregate at collection, not later.</strong> If the business question is "is our review sentiment worse than theirs", store the count and the star distribution, not the reviews. Compute the aggregate in the parser and discard the rows. Data you never persisted cannot be subject-accessed, leaked, or argued about.</p>
+
+        <p><strong>Drop the identity fields at the parse step.</strong> If you genuinely need review text — for feature-gap analysis, which is a legitimate use — strip the author, avatar URL, and profile link before the record reaches storage, and hash the review's own ID so you can deduplicate without holding a pointer back to a person.</p>
+
+        <p><strong>Set a retention period and enforce it in code.</strong> Not in a policy document. A scheduled delete that runs whether or not anyone remembers it exists.</p>
+
+        <pre><code class="language-python">import hashlib, re
+
+DROP_FIELDS = {"author", "author_url", "avatar", "profile_id", "location"}
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
+
+def sanitise_review(raw: dict, site: str) -&gt; dict:
+    out = {k: v for k, v in raw.items() if k not in DROP_FIELDS}
+    # Stable per-site pseudonym: lets us dedupe repeat postings without
+    # keeping anything that points back at a person.
+    seed = f"{site}:{raw.get('review_id') or raw.get('author','')}"
+    out["review_key"] = hashlib.sha256(seed.encode()).hexdigest()[:16]
+    body = out.get("body", "")
+    body = EMAIL.sub("[email]", body)
+    body = PHONE.sub("[phone]", body)
+    out["body"] = body
+    return out</code></pre>
+
+        <p>The redaction there is imperfect — it will miss a phone number written in words and it will occasionally mangle a model number. I keep it anyway. The failure mode of over-redacting is a slightly worse text corpus; the failure mode of under-redacting is holding contact details for people who have no idea you exist.</p>
+
+        <h2>7. Rate Limiting Is Courtesy First and Evasion Never</h2>
+
+        <p>There is a version of the rate-limiting conversation that treats it purely as a way to stay under a detection threshold. That framing is both ugly and, practically, wrong — it optimises for the wrong variable and produces a scraper that speeds up whenever it thinks it can get away with it.</p>
+
+        <p>Here is the framing I use instead. Every request you make costs the target real money: a database query, an origin render, a CDN egress charge. You are asking them to spend that so you can compete with them. The least you can do is spend as little of it as possible, and never enough to affect a real customer.</p>
+
+        <p>What that means concretely.</p>
+
+        <p><strong>One request in flight per host. Not per worker — per host.</strong> Concurrency across different retailers is fine; concurrency against one retailer is where you become a load event. A single sequential worker per host with a delay is almost always fast enough, because your volume is measured in hundreds of pages, not millions.</p>
+
+        <p><strong>A floor of several seconds between requests.</strong> I default to 5 seconds and go slower on smaller targets. A retailer with two web servers behind a load balancer notices a request per second; a marketplace does not. Size the delay to the target, not to your patience.</p>
+
+        <p><strong>Crawl off-peak in the target's timezone.</strong> A UK retailer's traffic peaks around 20:00 and again on Sunday afternoons. Running at 04:00 costs them capacity they were not using anyway.</p>
+
+        <p><strong>Back off hard on any sign of strain.</strong> A 429, a 503, or a response time that has doubled all mean the same thing: stop. Exponential backoff with a long ceiling, and a circuit breaker that gives up on that host for the rest of the run rather than retrying into a wall.</p>
+
+        <p><strong>Use conditional requests.</strong> If the target sends an <code>ETag</code> or <code>Last-Modified</code>, send them back. A 304 costs them almost nothing and tells you exactly what you needed to know.</p>
+
+        <pre><code class="language-python">import time, random, threading, requests
+
+class PoliteSession:
+    """Per-host serialisation, delay floor, conditional GETs, hard backoff."""
+
+    def __init__(self, gate: "RobotsGate", ua: str, floor: float = 5.0):
+        self.gate, self.floor = gate, floor
+        self.s = requests.Session()
+        self.s.headers["User-Agent"] = ua
+        self._locks, self._last, self._until = {}, {}, {}
+        self._validators = {}   # url -&gt; (etag, last_modified)
+
+    def _lock(self, host):
+        return self._locks.setdefault(host, threading.Lock())
+
+    def get(self, url, timeout=20):
+        if not self.gate.allowed(url):
+            raise PermissionError(f"robots.txt disallows {url}")
+        host = requests.utils.urlparse(url).netloc
+
+        if time.time() &lt; self._until.get(host, 0):
+            raise RuntimeError(f"{host} is in backoff; skipping this cycle")
+
+        with self._lock(host):            # one request in flight per host
+            delay = self.gate.crawl_delay(url, self.floor)
+            gap = time.time() - self._last.get(host, 0)
+            if gap &lt; delay:
+                # jitter so we are not a metronome in their access log
+                time.sleep(delay - gap + random.uniform(0, 1.5))
+
+            headers = {}
+            etag, lastmod = self._validators.get(url, (None, None))
+            if etag:
+                headers["If-None-Match"] = etag
+            if lastmod:
+                headers["If-Modified-Since"] = lastmod
+
+            r = self.s.get(url, headers=headers, timeout=timeout)
+            self._last[host] = time.time()
+
+        if r.status_code in (429, 503):
+            # Respect Retry-After when given; otherwise park the host for an hour.
+            wait = float(r.headers.get("Retry-After", 3600))
+            self._until[host] = time.time() + wait
+            raise RuntimeError(f"{host} asked us to stop for {wait:.0f}s")
+
+        if r.status_code == 200:
+            self._validators[url] = (r.headers.get("ETag"),
+                                     r.headers.get("Last-Modified"))
+        return r</code></pre>
+
+        <p>The jitter is worth a sentence. A request every 5.000 seconds is a signature that shows up in any access-log histogram as a perfectly flat line, and it also synchronises badly with the target's own cron jobs. Randomising the gap upward is not disguise — the user agent still says exactly who you are — it just makes your load less lumpy.</p>
+
+        <h2>8. Where I Decline the Work</h2>
+
+        <p>Two real examples, lightly anonymised.</p>
+
+        <p>The first was a fashion reseller who wanted per-seller sales estimates from a marketplace: for every third-party seller in three categories, an inferred monthly unit volume derived from review velocity and stock-level deltas. The data was all technically visible. The output was a ranked list of small businesses with an estimate of their revenue, intended to inform which of them to undercut. I said no. Not because I thought a court would stop it, but because the deliverable was a targeting list built from people who had no idea it existed, several of whom were sole traders whose shop name was their own name. If I would be uncomfortable explaining the project to the people in the dataset, I do not build it.</p>
+
+        <p>The second was simpler. A B2B distributor wanted trade prices from a competitor's login-gated portal, using credentials from a trade account a colleague held. Contractually plain — the account's terms prohibited automated access and prohibited sharing credentials — and the fact that a human could see those prices does not make a robot logging in as that human an authorised user. I declined, and suggested the alternative that ended up working: a mystery-shopping arrangement where a handful of quotes were requested manually and openly, quarterly, at a volume no one pretended was anything else.</p>
+
+        <p>The rules I actually apply, in the order I apply them. If it needs a login, I stop. If it needs circumvention of a control that exists to stop automated access, I stop. If the output is a profile of identifiable individuals or micro-businesses, I stop. If the volume would be noticeable on the target's infrastructure, I redesign until it is not. And if the client's answer to "what would you say if they called you about this" is uncomfortable, that discomfort is the actual finding.</p>
+
+        <h2>9. Decide What You Actually Need First</h2>
+
+        <p>The most common design failure in competitor monitoring is collecting everything because it is there. It doubles your parse surface, doubles your breakage rate, and produces dashboards nobody opens.</p>
+
+        <p>Work backwards from the decision. Harrow &amp; Vane's pricing meeting makes exactly three kinds of call: match a competitor down, hold and defend on service, or push up where we are the only one in stock. Those need price, availability, and whether the price is promotional. That is three fields. Everything else the original scraper collected — description text, image counts, breadcrumb paths, star ratings — informed nothing.</p>
+
+        <p>I now write the field list before the first request, as a table the client signs off, with a column for why.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Field</th><th>Decision it feeds</th><th>Verdict</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Current price</td><td>Match / hold / raise</td><td>Collect</td></tr>
+            <tr><td>Was-price / RRP</td><td>Is the move promotional or structural</td><td>Collect</td></tr>
+            <tr><td>Stock state</td><td>Raise when we are the only source</td><td>Collect</td></tr>
+            <tr><td>Delivery threshold</td><td>Effective price at basket level</td><td>Collect</td></tr>
+            <tr><td>Star rating and count</td><td>Nothing yet</td><td>Aggregate only</td></tr>
+            <tr><td>Review text</td><td>Quarterly feature-gap review</td><td>Sanitised, 90-day retention</td></tr>
+            <tr><td>Reviewer identity</td><td>Nothing, ever</td><td>Never collect</td></tr>
+            <tr><td>Full description HTML</td><td>Nothing</td><td>Drop</td></tr>
+          </tbody>
+        </table>
+
+        <p>That table has killed more scraper maintenance than any parsing technique I know. Half the fields people ask for evaporate when you make them name the decision.</p>
+
+        <h2>10. The Order I Try Things Before Writing a Parser</h2>
+
+        <p>Scraping HTML is the last resort, not the first move. In order:</p>
+
+        <p><strong>A public API.</strong> Obvious, frequently overlooked. Shopify storefronts, for instance, expose a JSON representation of most products at a predictable path, and a lot of them expose a full product listing endpoint. Whether you should use it is a terms question — but it is a supported, documented, cheap path, and it does not break when someone changes a CSS class.</p>
+
+        <pre><code class="language-bash"># Many Shopify storefronts expose product JSON at a predictable path.
+# Cheap for the target, stable for you, and no HTML parsing at all.
+curl -s -H 'User-Agent: HarrowVanePriceBot/1.2 (+https://harrowvane.example/bot)' \
+  'https://competitor.example/products/cast-iron-casserole-24cm.json' \
+  | jq '{title: .product.title,
+         variants: [.product.variants[] | {sku, price, available}]}'</code></pre>
+
+        <p><strong>An affiliate or comparison feed.</strong> If the retailer is on an affiliate network or submits to a shopping comparison service, there is a structured product feed with price and availability, updated daily, that you can access by joining the programme. It is slower to set up and enormously better to run.</p>
+
+        <p><strong>The sitemap.</strong> Not for prices, for discovery. <code>sitemap.xml</code> tells you the URL set and often a <code>lastmod</code>, which lets you fetch only what changed. Diffing sitemaps between runs is also the cheapest possible new-product and discontinuation detector — two requests to learn that they added 40 SKUs.</p>
+
+        <p><strong>Structured data in the page.</strong> Almost every ecommerce product page now carries JSON-LD <code>Product</code> and <code>Offer</code> markup, because Google requires it for rich results. It is machine-readable, it is maintained by the target because their own search traffic depends on it, and it is dramatically more stable than the visual DOM. This should be your primary parse target and it is the single biggest maintenance win available.</p>
+
+        <p><strong>Then, and only then, the HTML.</strong></p>
+
+        <h2>11. Parse the Structured Data, Fall Back to the DOM</h2>
+
+        <p>The pattern is: extract JSON-LD, validate it, and only reach into the DOM for fields the markup omits — which is usually delivery thresholds and occasionally the was-price.</p>
+
+        <pre><code class="language-python">import json
+from bs4 import BeautifulSoup
+from decimal import Decimal, InvalidOperation
+
+AVAILABILITY = {
+    "instock": "in_stock", "http://schema.org/instock": "in_stock",
+    "outofstock": "out_of_stock", "http://schema.org/outofstock": "out_of_stock",
+    "preorder": "preorder", "backorder": "backorder",
+    "limitedavailability": "low_stock", "discontinued": "discontinued",
+}
+
+def _blocks(soup):
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(tag.string or "")
+        except (json.JSONDecodeError, TypeError):
+            continue                       # broken JSON-LD is very common
+        # A page may ship a single object, a list, or an @graph wrapper.
+        if isinstance(data, dict) and "@graph" in data:
+            data = data["@graph"]
+        yield from (data if isinstance(data, list) else [data])
+
+def parse_product(html: str) -&gt; dict | None:
+    soup = BeautifulSoup(html, "lxml")
+    for node in _blocks(soup):
+        types = node.get("@type", "")
+        types = types if isinstance(types, list) else [types]
+        if "Product" not in types:
+            continue
+        offers = node.get("offers") or {}
+        if isinstance(offers, list):
+            # Multi-variant page: the lowest live offer is the shelf price.
+            live = [o for o in offers if o.get("price")]
+            offers = min(live, key=lambda o: Decimal(str(o["price"]))) if live else {}
+        try:
+            price = Decimal(str(offers.get("price"))).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError):
+            return None                    # markup present but unusable
+        avail = str(offers.get("availability", "")).lower().rsplit("/", 1)[-1]
+        return {
+            "sku": node.get("sku") or node.get("mpn"),
+            "gtin": node.get("gtin13") or node.get("gtin"),
+            "name": node.get("name"),
+            "price": price,
+            "currency": offers.get("priceCurrency"),
+            "availability": AVAILABILITY.get(avail, "unknown"),
+            "source": "jsonld",
+        }
+    return None</code></pre>
+
+        <p>Three things that bite in the wild. Prices arrive as strings, as numbers, and occasionally with a currency symbol glued on; parse to <code>Decimal</code> and never to <code>float</code>, because a float price will eventually show up in a report as £24.989999999999998. Multi-variant pages emit an array of offers or an <code>AggregateOffer</code> with <code>lowPrice</code> and <code>highPrice</code>, and you must decide explicitly which number represents "the price" for your purposes. And a surprising number of sites emit JSON-LD that is stale relative to the visible page, typically because the markup is rendered server-side and the price is patched in later by JavaScript.</p>
+
+        <p>That last one is why I cross-check. Extract from JSON-LD, extract from the DOM, and compare. Agreement raises confidence; disagreement is a signal worth acting on rather than a tie to break silently.</p>
+
+        <pre><code class="language-python">def extract(html, dom_rules) -&gt; dict:
+    structured = parse_product(html)
+    visual = parse_dom(html, dom_rules)     # your CSS-selector fallback
+
+    if structured and visual and structured["price"] != visual["price"]:
+        # Do not silently pick one. A divergence usually means the page is
+        # rendering a promo the markup does not know about — or the markup is
+        # right and our selector caught a "customers also bought" tile.
+        structured["price_conflict"] = str(visual["price"])
+        structured["confidence"] = "low"
+    return structured or visual or {}</code></pre>
+
+        <h2>12. Selectors That Survive a Redesign</h2>
+
+        <p>When you do have to reach into the DOM, the selector you write determines how often you get paged.</p>
+
+        <p>The worst thing you can do is copy "Copy selector" out of Chrome DevTools. It produces something like <code>#main &gt; div:nth-child(3) &gt; div.pdp-x7f2 &gt; span:nth-child(2)</code>, which encodes both a hashed build-time class name and a sibling position. Both change on a deploy that did not change anything you care about.</p>
+
+        <p>The hierarchy I follow, best first: an attribute that exists for testing or analytics (<code>[data-testid="product-price"]</code>, <code>[data-price]</code>) because someone owns it and breaking it breaks their own tooling; a microdata attribute (<code>[itemprop="price"]</code>) because their SEO depends on it; a semantic class that describes meaning rather than appearance (<code>.product-price</code>, not <code>.text-lg-bold</code>); and only then a structural path.</p>
+
+        <p>Write them as an ordered list, take the first that yields a plausible value, and record which one fired.</p>
+
+        <pre><code class="language-python">PRICE_RULES = [
+    '[data-testid="product-price"]',
+    '[itemprop="price"]',
+    'meta[property="product:price:amount"]',
+    '.product-price__current',
+    '.price--current',
+]
+
+def first_price(soup, rules=PRICE_RULES):
+    for i, rule in enumerate(rules):
+        el = soup.select_one(rule)
+        if not el:
+            continue
+        raw = el.get("content") or el.get("data-price") or el.get_text()
+        value = clean_price(raw)
+        if value is None:
+            continue
+        # Which rule fired is a health metric: when rule 0 stops firing across
+        # a whole site, their markup changed and we want to know today.
+        return value, i, rule
+    return None, None, None</code></pre>
+
+        <p>Tracking which rule fired is the part people skip and the part that earns its keep. When rule index 0 works for 300 products and then works for none, that is a site redesign, and you find out on the morning it happens instead of three weeks later when someone questions a number.</p>
+
+        <h3>Price cleaning is worse than you expect</h3>
+
+        <p>The string you pull off a page might be <code>£24.99</code>, <code>24,99 €</code>, <code>From £24.99</code>, <code>£24.99 £34.99</code> (both prices in one node), <code>£1,249.00</code>, or <code>Now only £24.99 was £34.99 save 29%</code>. A naïve regex for digits gets the wrong number on at least three of those.</p>
+
+        <pre><code class="language-python">import re
+from decimal import Decimal
+
+MONEY = re.compile(r"(?&lt;![\d.,])(\d{1,3}(?:[.,\s]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)")
+
+def clean_price(text: str, prefer: str = "first") -&gt; Decimal | None:
+    if not text:
+        return None
+    text = text.replace(" ", " ").strip()
+    hits = MONEY.findall(text)
+    if not hits:
+        return None
+    raw = hits[0] if prefer == "first" else min(hits, key=len)
+    # Decide which separator is the decimal one by looking at the tail.
+    if "," in raw and "." in raw:
+        raw = raw.replace(",", "") if raw.rfind(".") &gt; raw.rfind(",") \
+              else raw.replace(".", "").replace(",", ".")
+    elif "," in raw:
+        # "24,99" is a decimal comma; "1,249" is a thousands separator.
+        raw = raw.replace(",", "." if len(raw.split(",")[-1]) == 2 else "")
+    raw = raw.replace(" ", "")
+    try:
+        return Decimal(raw).quantize(Decimal("0.01"))
+    except Exception:
+        return None</code></pre>
+
+        <p>I got the comma rule wrong for about six weeks on a German target, where <code>1.249,00 €</code> came through as £1.24. The sanity checks in the next section are what caught it, not the parser.</p>
+
+        <h2>13. Change Detection Without Drowning in Noise</h2>
+
+        <p>A naive monitor emails whenever a value differs from last time. Within a fortnight the recipients filter it to a folder and the project is dead.</p>
+
+        <p>The fix is a hierarchy of significance, applied before anything reaches a human.</p>
+
+        <p><strong>Ignore movements below a threshold that is both absolute and relative.</strong> A 1p change on a £400 item is a rounding artefact of a currency conversion. A 1p change on a 99p item might be real. I use "greater than 1% <em>and</em> greater than 20p" as the default gate, tuned per category.</p>
+
+        <p><strong>Require confirmation before believing a large move.</strong> Anything over about 20% gets flagged as provisional and re-checked on the next cycle before it is allowed to trigger an alert or enter the reporting series. Most large moves that fail confirmation were a parse error, a page in an odd state, or a variant selector defaulting differently.</p>
+
+        <p><strong>Detect state transitions separately from magnitudes.</strong> In stock to out of stock is a different event from a price move, and for most merchants it is the more actionable one.</p>
+
+        <p><strong>Suppress by cause, not by count.</strong> If 200 products on one retailer all changed by exactly 10% overnight, that is one event — a sitewide promotion — and it should produce one alert, not 200.</p>
+
+        <pre><code class="language-python">from decimal import Decimal
+from collections import Counter
+
+MIN_PCT, MIN_ABS = Decimal("1.0"), Decimal("0.20")
+
+def classify(prev, curr) -&gt; dict | None:
+    if prev is None:
+        return {"kind": "first_seen", "severity": "info"}
+
+    if prev["availability"] != curr["availability"]:
+        gone = curr["availability"] in ("out_of_stock", "discontinued")
+        return {"kind": "availability",
+                "from": prev["availability"], "to": curr["availability"],
+                "severity": "high" if gone else "medium"}
+
+    delta = curr["price"] - prev["price"]
+    if not delta:
+        return None
+    pct = (delta / prev["price"] * 100).quantize(Decimal("0.01"))
+    if abs(pct) &lt; MIN_PCT or abs(delta) &lt; MIN_ABS:
+        return None                        # noise floor
+
+    return {"kind": "price", "delta": delta, "pct": pct,
+            # Anything this big is provisional until a second observation agrees.
+            "severity": "provisional" if abs(pct) &gt; 20 else
+                        "high" if abs(pct) &gt; 5 else "medium"}
+
+def collapse_sitewide(events, threshold=15):
+    """One promo should produce one alert, not two hundred."""
+    by_site = Counter((e["site"], e["pct"]) for e in events if e["kind"] == "price")
+    bulk = {k for k, n in by_site.items() if n &gt;= threshold}
+    kept = [e for e in events
+            if e["kind"] != "price" or (e["site"], e["pct"]) not in bulk]
+    for site, pct in bulk:
+        kept.append({"kind": "sitewide_promo", "site": site, "pct": pct,
+                     "count": by_site[(site, pct)], "severity": "high"})
+    return kept</code></pre>
+
+        <h3>The check that would have saved Harrow &amp; Vane</h3>
+
+        <p>None of the above catches the failure I opened with, because nothing changed. That needs an inverse check: alert on <em>absence</em> of change.</p>
+
+        <p>For each site, track the proportion of monitored products whose price has moved in the last N cycles. A live retailer moves something. A retailer where 100% of 60 products have been identical for six consecutive weekly runs is not a stable retailer; it is a broken pipeline.</p>
+
+        <pre><code class="language-sql">-- Staleness canary: sites where nothing has moved in six weeks.
+-- Run after every crawl. Fires on caching, on a frozen mirror, and on the
+-- "we are parsing our own cached HTML" bug, none of which raise an error.
+SELECT site,
+       COUNT(*)                                         AS products,
+       COUNT(*) FILTER (WHERE last_change &gt; now() - interval '42 days') AS moved,
+       MAX(last_seen)                                   AS most_recent_crawl
+FROM (
+    SELECT site, sku,
+           MAX(observed_at) AS last_seen,
+           MAX(observed_at) FILTER (WHERE price IS DISTINCT FROM prev_price)
+               AS last_change
+    FROM (
+        SELECT site, sku, price, observed_at,
+               LAG(price) OVER (PARTITION BY site, sku ORDER BY observed_at)
+                   AS prev_price
+        FROM observations
+    ) w
+    GROUP BY site, sku
+) s
+GROUP BY site
+HAVING COUNT(*) FILTER (WHERE last_change &gt; now() - interval '42 days') = 0
+   AND COUNT(*) &gt;= 20;</code></pre>
+
+        <p>Add a second, cruder canary: pick five products per site whose price you know changes often, and assert that at least one of them differs from the previous run. If none do, the run is suspect and should not overwrite the reporting tables.</p>
+
+        <h2>14. Store Observations, Not Products</h2>
+
+        <p>The schema mistake that is most expensive to fix later is a <code>products</code> table with a <code>price</code> column that gets updated in place. It throws away history, it makes "when did they drop below us" unanswerable, and it means a bad run silently destroys good data.</p>
+
+        <p>Store append-only observations. Every fetch produces a row. Nothing is ever updated.</p>
+
+        <pre><code class="language-sql">CREATE TABLE observations (
+    id            BIGSERIAL PRIMARY KEY,
+    site          TEXT        NOT NULL,
+    url           TEXT        NOT NULL,
+    sku           TEXT,
+    gtin          TEXT,
+    observed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    price         NUMERIC(12,2),
+    was_price     NUMERIC(12,2),
+    currency      CHAR(3),
+    availability  TEXT,
+    -- Provenance: which extraction path produced this, and how sure are we.
+    source        TEXT        NOT NULL,   -- jsonld | dom | api | feed
+    rule_index    SMALLINT,               -- which selector fired
+    confidence    TEXT        NOT NULL DEFAULT 'normal',
+    http_status   SMALLINT,
+    body_sha256   CHAR(64),               -- dedupe identical fetches cheaply
+    response_ms   INTEGER
+);
+
+-- The query that matters is "latest per product", so index for it.
+CREATE INDEX obs_latest ON observations (site, sku, observed_at DESC);
+CREATE INDEX obs_time   ON observations (observed_at DESC);
+
+-- A materialised current view keeps dashboards off the history table.
+CREATE MATERIALIZED VIEW current_prices AS
+SELECT DISTINCT ON (site, sku)
+       site, sku, url, price, was_price, availability, observed_at, confidence
+FROM observations
+WHERE confidence &lt;&gt; 'low' AND price IS NOT NULL
+ORDER BY site, sku, observed_at DESC;</code></pre>
+
+        <p>Two columns there earn their space repeatedly. <code>source</code> and <code>rule_index</code> mean that when a number is questioned six weeks later you can say exactly where it came from. <code>body_sha256</code> means you can detect "this response is byte-identical to the one from three weeks ago", which is the fingerprint of the cached-response failure and costs one hash to compute.</p>
+
+        <p>Keep the raw HTML too, at least for a rolling window. Gzipped product pages are 15 to 40 KB; 400 products weekly for a year is under a gigabyte, and it is the difference between "we think the parser was wrong" and reading the actual bytes. That storage decision is the only reason I could diagnose the eleven-week problem at all.</p>
+
+        <h3>Matching their SKU to yours</h3>
+
+        <p>The part nobody budgets for. GTIN or EAN match is exact and lovely and available for perhaps 40% of a typical catalogue. After that you are into brand plus model number normalisation, and then into fuzzy title matching, and each step down loses accuracy.</p>
+
+        <p>My rule: never let a fuzzy match into a pricing decision unless a human has confirmed it once. Store the match with a method and a confirmation flag, surface unconfirmed matches in a weekly review queue, and let the commercial team accept or reject twenty at a time. It takes them ten minutes a week and it removes the entire category of "we matched down to a competitor's 20cm pan because we thought it was our 24cm".</p>
+
+        <h2>15. Anti-Bot Measures, and Why I Stop There</h2>
+
+        <p>Sooner or later a target puts something in the way. Cloudflare's bot management, an interstitial challenge, a login wall, aggressive fingerprinting, or the silent caching trick from the opening.</p>
+
+        <p>I want to be direct about how to read that, because there is a lot of writing that treats it as a puzzle. <strong>A bot-management product is a technical access control, and the site operator installed it deliberately.</strong> Circumventing it is not a neutral engineering act. It is a decision to override a stated position, and in several jurisdictions it moves the conversation from "is scraping public data allowed" to computer-misuse statutes that turn specifically on circumventing access controls. That is a materially different legal category, not a harder version of the same one.</p>
+
+        <p>So my ladder, when I hit a wall, goes like this.</p>
+
+        <p><strong>Check whether I caused it.</strong> Was I too fast, did I ignore a <code>Retry-After</code>, am I hammering a path <code>robots.txt</code> disallowed? Usually the answer is yes at least partly, and slowing down fixes it. This is the most common resolution by a wide margin.</p>
+
+        <p><strong>Check whether there is a supported path.</strong> Feed, API, affiliate programme, data partnership. Ask. I have twice had a competitor's ecommerce manager simply agree to a data exchange, because the intelligence flowed both ways and neither party wanted the scraping arms race.</p>
+
+        <p><strong>Ask.</strong> Genuinely. An email to the address in their WHOIS or their support form, saying who you are, what you are collecting, at what rate, and offering to stop or adjust. The outcomes I have had: two agreements, one flat refusal that at least ended the ambiguity, and a lot of silence. Silence is not consent, but it is a different position from never having asked.</p>
+
+        <p><strong>Accept a partial dataset.</strong> Monitor five retailers instead of six and label the gap in the report. A dashboard with an honest hole is more useful than one with fabricated completeness.</p>
+
+        <p><strong>Reduce to a manual process.</strong> For a genuinely critical competitor who has closed the door, a human checking 20 key lines weekly is entirely legitimate and takes twenty minutes. Several clients run exactly this alongside the automated pipeline.</p>
+
+        <p>What is not on that ladder: proxy rotation to defeat IP blocking, browser fingerprint spoofing, CAPTCHA-solving services, or borrowing credentials. I do not build those and I decline projects that require them. If that costs me work occasionally, it also means I have never had a client receive a letter about something I built.</p>
+
+        <h3>The legitimate uses of a headless browser</h3>
+
+        <p>To be fair to browser automation, which is not the same thing as evasion: plenty of sites render price client-side for genuine reasons, and Playwright is the correct tool for those. Rendering a page the way a browser would is not circumvention. Using Playwright specifically to defeat a detector that has already told you no is.</p>
+
+        <p>If you do render, be even more careful about load. A full page render pulls every asset — images, fonts, analytics, chat widgets — where a plain fetch pulled one document. Block everything you do not need.</p>
+
+        <pre><code class="language-python">from playwright.sync_api import sync_playwright
+
+BLOCK = {"image", "media", "font", "stylesheet"}
+
+def render(url: str, ua: str, wait_for: str, timeout=20000) -&gt; str:
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        ctx = browser.new_context(user_agent=ua)          # still honest
+        # Do not pull assets we will never parse; a rendered page can be
+        # 40x the bytes of the document alone, all of it at their expense.
+        ctx.route("**/*", lambda r: r.abort()
+                  if r.request.resource_type in BLOCK else r.continue_())
+        page = ctx.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+        page.wait_for_selector(wait_for, timeout=timeout)  # the price node
+        html = page.content()
+        browser.close()
+        return html</code></pre>
+
+        <p>Note the user agent is still ours. A headless browser announcing itself honestly is a client that renders JavaScript; a headless browser pretending to be Chrome 138 on Windows is something else, and the difference is entirely in that one string.</p>
+
+        <h2>16. Alerting People Will Actually Read</h2>
+
+        <p>The measure of an alerting system is whether anyone acts on it. By that standard most of them fail.</p>
+
+        <p>What works, in my experience: a single scheduled digest rather than a stream, ordered by commercial impact rather than by time, with the action already computed. What does not work: real-time notifications for anything that is reviewed weekly anyway.</p>
+
+        <p>Impact ordering means multiplying the price gap by something that represents how much you care — your units sold, your margin, your stock position. A 15% undercut on a line you sell twice a month is a footnote; a 3% undercut on your top line is the meeting.</p>
+
+        <pre><code class="language-python">def rank(events, catalogue):
+    """Order by money at risk, not by size of the percentage."""
+    scored = []
+    for e in events:
+        item = catalogue.get(e["sku"])
+        if not item:
+            continue
+        gap = item["our_price"] - e["their_price"]
+        if gap &lt;= 0:
+            continue                                   # we are already cheaper
+        exposure = gap * item["weekly_units"]          # money at risk per week
+        scored.append({**e,
+                       "gap": gap,
+                       "exposure": exposure,
+                       "action": suggest(gap, item)})
+    return sorted(scored, key=lambda x: -x["exposure"])[:25]
+
+def suggest(gap, item):
+    floor = item["cost"] * Decimal("1.15")             # 15% minimum margin
+    if item["our_price"] - gap &lt; floor:
+        return "HOLD — matching breaches margin floor"
+    if item["stock_units"] &lt; item["weekly_units"] * 2:
+        return "HOLD — under two weeks cover, do not fuel demand"
+    return f"MATCH to {item['our_price'] - gap:.2f}"</code></pre>
+
+        <p>That <code>suggest</code> function is deliberately opinionated and deliberately not automatic. I have built automatic repricing exactly once and I would not do it again in the form I built it: two competitors both running automated matchers found each other and walked a category down 22% over nine days before anyone noticed. Whatever you automate, keep a human between the signal and the price change, or at minimum put a hard floor and a daily movement cap in the loop.</p>
+
+        <p>Include the negative case in the digest too. "Nothing significant changed at these four retailers, 380 of 384 products checked successfully" is a line that builds trust in the system and, crucially, makes its absence noticeable.</p>
+
+        <h2>17. The Scheduling and Health Layer</h2>
+
+        <p>The crawl loop itself is the least interesting code in the project and the place where operational discipline shows up.</p>
+
+        <p>What I run: one job per site, staggered so no two start together, each with a hard wall-clock budget after which it stops and reports partial results. A run that would take four hours is a run that should have been split, and a run that never ends is a run that is retrying into a blocked host.</p>
+
+        <p>Every run emits a health record whether it succeeded or not, and the health record is what gets monitored — not the absence of an exception.</p>
+
+        <pre><code class="language-python">import time, logging
+from dataclasses import dataclass, asdict, field
+
+@dataclass
+class RunHealth:
+    site: str
+    started: float = field(default_factory=time.time)
+    attempted: int = 0
+    ok: int = 0
+    parse_failed: int = 0
+    blocked: int = 0
+    identical_body: int = 0     # byte-identical to previous fetch
+    changed_price: int = 0
+
+    def verdict(self) -&gt; str:
+        if self.attempted == 0:
+            return "no_work"
+        if self.ok / self.attempted &lt; 0.80:
+            return "degraded"           # something structural changed
+        if self.blocked &gt; 0:
+            return "blocked"
+        if self.ok &gt;= 20 and self.changed_price == 0:
+            return "suspect_stale"      # the Harrow &amp; Vane failure mode
+        if self.identical_body / max(self.ok, 1) &gt; 0.95:
+            return "suspect_cached"
+        return "healthy"
+
+def finish(h: RunHealth, store):
+    v = h.verdict()
+    store.write_health({**asdict(h), "verdict": v,
+                        "duration_s": time.time() - h.started})
+    if v != "healthy":
+        logging.error("crawl %s: %s (%d/%d ok, %d price moves)",
+                      h.site, v, h.ok, h.attempted, h.changed_price)
+    # A degraded or suspect run must not overwrite the reporting view.
+    return v == "healthy"</code></pre>
+
+        <p>That final return is the important line. A run that looks wrong does not get to update the numbers people make decisions on. It writes its observations — they are append-only, they cost nothing, and they are evidence — but the materialised view keeps yesterday's data and the digest says so.</p>
+
+        <h2>18. The Homeware Project, With Numbers</h2>
+
+        <p>The rebuild for Harrow &amp; Vane, six months in, so I can report what actually happened rather than what I hoped.</p>
+
+        <p><strong>Scope.</strong> 384 products across five retailers, down from 380 across six — we dropped one target entirely, discussed below. Weekly cycle, Tuesday 03:00–05:30 UK time, one sequential worker per host, 5-second floor, 8-second floor for the two smallest retailers. Total volume around 1,540 requests a week, or roughly 9 requests per hour per host averaged over the week. Nobody's capacity planning noticed us.</p>
+
+        <p><strong>Extraction split at go-live.</strong> 71% from JSON-LD, 12% from a Shopify product JSON endpoint on one target, 17% from DOM selectors. Six months later: 68% JSON-LD, 12% JSON, 20% DOM — the drift is one retailer who removed offer data from their markup in a redesign.</p>
+
+        <p><strong>Breakage.</strong> Four selector-level breaks in six months, all on the DOM-parsed 17%. Zero breaks on JSON-LD-parsed products. That ratio is the entire argument for structured-data-first parsing and I would repeat it in a heartbeat.</p>
+
+        <p><strong>Alert volume.</strong> The old system produced 340 to 600 change rows a week and nobody read them. The new digest averages 11 items. In the first eight weeks, the commercial team acted on 34 of 89 — a 38% action rate on a system whose predecessor had an action rate that rounded to zero.</p>
+
+        <p><strong>What the noise filters removed.</strong> Of a representative week's 412 raw differences: 209 fell under the noise floor, 138 collapsed into four sitewide-promo events, 22 were provisional large moves of which 15 failed confirmation and were parse errors, 9 were availability transitions, and 34 were genuine individually-significant price moves. That is a 96% reduction and the removed 96% was, on inspection, almost entirely not worth a human's time.</p>
+
+        <h3>Three things that went wrong</h3>
+
+        <p><strong>The German comma bug.</strong> Already mentioned. One target prices in euros; <code>1.249,00 €</code> parsed as 1.24 for six weeks. Nobody spotted it in the digest because a €1.24 casserole never triggered an alert — it was below the noise floor going in and it just sat there. What caught it was a plausibility check I added afterwards: alert when an observed price is less than 20% or more than 500% of our own price for a confirmed match. Eleven historical rows lit up immediately.</p>
+
+        <p><strong>We monitored a retailer who was not a competitor.</strong> One of the original six was a marketplace listing where the actual seller varied. We were tracking whoever won the buy box on any given Tuesday, which is a different entity week to week, and treating the resulting series as one competitor's pricing strategy. It was pure noise dressed as a trend. We dropped the target rather than build seller-level tracking, because seller-level tracking is exactly the profiling exercise I said above that I decline.</p>
+
+        <p><strong>The first digest was too clever.</strong> I shipped a version with confidence intervals, a seven-day trend sparkline per row, and a computed elasticity estimate. The commercial team read none of it. The version they use is a table: product, our price, their price, gap, suggested action, link. Six columns. I spent about three days on visualisation that got deleted, and the lesson is that a monitoring system's output should look like the decision it feeds, not like the data it holds.</p>
+
+        <h3>What I would do differently</h3>
+
+        <p>I would build the staleness canary and the plausibility bounds on day one instead of after being burned by each. Both are under thirty lines. Both would have caught a multi-week silent failure. Every other piece of sophistication in the pipeline is worth less than those two checks combined.</p>
+
+        <p>I would also have written the field-justification table before writing any parser rather than after, because the parsers I wrote for fields that turned out to feed no decision were the ones that broke most often — a thing I had to maintain for months for a column nobody looked at.</p>
+
+        <h2>19. Where This Sits in the Rest of the Stack</h2>
+
+        <p>A price monitor is a small system with an outsized appetite for infrastructure discipline, and the surrounding practices matter as much as the parser.</p>
+
+        <p>Run it somewhere that is not your storefront. A scraper that shares a database with production has a bad afternoon in its future, and the isolation patterns in <a href="/blog/containerization-docker-kubernetes/">the container and orchestration guide</a> apply straightforwardly — a scheduled job in its own namespace with its own credentials and a hard memory ceiling. Ship it through a real pipeline with a rollback path, because a parser change is a data-integrity change and a bad one corrupts a series that people trust; the deployment discipline in <a href="/blog/cicd-pipeline-ecommerce/">the CI/CD pipeline article</a> is not overkill for a job that writes to a reporting table. And if you are exposing the collected data to internal tools or partners, put a properly authenticated gateway in front of it rather than an open endpoint — the authentication and rate-limiting patterns in <a href="/blog/secure-api-gateways/">the API gateway guide</a> are the right shape for exactly this.</p>
+
+        <p>Two habits beyond that. Keep the target list in version control with a reason and a review date per entry. And monitor the inbox you put in the user agent — the value of an honest bot string evaporates if the address bounces.</p>
+
+        <h2>20. Questions That Come Up</h2>
+
+        <p><strong>"Is web scraping legal?"</strong> The wrong question, because the answer depends on the jurisdiction, the data, the access method, and whether a contract is in play. The more useful questions: is the data behind a login I agreed terms for, does robots.txt disallow it, does it contain personal data, am I circumventing an access control, and am I taking a substantial part of a database in a jurisdiction with database rights. Get those five answered and you have a risk picture. Get a lawyer if the stakes justify one.</p>
+
+        <p><strong>"Everyone scrapes everyone. Why be careful?"</strong> Because "everyone does it" is not a defence and because your risk is not the average risk. You will be the one whose bot is visible in the target's logs on the week they decide to do something about it. And the careful version costs almost nothing: honest user agent, sensible rate, no login, no circumvention. The expensive part of scraping was never the politeness.</p>
+
+        <p><strong>"How often should we collect?"</strong> Match the decision cadence, not the technical maximum. A weekly pricing meeting needs weekly data. Hourly collection for a weekly decision is 168 times the load for zero additional value. The exceptions are genuinely volatile categories — consumer electronics around a launch, anything with dynamic marketplace pricing — where daily is defensible and I would still not go hourly.</p>
+
+        <p><strong>"They blocked us. Now what?"</strong> Work down the ladder above: check whether you caused it, look for a supported path, ask, accept a partial dataset, fall back to manual. Do not reach for proxies. A block is an answer, and treating it as an obstacle is the decision that turns a defensible project into an indefensible one.</p>
+
+        <p><strong>"Can we use one of the scraping-as-a-service APIs?"</strong> You can, and several are competent. Understand what you are buying: many of them are selling proxy rotation and challenge-solving, which means you have outsourced the circumvention rather than avoided it. Read what the service actually does. If its marketing copy is about getting past blocks, you have delegated a decision rather than made one, and the target's view of your traffic will not improve because a third party sent it.</p>
+
+        <p><strong>"Should we scrape our own site?"</strong> Yes, and it is underrated. A scheduled crawl of your own product pages catches broken structured data, missing prices, out-of-stock items still indexed, and inconsistencies between your PIM and what actually renders. Same parser, no legal or ethical dimension at all, and it usually finds problems in week one.</p>
+
+        <p><strong>"What about the AI training question?"</strong> Different conversation with a different risk profile, and some of what I have written here does not transfer. Collecting factual prices for internal commercial analysis and collecting copyrightable content to train a model on are not the same activity, and the legal landscape around the second is moving fast. If that is your project, the sections above about robots.txt and rate limiting still apply and everything about "it's just facts" does not.</p>
+
+        <p><strong>"How much does this cost to run?"</strong> Less than people expect. The Harrow &amp; Vane pipeline runs on a small container instance and a modest managed Postgres — about £40 a month including the raw HTML archive. The real cost was eleven days of build and roughly a day a month of selector repair.</p>
+
+        <h2>21. Where I'd Start</h2>
+
+        <p>If you are building this from scratch, in this order.</p>
+
+        <p>Read the target's terms of service and <code>robots.txt</code> before you open the page source, and write down what they say. Ten minutes, and it determines whether the rest of the project is a good idea.</p>
+
+        <p>Write the field-justification table. Every field, the decision it feeds, and a verdict. Delete every field whose decision column reads "nothing". This is the single highest-leverage hour in the project.</p>
+
+        <p>Look for a feed, an API, or a JSON endpoint before writing a parser. Then look at the sitemap for discovery. Only then open the HTML.</p>
+
+        <p>Build the polite session first — robots gate, per-host serialisation, delay floor, backoff, honest user agent — and make it the only way anything in your codebase can make a request. If a developer can bypass it with a bare <code>requests.get</code>, someone eventually will, at 2am, in a retry loop.</p>
+
+        <p>Parse structured data first and treat DOM selectors as the fallback you record the use of. Track which rule fired on every extraction.</p>
+
+        <p>Store observations append-only with provenance, and archive the raw bytes. You will need them.</p>
+
+        <p>Write the two canaries before you write the dashboard: staleness detection, and price plausibility bounds against your own catalogue. They are thirty lines each and they are the difference between the eleven-week story and a Tuesday morning email.</p>
+
+        <p>Then, and only then, build the digest — and make it look like the decision, not like the database.</p>
+
+        <p>One closing thought about the ethical framing. "Can I get this data" and "should I" are separate questions, and a great deal of scraping writing collapses them by treating every countermeasure as a puzzle. Nobody is going to stop you. There is no licensing board. Which means the standard is yours to set, and the only reliable test I have found is this: could you describe the project, accurately and in full, to the person running the site you are collecting from? If yes, build it. If the honest description makes you want to soften the wording, that instinct is the finding.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/advanced-keyword-research/">Advanced Keyword Research & Competitive Analysis</a></strong>
+              <strong><a href="/blog/advanced-keyword-research/">Advanced Keyword Research &amp; Competitive Analysis</a></strong>
               <p>Automated SERP scraping and keyword gap analysis.</p>
             </li>
             <li>
-              <strong><a href="/blog/ai-product-recommendations/">Implementing AI Product Recommendations & Dynamic Pricing</a></strong>
+              <strong><a href="/blog/ai-product-recommendations/">Implementing AI Product Recommendations &amp; Dynamic Pricing</a></strong>
               <p>Machine learning dynamic price adjusters.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -272,6 +997,6 @@ async def scrape_price(url):
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

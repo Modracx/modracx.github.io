@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Building Custom Intranet Employee Portals for Operations | MODRACX</title>
-  <meta name="description" content="Technical guide on building secure internal staff portals with Single Sign-On (SSO), RBAC access control, and real-time inventory management dashboards." />
+  <meta name="description" content="Building an internal operations portal: SSO with SAML and OIDC, scoped role models, ERP read models, audit logging, and shared warehouse terminals." />
   <meta property="og:title" content="Building Custom Intranet Employee Portals for Operations | MODRACX" />
   <meta property="og:description" content="Technical guide on custom intranet employee portals by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Building Custom Intranet Employee Portals for Operations</h1>
-        <p class="lede">A centralized corporate intranet connects warehouse operators, customer service reps, and supply chain managers with real-time operational data via SAML 2.0 SSO.</p>
+        <p class="lede">A stock spreadsheet opened by nine people at once cost a distributor eleven oversells in a fortnight. Here is what replaced it, and what I got wrong building it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,26 +205,633 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Express SAML 2.0 Authentication Middleware Code</h2>
+        <h2>1. The Spreadsheet That Ran a Warehouse</h2>
 
-        <pre><code class="language-javascript">// Express SAML 2.0 SSO Middleware for Intranet Portal
-const passport = require('passport');
-const SamlStrategy = require('passport-saml').Strategy;
+        <p>A horticultural distributor in the Midlands called me in March 2023 because their stock was wrong. Not slightly wrong — wrong enough that they had oversold a discontinued dining set eleven times in a fortnight and had to phone every customer individually.</p>
 
-passport.use(new SamlStrategy({
-    entryPoint: 'https://idp.company.com/adfs/ls/',
-    issuer: 'https://intranet.modracx.com/saml/metadata',
-    callbackUrl: 'https://intranet.modracx.com/saml/consume'
-  }, (profile, done) => {
-    return done(null, profile);
+        <p>I expected an ERP sync bug. What I found was a shared spreadsheet on a network drive called <code>STOCK_MASTER_v4_FINAL_USE_THIS.xlsx</code>, opened by nine people simultaneously, with three of them on a VPN that dropped every twenty minutes. The warehouse team edited it. The customer service team read it. Nobody could tell you who had changed a number or when, because Excel's change tracking had been switched off years earlier by someone who found the coloured cells annoying.</p>
+
+        <p>The ERP was fine. The commerce platform was fine. The problem was the several centimetres of human process wedged between them, and that process lived in a file.</p>
+
+        <p>What they needed was not a better spreadsheet. They needed an internal application — an employee portal — that read authoritative data from the systems that owned it, let staff act on it under a known identity, and recorded what happened. That project took four months, cost less than a year of the licence fees they were quoted for an off-the-shelf warehouse management suite, and is still running.</p>
+
+        <p>This article is what I learned building that one and five more like it. It is deliberately opinionated about identity, because identity is where these projects go wrong, and deliberately sceptical about real-time features, because that is where they go over budget.</p>
+
+        <h2>2. What an Operations Portal Actually Is</h2>
+
+        <p>The word "intranet" carries baggage from 2006 — a SharePoint site with a canteen menu, a staff directory nobody updated, and a link to the holiday request form. That is not what I am describing, and if that is what a stakeholder has in their head when they approve the budget, you will spend the first month arguing about news articles.</p>
+
+        <p>An operations portal is a purpose-built internal web application that sits in front of systems staff cannot or should not be given direct access to. Three things define it.</p>
+
+        <p><strong>It is a read model over systems it does not own.</strong> The portal is almost never the system of record. Stock lives in the ERP or the WMS. Orders live in the commerce platform. Customers live in the CRM. The portal's job is to assemble a view across all of them that no single system can produce, and to route writes back to whichever system owns that field.</p>
+
+        <p><strong>It is scoped by who you are.</strong> A picker in the Coventry warehouse sees Coventry stock and the pick lists assigned to their zone. A regional manager sees six sites. A finance user sees margin figures that neither of them should. This is not decoration; it is frequently the entire business case, because the alternative is giving forty people an ERP login and hoping.</p>
+
+        <p><strong>It records what happened.</strong> Every meaningful action gets attributed to a person, a time, and where possible a reason. This is what the spreadsheet could not do and what made the oversell impossible to investigate.</p>
+
+        <p>Everything else — dashboards, notifications, the staff directory somebody will inevitably ask for — is optional. If you are clear about those three properties from the start, scope conversations get much easier, because you can point at a feature request and ask which of the three it serves.</p>
+
+        <h3>What it is not</h3>
+
+        <p>It is not a replacement for the ERP's own screens. I have watched a team spend six weeks rebuilding a purchase order entry form that existed perfectly well in the ERP, because a manager said the ERP was "ugly". The ERP form had eleven years of validation logic in it. The replacement had none, and the first PO raised through it went out with a supplier code that did not exist.</p>
+
+        <p>If a workflow is fully contained in one system, and the people who need it can have accounts in that system, leave it there. Build the portal for the things that genuinely span systems, or for the people who genuinely should not have a licence.</p>
+
+        <h2>3. Buy, Adapt, or Build</h2>
+
+        <p>I will say plainly: most companies asking me to build a portal should not build one. The honest split, from the projects I have been asked about, is roughly a third buy, a third adapt something existing, a third build.</p>
+
+        <p><strong>Buy</strong> when your process is standard. If you are doing conventional pick-pack-ship with barcode scanners and no unusual constraints, a warehouse management product will beat anything I write in four months, and it comes with a support contract. The moment you find yourself explaining that your process is "a bit different", pause, because that sentence is expensive and is usually said about a difference that does not matter.</p>
+
+        <p><strong>Adapt</strong> when your commerce platform already has an admin. Shopify's admin plus a couple of apps, or a Magento admin with a custom module, covers more than people expect. Building an entire portal to avoid writing a <a href="/blog/custom-magento-module/">custom Magento module</a> is a bad trade — you take on authentication, deployment, and an entire UI in order to avoid learning one framework's extension points.</p>
+
+        <p><strong>Build</strong> when the value is in the join. When the question a staff member needs answered requires data from three systems at once, no vendor sells that, because the combination is specific to you. The horticultural distributor's core screen showed, in one row: SKU, physical stock by warehouse from the WMS, committed stock from open orders in the commerce platform, inbound quantity and expected date from the ERP's purchase orders, and a supplier lead time from a table that existed only in someone's head until we wrote it down. No product does that. That is the case for building.</p>
+
+        <p>The other legitimate case is licence arithmetic. ERP seats at £900 a year, forty warehouse staff who need to read two fields, and suddenly a build pays for itself in eighteen months. Do that maths before you do any design work, because it either makes the decision for you or kills the project early, and both outcomes are cheap.</p>
+
+        <h2>4. Identity Comes First, Not Last</h2>
+
+        <p>The single most common mistake I see is treating authentication as a sprint-three task. Somebody scaffolds the app with a local users table, a bcrypt hash, and a login form, promising to "swap in SSO later". Later never has a good week for it, and by then the users table has foreign keys pointing at it from nine other tables.</p>
+
+        <p>Do identity first, before a single business screen exists. There are three reasons, and the third is the one people miss.</p>
+
+        <p>First, offboarding. When someone leaves, IT disables their account in the directory. If your portal has its own password store, they still have access, and nobody will remember to tell you. I have found live accounts belonging to people who left eighteen months earlier. That is a finding on any security questionnaire your enterprise customers send you.</p>
+
+        <p>Second, group membership. The directory already knows that Priya is in <code>WH-Coventry-Supervisors</code>. That is your permission model, maintained by people whose job it is, for free. Rebuilding it in your own admin screen means it drifts within a quarter.</p>
+
+        <p>Third — the one that bites — is that your permission model shapes your data model. If you find out in month three that access is scoped by warehouse and by product category independently, and your tables assumed a single <code>role</code> column, you are rewriting queries across the whole application. Knowing the shape of "who can see what" before you design tables is worth more than any framework choice.</p>
+
+        <h2>5. SAML 2.0, and Why You Will Still Meet It</h2>
+
+        <p>SAML is a 2005 specification built on XML signatures. It is verbose, the tooling is grumpy, and I would not pick it for a new integration. You will nonetheless meet it constantly, because large organisations standardised on it and their identity teams have no interest in your preferences.</p>
+
+        <p>The flow, stripped of ceremony: your app redirects the browser to the identity provider with an <code>AuthnRequest</code>; the IdP authenticates the user however it likes; the IdP posts a signed XML assertion back to your Assertion Consumer Service URL; you verify the signature against the IdP's certificate and read the attributes.</p>
+
+        <p>Here is a working Express setup using <code>passport-saml</code>, with the parts that actually matter commented.</p>
+
+        <pre><code class="language-javascript">import express from 'express';
+import session from 'express-session';
+import passport from 'passport';
+import { Strategy as SamlStrategy } from '@node-saml/passport-saml';
+import fs from 'node:fs';
+
+const app = express();
+
+// Behind a load balancer that terminates TLS, Express must be told to trust
+// X-Forwarded-Proto or every redirect it builds will be http:// and the IdP
+// will reject the ACS URL as unregistered. This one line has cost me a day.
+app.set('trust proxy', 1);
+
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',   // 'strict' breaks the IdP POST back to the ACS
+    maxAge: 8 * 60 * 60 * 1000
   }
-));</code></pre>
+}));
 
-        <hr />
+const saml = new SamlStrategy({
+  entryPoint: process.env.IDP_SSO_URL,
+  issuer: 'https://portal.example.co.uk/saml/metadata',
+  callbackUrl: 'https://portal.example.co.uk/saml/acs',
+
+  // The IdP's signing certificate. Rotate this and logins stop dead, so it
+  // belongs in config with an expiry alert, not pasted into the source.
+  idpCert: fs.readFileSync('/etc/portal/idp-signing.pem', 'utf8'),
+
+  // Sign our AuthnRequests. Some IdPs require it; none object to it.
+  privateKey: fs.readFileSync('/etc/portal/sp-private.pem', 'utf8'),
+  signatureAlgorithm: 'sha256',
+
+  // Reject assertions older than five minutes. The default in several
+  // libraries is generous enough to make replay realistic.
+  acceptedClockSkewMs: 5000,
+  maxAssertionAgeMs: 5 * 60 * 1000,
+
+  // Force the IdP to tell us the groups. The attribute name is whatever
+  // the identity team configured; never assume the friendly name.
+  identifierFormat: 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent'
+}, async (profile, done) =&gt; {
+  const groups = [].concat(
+    profile['http://schemas.microsoft.com/ws/2008/06/identity/claims/groups'] || []
+  );
+  // Never trust the display name for identity. NameID is the stable key;
+  // email addresses get reused when someone changes their surname.
+  const user = await upsertUser({
+    externalId: profile.nameID,
+    email: profile.email,
+    displayName: profile.displayName,
+    groups
+  });
+  return done(null, user);
+});
+
+passport.use('saml', saml);</code></pre>
+
+        <p>Four things go wrong with SAML, in order of how often I have seen them.</p>
+
+        <p><strong>Clock skew.</strong> The assertion carries <code>NotBefore</code> and <code>NotOnOrAfter</code>. If your server's clock is ninety seconds off, every login fails with an unhelpful message. Run NTP, and set an explicit skew tolerance of a few seconds rather than the minute or more some libraries default to.</p>
+
+        <p><strong>Attribute names.</strong> The identity team will tell you the portal receives "the user's groups". What arrives is an attribute named <code>http://schemas.xmlsoap.org/claims/Group</code> containing distinguished names like <code>CN=WH-Coventry-Supervisors,OU=Groups,DC=example,DC=local</code>. Log the entire raw assertion once, in a non-production environment, and look at it. Do not write the mapping from a specification document.</p>
+
+        <p><strong>Single value versus array.</strong> A user in one group gets a string; a user in two gets an array. Code that does <code>groups.includes()</code> on a string will silently match substrings. That <code>[].concat()</code> in the example above is not decoration.</p>
+
+        <p><strong>Certificate expiry.</strong> IdP signing certificates expire, typically on a three-year cycle, and the identity team's rotation notice goes to an address that does not exist any more. Put the expiry date in a monitoring check that alerts thirty days out. I have been the person on a Sunday call because nobody did.</p>
+
+        <h2>6. OIDC, and Why I Prefer It Now</h2>
+
+        <p>Given a choice, I use OpenID Connect. It is OAuth 2.0 with an identity layer, it speaks JSON, tokens are compact enough to log without a scroll, and discovery means you configure one URL instead of six.</p>
+
+        <p>The practical difference is not security — a correctly implemented SAML integration is fine — it is debuggability. When an OIDC login fails I can paste the ID token into a decoder and read it. When a SAML login fails I am reading base64-encoded, deflate-compressed XML with an embedded signature, and half the time the failure is a canonicalisation difference I cannot see.</p>
+
+        <pre><code class="language-javascript">import { Issuer, generators } from 'openid-client';
+
+// Discovery: one URL, and the library learns every endpoint, the JWKS
+// location, and which algorithms the IdP will actually sign with.
+const issuer = await Issuer.discover(
+  'https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0'
+);
+
+const client = new issuer.Client({
+  client_id: process.env.OIDC_CLIENT_ID,
+  client_secret: process.env.OIDC_CLIENT_SECRET,
+  redirect_uris: ['https://portal.example.co.uk/auth/callback'],
+  response_types: ['code']
+});
+
+app.get('/auth/login', (req, res) =&gt; {
+  // PKCE. Mandatory for public clients, and harmless for confidential ones,
+  // so just always do it rather than reasoning about which you are.
+  const verifier = generators.codeVerifier();
+  req.session.pkce = verifier;
+  req.session.state = generators.state();
+
+  res.redirect(client.authorizationUrl({
+    scope: 'openid profile email offline_access',
+    code_challenge: generators.codeChallenge(verifier),
+    code_challenge_method: 'S256',
+    state: req.session.state
+  }));
+});
+
+app.get('/auth/callback', async (req, res, next) =&gt; {
+  try {
+    const params = client.callbackParams(req);
+    const tokenSet = await client.callback(
+      'https://portal.example.co.uk/auth/callback',
+      params,
+      { code_verifier: req.session.pkce, state: req.session.state }
+    );
+
+    const claims = tokenSet.claims();
+    // 'oid' on Entra ID is the immutable object id. 'sub' is stable per
+    // application. Either is fine; email and UPN are not, because people
+    // get married and IT renames the account.
+    req.session.user = await upsertUser({
+      externalId: claims.oid || claims.sub,
+      email: claims.email || claims.preferred_username,
+      displayName: claims.name,
+      groups: claims.groups || []
+    });
+    res.redirect(req.session.returnTo || '/');
+  } catch (err) { next(err); }
+});</code></pre>
+
+        <p>One caveat that catches people on Microsoft Entra ID specifically: if a user is a member of more than around 150 groups, the token does not contain them. It contains an overage claim pointing at a Graph API endpoint you must then call. Your test users are in four groups and never hit it. The regional director is in two hundred, and their first login lands them in a portal with no permissions at all. Handle the overage claim on day one or write down that you have not.</p>
+
+        <h2>7. Roles Are Not Enough</h2>
+
+        <p>Every portal starts with a <code>role</code> column. Admin, manager, staff. It survives about six weeks.</p>
+
+        <p>The failure is always the same shape: permissions turn out to have two independent axes. What you can do (view stock, adjust stock, view margin, release a held order) and what you can do it to (which warehouses, which brands, which sales channels). A single role string cannot express "supervisor, but only at Coventry and Rugby". So somebody adds <code>role_coventry_supervisor</code>, and eleven months later there are sixty roles and nobody can say what any of them mean.</p>
+
+        <p>Separate the two from the start. Permissions are verbs on resource types. Scopes are the set of entities a grant applies to. A user has grants, each pairing a permission set with a scope.</p>
+
+        <pre><code class="language-sql">-- Permissions are stable strings the code checks against. They are named
+-- after what the code does, not after job titles.
+CREATE TABLE permission (
+  key         TEXT PRIMARY KEY,          -- 'stock.adjust', 'order.release'
+  description TEXT NOT NULL
+);
+
+CREATE TABLE role (
+  id    SERIAL PRIMARY KEY,
+  key   TEXT UNIQUE NOT NULL,            -- 'warehouse_supervisor'
+  label TEXT NOT NULL
+);
+
+CREATE TABLE role_permission (
+  role_id       INT REFERENCES role(id) ON DELETE CASCADE,
+  permission_key TEXT REFERENCES permission(key),
+  PRIMARY KEY (role_id, permission_key)
+);
+
+-- The grant is where scope lives. NULL scope_value means "all of this type",
+-- which is how you express a global admin without a special case in code.
+CREATE TABLE user_grant (
+  id          SERIAL PRIMARY KEY,
+  user_id     INT  NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  role_id     INT  NOT NULL REFERENCES role(id),
+  scope_type  TEXT NOT NULL,             -- 'warehouse' | 'brand' | 'channel'
+  scope_value TEXT,                      -- 'COV' | NULL for all
+  granted_by  INT REFERENCES app_user(id),
+  granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ                -- temporary cover for annual leave
+);
+
+CREATE INDEX ON user_grant (user_id) WHERE expires_at IS NULL OR expires_at &gt; now();
+
+-- Directory groups map to grants. This table is the whole reason SSO group
+-- membership is useful: IT manages the left column, you manage the right.
+CREATE TABLE group_mapping (
+  external_group TEXT PRIMARY KEY,       -- 'CN=WH-Coventry-Supervisors,...'
+  role_id        INT NOT NULL REFERENCES role(id),
+  scope_type     TEXT NOT NULL,
+  scope_value    TEXT
+);</code></pre>
+
+        <p>That <code>expires_at</code> column earns its keep more than anything else in the schema. Temporary escalation is a real business need — someone covers a colleague's holiday and needs their permissions for two weeks — and without expiry, temporary access is permanent access. Make the grant screen ask for an end date and default it to thirty days.</p>
+
+        <h3>Where I would use attribute-based rules instead</h3>
+
+        <p>There is a point where the scoped-role model stops fitting: when the decision depends on the state of the record rather than its category. "A supervisor may approve a stock write-off up to £500, or up to £2,000 if the reason code is damage-in-transit and the goods are already flagged as insured." That is a policy, not a role, and grinding it into a permissions table produces something unreadable.</p>
+
+        <p>When I hit two or three of those, I move the decision into an explicit policy function that takes the user, the action, and the record, and returns a decision with a reason. Keep roles for the coarse cut and policies for the fine one. What I would not do is reach for a full policy engine on day one; the operational cost of a separate policy service is real, and most portals never need it.</p>
+
+        <h2>8. Enforce Authorisation Where the Data Is</h2>
+
+        <p>Checking permissions in the controller is necessary and insufficient. The controller check protects the endpoint you remembered. It does nothing for the endpoint a colleague adds in four months, or the CSV export, or the background job that emails a summary.</p>
+
+        <p>Every read of scoped data should go through one function that takes the actor and returns a constrained query. Not a helper you are encouraged to use — the only way to get at the table.</p>
+
+        <pre><code class="language-javascript">// One place that knows how a user's grants become a filter. If a query
+// does not come through here, code review rejects it.
+export function scopedStock(actor, qb) {
+  if (actor.has('stock.view.all')) return qb;
+
+  const warehouses = actor.scopesFor('stock.view', 'warehouse');
+  if (warehouses.length === 0) {
+    // Deny by returning an impossible predicate rather than throwing.
+    // A screen with zero rows is a correct answer; a 500 is not.
+    return qb.whereRaw('1 = 0');
+  }
+  return qb.whereIn('stock.warehouse_code', warehouses);
+}
+
+// Usage is uniform and boring, which is the point.
+const rows = await scopedStock(req.actor, db('stock'))
+  .where('sku', req.params.sku)
+  .select('warehouse_code', 'on_hand', 'committed');</code></pre>
+
+        <p>On PostgreSQL there is a stronger option: row-level security, with the actor pushed into a session variable by the connection wrapper. The policy then lives in the database and applies to every client, including the psql session someone opens at 11pm to "just check something".</p>
+
+        <pre><code class="language-sql">ALTER TABLE stock ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY stock_scope ON stock
+  FOR SELECT
+  USING (
+    warehouse_code IN (
+      SELECT scope_value FROM user_grant g
+      JOIN role_permission rp ON rp.role_id = g.role_id
+      WHERE g.user_id = current_setting('app.user_id')::int
+        AND rp.permission_key = 'stock.view'
+        AND (g.expires_at IS NULL OR g.expires_at &gt; now())
+    )
+    OR EXISTS (
+      SELECT 1 FROM user_grant g
+      JOIN role_permission rp ON rp.role_id = g.role_id
+      WHERE g.user_id = current_setting('app.user_id')::int
+        AND rp.permission_key = 'stock.view'
+        AND g.scope_value IS NULL
+    )
+  );</code></pre>
+
+        <p>I like RLS and I use it, but be honest about the cost. Debugging becomes harder because a query silently returns fewer rows, connection pooling needs care so the session variable does not leak between requests, and the migration story for policies is worse than for tables. On a portal handling money or personal data I still think it is worth it. On a read-only dashboard it is over-engineering.</p>
+
+        <h2>9. Talking to the Commerce Backend Without Melting It</h2>
+
+        <p>The portal will hammer whichever systems it reads from, in a pattern those systems were not designed for. A staff member with a search box generates far more queries per minute than a customer browsing, and forty staff on a Monday morning generate a load profile that looks like an attack.</p>
+
+        <p>Three rules, learned the hard way.</p>
+
+        <p><strong>Never call the ERP synchronously from a page render.</strong> The first version of the homeware portal fetched purchase order data from their ERP's SOAP endpoint while rendering the stock screen. That endpoint's median response was 240ms and its 95th percentile was eleven seconds, because it shared a thread pool with the nightly revaluation job. The stock screen inherited that distribution exactly. We moved to a poller writing into a local table, and the screen went from a 95th percentile of 11.4 seconds to 190 milliseconds, reading data that was at worst three minutes stale. Nobody noticed the staleness. Everybody noticed the speed.</p>
+
+        <p><strong>Own a read model.</strong> Give the portal its own tables, populated by webhooks where the source system offers them and polling where it does not. This is the same reasoning that applies to any <a href="/blog/enterprise-erp-systems-ecommerce/">ERP integration for ecommerce</a>: the systems of record are slow, rate-limited, and occasionally down, and your internal users should not experience any of that directly.</p>
+
+        <p><strong>Make staleness visible rather than pretending it does not exist.</strong> Every derived figure on screen carries the timestamp of the sync that produced it. Not in a tooltip — on the row. The moment staff can see "stock as of 14:02", the trust conversation changes completely, because the failure mode becomes obvious instead of mysterious.</p>
+
+        <pre><code class="language-javascript">// A poller that survives contact with a flaky ERP. The important parts are
+// the watermark, the jitter, and the fact that failure does not stop the loop.
+const SOURCES = {
+  purchase_orders: { every: 180_000, fn: fetchPurchaseOrders },
+  supplier_leadtimes: { every: 86_400_000, fn: fetchLeadTimes }
+};
+
+async function runSource(name, { every, fn }) {
+  for (;;) {
+    const started = Date.now();
+    try {
+      // Watermark: ask only for records changed since the last success.
+      // Overlap by two minutes because source clocks are not your clock.
+      const since = await db('sync_state').where({ name }).first();
+      const from = new Date((since?.last_success_at ?? 0) - 120_000);
+
+      const batch = await fn(from);
+      await db.transaction(async trx =&gt; {
+        for (const row of batch) await upsert(trx, name, row);
+        await trx('sync_state')
+          .insert({ name, last_success_at: new Date(), rows: batch.length })
+          .onConflict('name').merge();
+      });
+    } catch (err) {
+      // Log and carry on. A source being down must not take the portal with
+      // it; the screen shows a stale-data banner instead.
+      log.error({ err, source: name }, 'sync failed');
+      await db('sync_state').where({ name }).update({ last_error: String(err) });
+    }
+    // Jitter stops every replica hitting the ERP in the same second after a
+    // simultaneous deploy.
+    const wait = every - (Date.now() - started) + Math.random() * 5000;
+    await new Promise(r =&gt; setTimeout(r, Math.max(1000, wait)));
+  }
+}</code></pre>
+
+        <p>If the upstream system is behind a gateway you control, put the rate limiting and the circuit breaker there rather than in every client. That is what <a href="/blog/secure-api-gateways/">a properly configured API gateway</a> is for, and it means the next internal tool inherits the protection instead of reinventing it badly.</p>
+
+        <h2>10. Real-Time, and How Much of It You Actually Need</h2>
+
+        <p>"Real-time dashboard" appears in roughly every brief I receive. It is worth about ten minutes of interrogation, because the word means four different things and only one of them is expensive.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>What they mean</th><th>Acceptable lag</th><th>What I build</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>"I want to see today's numbers"</td><td>Minutes</td><td>Cached query, refreshed on a timer</td></tr>
+            <tr><td>"I do not want to press F5"</td><td>10–30 seconds</td><td>Polling with an ETag</td></tr>
+            <tr><td>"Tell me when an order needs attention"</td><td>1–5 seconds</td><td>Server-Sent Events</td></tr>
+            <tr><td>"Two pickers must not grab the same unit"</td><td>Immediate</td><td>Server-side locking, not a UI feature</td></tr>
+          </tbody>
+        </table>
+
+        <p>The fourth row is the one that matters and it is not a real-time problem at all. Concurrency conflicts are solved by the database with a conditional update, not by pushing events to a browser fast enough that humans avoid colliding. If your answer to double-picking is "the screen updates quickly", you have a race condition with a nice interface.</p>
+
+        <p>For genuine push, I reach for Server-Sent Events before WebSockets nine times out of ten. SSE is one HTTP response that never ends. It reconnects automatically, it carries an event ID so the server can replay what the client missed, it passes through corporate proxies that mangle WebSocket upgrades, and it needs no separate protocol handling on the server.</p>
+
+        <pre><code class="language-javascript">app.get('/events', requirePermission('portal.access'), (req, res) =&gt; {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    // nginx buffers proxied responses by default, which turns a live stream
+    // into a batch delivery every few kilobytes. This header disables it.
+    'X-Accel-Buffering': 'no'
+  });
+
+  // Replay anything the client missed while its connection was down.
+  const lastId = Number(req.headers['last-event-id'] || 0);
+  if (lastId) replaySince(lastId, req.actor).forEach(e =&gt; send(res, e));
+
+  const unsubscribe = bus.subscribe(req.actor, event =&gt; send(res, event));
+
+  // Comment lines keep intermediaries from timing the connection out.
+  // Thirty seconds is under every default idle timeout I have met.
+  const ping = setInterval(() =&gt; res.write(': ping\n\n'), 30_000);
+
+  req.on('close', () =&gt; { clearInterval(ping); unsubscribe(); });
+});
+
+function send(res, event) {
+  res.write(`id: ${event.id}\n`);
+  res.write(`event: ${event.type}\n`);
+  res.write(`data: ${JSON.stringify(event.payload)}\n\n`);
+}</code></pre>
+
+        <p>Two operational notes. Under HTTP/1.1 the browser's six-connection-per-host limit means an open SSE stream eats one of six; a user with four tabs open has starved the page. Serve the portal over HTTP/2 and the problem disappears. And filter events server-side against the subscriber's scope — it is very easy to build a broadcast bus that cheerfully streams every warehouse's activity to everyone, and nobody notices until an auditor opens DevTools.</p>
+
+        <h2>11. Designing the Screen Staff Actually Live In</h2>
+
+        <p>Every portal I have built has one screen that accounts for most of the usage. Find it in week one and design around it.</p>
+
+        <p>For the horticultural distributor it was a SKU search returning a single dense row per warehouse. Not a dashboard, not a chart — a table. Warehouse staff do not want a data visualisation; they want to type a partial product code and see numbers, fast, with the keyboard.</p>
+
+        <p>The things that made it good were unglamorous. Focus goes to the search box on load. Enter selects the first result. The numbers are in a monospaced font so digits line up vertically and a transposed figure is visible. Negative available stock is red without relying on colour alone — it also carries a minus sign and a title attribute. Every row shows its sync timestamp.</p>
+
+        <p>The thing that made it fast was that search hits a single denormalised table with a trigram index, not a join across five.</p>
+
+        <pre><code class="language-sql">CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- One row per SKU per warehouse, rebuilt by the sync workers. Denormalised
+-- on purpose: this table is read thousands of times per hour and written a
+-- few hundred, so joins belong on the write side.
+CREATE TABLE stock_view (
+  sku             TEXT NOT NULL,
+  warehouse_code  TEXT NOT NULL,
+  description     TEXT NOT NULL,
+  on_hand         INT  NOT NULL,
+  committed       INT  NOT NULL,
+  inbound_qty     INT  NOT NULL DEFAULT 0,
+  inbound_eta     DATE,
+  synced_at       TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (sku, warehouse_code)
+);
+
+-- Partial-match search on either the code or the description, without a
+-- sequential scan over 400k rows on every keystroke.
+CREATE INDEX stock_view_sku_trgm  ON stock_view USING gin (sku gin_trgm_ops);
+CREATE INDEX stock_view_desc_trgm ON stock_view USING gin (description gin_trgm_ops);
+
+-- Generated column so "what can I actually sell" is never computed two
+-- different ways in two different screens.
+ALTER TABLE stock_view
+  ADD COLUMN available INT GENERATED ALWAYS AS (on_hand - committed) STORED;</code></pre>
+
+        <p>That generated column solved an argument. Two screens had each implemented "available" and one of them subtracted allocations to open transfers while the other did not. Staff learned that the numbers disagreed and stopped trusting both. Define the derived figure once, in the schema, and no screen can get it wrong.</p>
+
+        <h2>12. Audit Logging You Will Actually Read</h2>
+
+        <p>Most audit tables are write-only in practice. They fill with rows nobody queries, until the day someone needs to know why a stock figure changed and discovers the log records the new value but not the old, and identifies the actor as <code>system</code>.</p>
+
+        <p>An audit entry is useful when it answers five questions: who, what, when, from where, and what changed. The fifth is the one that gets omitted.</p>
+
+        <pre><code class="language-sql">CREATE TABLE audit_event (
+  id          BIGSERIAL PRIMARY KEY,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_id    INT REFERENCES app_user(id),
+  actor_label TEXT NOT NULL,        -- denormalised: users get deleted, logs stay
+  action      TEXT NOT NULL,        -- 'stock.adjust'
+  subject_type TEXT NOT NULL,       -- 'stock'
+  subject_id  TEXT NOT NULL,        -- 'SKU-4471/COV'
+  before      JSONB,
+  after       JSONB,
+  reason      TEXT,                 -- required for adjustments, by policy
+  request_id  TEXT,                 -- ties the row to application logs
+  source_ip   INET
+);
+
+CREATE INDEX ON audit_event (subject_type, subject_id, occurred_at DESC);
+CREATE INDEX ON audit_event (actor_id, occurred_at DESC);</code></pre>
+
+        <p>Two decisions I would repeat. The actor label is copied in, not joined, because when a leaver's account is deleted the log must still say who did it. And the log is append-only at the database level — the application role has <code>INSERT</code> and <code>SELECT</code> on that table and nothing else. An audit log an application can rewrite is a diary, not evidence.</p>
+
+        <p>Then build the screen. Not an admin export — a tab on the record itself showing its own history in plain language: "Priya Nair adjusted on-hand from 40 to 37, reason: damage in transit, 14:22 Tuesday." The moment staff can see that themselves, the number of "can you check the database for me" requests drops to nearly zero, and the log stops being an unread compliance artefact.</p>
+
+        <h2>13. Shared Terminals and the Session Problem</h2>
+
+        <p>Warehouse floors do not have one device per person. They have a terminal bolted to a pillar, a handheld scanner on a lanyard, and a laptop on the packing bench, and staff swap between them constantly. Every assumption a normal web app makes about sessions is wrong here.</p>
+
+        <p>What broke on my first attempt: an eight-hour session cookie on a shared terminal meant whoever logged in at 06:00 was the recorded actor for every action taken at that terminal all day. The audit log was technically complete and entirely useless.</p>
+
+        <p>What worked was a two-tier session. The device authenticates once and holds a long-lived device identity. The person authenticates on top of it with something fast — a PIN or a badge scan — and that human session times out after a few minutes of inactivity. The full SSO flow happens once per device per week; the per-person step takes two seconds and does not need a keyboard.</p>
+
+        <pre><code class="language-javascript">// Device tokens are issued once, on a supervisor-approved enrolment, and
+// bound to a location. They authorise nothing on their own.
+async function resolveActor(req) {
+  const device = await verifyDeviceToken(req.cookies.device_token);
+  if (!device) return null;
+
+  const human = await getHumanSession(req.cookies.session_id);
+  if (!human || human.expires_at &lt; new Date()) {
+    // Device is known, person is not. Show the PIN pad, not the SSO redirect.
+    return { device, needsHuman: true };
+  }
+  // Scope is intersected: a supervisor at a Coventry terminal cannot act on
+  // Rugby stock even though their grants allow it elsewhere. Physical
+  // location is a genuine control and it is free here.
+  return {
+    ...human.actor,
+    warehouses: intersect(human.actor.warehouses, [device.warehouse_code])
+  };
+}</code></pre>
+
+        <p>The inactivity timeout wants tuning against reality rather than a security policy document. We started at two minutes, which was correct on paper and infuriating in practice because picking a large order takes longer than that. Five minutes, with the timer resetting on scanner input rather than only on mouse movement, was the setting that stopped the complaints. The scanner detail mattered more than the duration.</p>
+
+        <h2>14. Offline on the Warehouse Floor</h2>
+
+        <p>Wifi coverage in a warehouse is bad in ways office wifi never is. Racking is metal, stock absorbs signal, and the far aisle of a 4,000 square metre unit has a dead spot that moves depending on what is stored there. A portal that requires connectivity for every action will be hated by the people who use it most.</p>
+
+        <p>You do not need a full offline-first architecture. You need the two or three actions performed in the aisles to survive a ninety-second dropout. Everything else can show an error.</p>
+
+        <p>The pattern I use: a service worker that serves the app shell from cache, an IndexedDB queue for writes, and a Background Sync registration to flush it. The critical constraint is that queued actions must be idempotent and conflict-aware, because the world moved while the device was offline. A queued "set stock to 37" is dangerous; a queued "adjust by -3, client operation id abc-123" is safe, and the operation id lets the server reject the duplicate that arrives when a flaky connection retries.</p>
+
+        <pre><code class="language-javascript">// In the page: never write straight to the network for floor actions.
+export async function queueAdjustment(adjustment) {
+  const db = await openQueue();
+  await db.add('pending', {
+    ...adjustment,
+    opId: crypto.randomUUID(),   // server dedupes on this, forever
+    queuedAt: Date.now()
+  });
+  const reg = await navigator.serviceWorker.ready;
+  if ('sync' in reg) {
+    await reg.sync.register('flush-adjustments');
+  } else {
+    // Safari has no Background Sync; fall back to trying immediately and
+    // again on the next 'online' event.
+    flushNow();
+  }
+}</code></pre>
+
+        <p>The visible-state rule matters more than the plumbing: a queued action must look different from a committed one. We used a small clock icon and a count in the header. Without it, staff assumed the adjustment had landed, walked away, and were surprised the next morning. The <a href="/blog/service-workers-offline-caching/">service worker caching patterns</a> that make this work are the same ones used on storefronts, but the tolerance for ambiguity is far lower internally, because the person acting on stale data is the person who will be blamed for it.</p>
+
+        <h2>15. Performance on the Hardware They Actually Have</h2>
+
+        <p>The terminal in the warehouse is not your laptop. On that project it was a 2016 Android tablet with 2GB of RAM behind a plastic screen protector with a crack in it, and a Windows box running a browser two major versions behind because IT's update ring had not reached the operations OU.</p>
+
+        <p>Internal apps get a pass on performance that they should not get. Nobody bounces from an internal tool, so slowness converts into a productivity tax paid quietly, forty times an hour, by people who assume it is normal.</p>
+
+        <p>Three things had outsized effect. Server-rendering the first screen, so the terminal was not parsing 800KB of JavaScript before showing a stock figure. Virtualising the long result table, because rendering 2,000 rows into the DOM on that tablet took 3.4 seconds and scrolling was unusable afterwards. And keeping the search request under 40KB by returning only the columns the table displayed, rather than the full record "in case we need it".</p>
+
+        <p>Measure on the real device, not on a throttled desktop. I keep an old tablet in a drawer for exactly this. The gap between what DevTools' 4x CPU throttle predicts and what a genuinely old ARM chip does is large enough to change decisions.</p>
+
+        <h2>16. Worked Example: Four Months at a Homeware Distributor</h2>
+
+        <p>Concrete numbers, including the parts that went badly.</p>
+
+        <p><strong>Starting position.</strong> Six warehouses, about 11,000 active SKUs, 34 operations staff. Sage 200 as the ERP, Magento 2 for trade ordering, a spreadsheet for everything in between. Stock accuracy measured by a monthly cycle count was running at 87%. Oversells averaged fourteen a month. Customer service spent, by their own estimate, ninety minutes a day chasing stock questions internally.</p>
+
+        <p><strong>What we built.</strong> OIDC against their existing Entra ID tenant. Scoped roles across six warehouses and four brand groups. A stock read model synced from Sage on a three-minute poll and from Magento via webhooks. One primary search screen, an adjustments workflow with a mandatory reason code, and an audit trail. Nine weeks to first production use with two warehouses, seven more to roll out the rest.</p>
+
+        <p><strong>Results after six months.</strong> Stock accuracy 96.4%. Oversells down to two or three a month, and both of the remaining categories were genuine physical discrepancies rather than data problems. The stock screen's 95th percentile response time settled at 190ms against the ERP's own 11.4 seconds. Customer service's internal stock queries, which we could count because they went through the portal, dropped by roughly 70%.</p>
+
+        <p><strong>What went wrong, in order of embarrassment.</strong></p>
+
+        <p>The first version had no <code>reason</code> field on adjustments, because it felt like friction and I argued against it. Within three weeks there were four hundred adjustments and no way to tell a stocktake correction from a damage write-off from a fat-fingered typo. Adding the field later meant those four hundred rows are permanently uncategorised. It should have been mandatory from the first commit; the friction is the point.</p>
+
+        <p>The Sage poller used the ERP's <code>modified_date</code> as a watermark. That field is set by the application, not the database, and a bulk import updated 3,000 rows with a modified date of the original creation. The poller skipped every one of them. We found out when a warehouse manager noticed a product line that had not moved in a fortnight. The fix was a nightly full reconciliation that compares row counts and checksums per warehouse and alerts on divergence, which I now build on day one for every sync rather than as a response to an incident.</p>
+
+        <p>We built a notifications feature — configurable rules, digest emails, in-app toasts, about three weeks of work — because two managers asked for it in the kickoff. Usage after six months: eleven rules configured, six of them by me during testing. Nobody wanted alerts; they wanted to open a screen and see the truth. I should have shipped nothing and waited for someone to complain.</p>
+
+        <p>And the SSO certificate expired fourteen months in, on a Saturday. Forty people could not log in on Monday morning until someone found me. There is now an alert.</p>
+
+        <h2>17. Deployment, Environments, and the Boring Parts</h2>
+
+        <p>Internal tools attract sloppy operations because "it is only internal". That reasoning stops being true the first time the portal is the only way to release a held order and it is down.</p>
+
+        <p>Treat it as production. Two environments minimum, with a staging tenant registered separately at the IdP — sharing one SSO application between staging and production means a staging misconfiguration can affect real logins, and it means your redirect URI list contains a localhost entry that will outlive the project.</p>
+
+        <p>Secrets belong in a secret manager, not in environment files copied between machines. The SAML private key and the OIDC client secret are the two that matter, and both have rotation procedures you should rehearse once rather than improvise during an incident.</p>
+
+        <p>Health checks need to distinguish "the app is up" from "the app is telling the truth". A portal whose ERP sync died four hours ago passes any naive health check while serving confidently wrong numbers. Expose sync freshness as a first-class signal and alert on it.</p>
+
+        <pre><code class="language-javascript">app.get('/healthz', async (req, res) =&gt; {
+  const checks = {};
+  checks.db = await db.raw('select 1').then(() =&gt; 'ok', e =&gt; String(e));
+
+  // Freshness per source, with a threshold three times the poll interval so
+  // one missed cycle is not an alert but three in a row is.
+  const rows = await db('sync_state').select('name', 'last_success_at');
+  for (const r of rows) {
+    const ageMs = Date.now() - new Date(r.last_success_at).getTime();
+    checks[`sync:${r.name}`] = ageMs &lt; SOURCES[r.name].every * 3
+      ? 'ok'
+      : `stale ${Math.round(ageMs / 1000)}s`;
+  }
+
+  const healthy = Object.values(checks).every(v =&gt; v === 'ok');
+  // 200 with a body when degraded but serving; 503 only when unusable. The
+  // load balancer should not pull a node out because an ERP is slow.
+  res.status(healthy ? 200 : 200).json({ healthy, checks });
+});</code></pre>
+
+        <p>One more boring thing worth doing: put a version string and a build timestamp in the page footer. When someone reports a bug on a shared terminal, the first question is which build they are looking at, and the answer is otherwise unobtainable because they cannot describe what they see.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Can we just use the ERP's own web portal?"</strong> Try it before you build anything. Sometimes it is genuinely adequate and you save four months. The two things that usually kill it are licensing — per-named-user pricing makes forty warehouse staff unaffordable — and the fact that it cannot show data from your commerce platform, which is frequently the whole point. Go and log into it as a picker would, with a picker's permissions, on the tablet they use. Ten minutes of that answers the question better than any evaluation matrix.</p>
+
+        <p><strong>"Should the portal be able to write back to the ERP?"</strong> Sparingly, and through the ERP's own validated API rather than its database, whatever a consultant tells you about direct table access being faster. Start read-only, add writes one workflow at a time, and for each one identify which system owns that field. Two systems both believing they own stock quantity is the failure mode that produces the oversells you built the portal to prevent.</p>
+
+        <p><strong>"How do we handle contractors and temps?"</strong> Through the directory, always, with an expiry date on the account. The temptation to create local portal accounts for seasonal staff is strong at the end of October and you must resist it, because those accounts will still be active in March. If your IdP supports guest identities, use them. If the agency will not cooperate, a scoped grant with a hard <code>expires_at</code> against a directory account is the compromise I have accepted.</p>
+
+        <p><strong>"Do we need multi-factor authentication on an internal tool?"</strong> Your IdP is already doing it, which is another argument for SSO. What I would add is step-up authentication on the small number of genuinely destructive actions — bulk adjustments, permission grants, anything financial. Re-prompt for a second factor at the moment of the action rather than making everyone do it hourly for everything.</p>
+
+        <p><strong>"React, or server-rendered?"</strong> For the portals I have built, server-rendered HTML with a sprinkle of interactivity has been the better trade almost every time. The screens are forms and tables, the devices are slow, the team maintaining it is small, and a full single-page application buys you client-side routing you do not need in exchange for a build pipeline, a state management story, and a bundle. The exception is a screen with genuinely rich interaction — a drag-and-drop pick sequencer, a live floor map. Build that one screen as a component and leave the rest alone.</p>
+
+        <p><strong>"How do we stop it becoming another system nobody maintains?"</strong> Name an owner in the business, not in IT. Every internal tool I have seen decay lost its business owner first and its maintenance budget second. If nobody in operations is accountable for whether the portal is correct, it will be wrong within a year and everyone will quietly go back to a spreadsheet with a different filename.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>If you are starting one of these on Monday, in this order:</p>
+
+        <p><strong>One.</strong> Sit in the warehouse for half a day. Not a workshop — the floor. Watch what people look up, what they write on paper, and which screen they have open when they swear. That half day will reshape your backlog more than any requirements document, and it is the cheapest thing on this list.</p>
+
+        <p><strong>Two.</strong> Do the licence arithmetic. Cost of ERP seats for everyone who needs read access, against a build. If buying wins, stop, and be glad you asked.</p>
+
+        <p><strong>Three.</strong> Get SSO working against the real identity provider, with a real group mapping, before you write a business screen. Log one full raw assertion or token in a non-production environment and read every attribute in it.</p>
+
+        <p><strong>Four.</strong> Write down the permission model as verbs and scopes on a single page, and get it agreed by whoever owns the process. Do this before the schema. If it does not fit on a page, the model is wrong and the schema will inherit that.</p>
+
+        <p><strong>Five.</strong> Build the one screen that gets the most use, against a read model you own, with a visible sync timestamp on every row. Put it in front of two real users in week three, on their hardware. Everything after that is refinement, and it will be refinement of something people already want to use rather than something you hope they will.</p>
+
+        <p><strong>Six.</strong> Add the audit log and the mandatory reason field in the same commit as the first write action. Not afterwards. The rows you collect before you get this right are permanently useless, and you will not get a second chance at them.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -230,12 +839,11 @@ passport.use(new SamlStrategy({
               <p>Identity-aware proxies and RBAC.</p>
             </li>
             <li>
-              <strong><a href="/blog/zoho-people-hrms-ecommerce-operations/">Zoho People HRMS & Operations Management for E-Commerce</a></strong>
+              <strong><a href="/blog/zoho-people-hrms-ecommerce-operations/">Zoho People HRMS &amp; Operations Management for E-Commerce</a></strong>
               <p>Employee shift and attendance tracking.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -269,6 +877,6 @@ passport.use(new SamlStrategy({
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

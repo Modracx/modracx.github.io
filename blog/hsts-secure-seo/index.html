@@ -31,31 +31,67 @@
   <script>window.dataLayer = window.dataLayer || []; function gtag() { dataLayer.push(arguments); } gtag('js', new Date()); gtag('config', new Date());</script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <link rel="canonical" href="https://modracx.com/blog/hsts-secure-seo/" />
   <link rel="alternate" hreflang="en" href="https://modracx.com/blog/hsts-secure-seo/" />
   <link rel="alternate" hreflang="x-default" href="https://modracx.com/blog/hsts-secure-seo/" />
   <title>HTTP Strict Transport Security (HSTS) Setup | MODRACX</title>
   <meta name="description"
-    content="Technical guide on configuring Strict-Transport-Security headers and HSTS preload submission." />
+    content="HSTS for ecommerce: what the browser does with the header, why includeSubDomains causes outages, enumerating forgotten subdomains, a staged max-age rollout, and whether preload is worth it." />
   <script
-    type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"HTTP Strict Transport Security (HSTS) Setup","description":"Technical guide on configuring Strict-Transport-Security headers and HSTS preload submission.","url":"https://modracx.com/blog/hsts-secure-seo/","author":{"@type":"Person","name":"Kenneth D'Silva"}}</script>
+    type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"HTTP Strict Transport Security (HSTS) Setup","description":"HSTS for ecommerce: what the browser does with the header, why includeSubDomains causes outages, enumerating forgotten subdomains, a staged max-age rollout, and whether preload is worth it.","url":"https://modracx.com/blog/hsts-secure-seo/","author":{"@type":"Person","name":"Kenneth D'Silva"}}</script>
 </head>
 
 <body data-page="blog">
-  <main id="realm" class="realm">
-    <section class="chapter container">
-      <article class="blog-post reveal">
+  <a class="skip-link" href="#realm">Skip to content</a>
+
+  <div class="cosmos" aria-hidden="true">
+    <div class="star-layer star-layer-1"></div>
+    <div class="star-layer star-layer-2"></div>
+    <div class="star-layer star-layer-3"></div>
+    <div class="nebula nebula-gold"></div>
+    <div class="nebula nebula-violet"></div>
+  </div>
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
+  <div class="wisp" aria-hidden="true"></div>
+
+<header class="sky-header">
+    <a class="sigil" href="/" aria-label="MODRACX home">
+      <span class="sigil-mark" aria-hidden="true">✦</span>
+      <span class="sigil-name"><b>MODRACX</b><small>KENNETH D'SILVA</small></span>
+    </a>
+    <nav class="sky-nav" id="sky-nav" aria-label="Primary">
+      <a href="/services/">Services</a>
+      <a href="/work/">Work</a>
+      <a href="/about/">About</a>
+      <a href="/blog/" aria-current="page">Blog</a>
+      <a href="/contact/">Contact</a>
+    </nav>
+    <div class="sky-tools">
+      <button type="button" class="grimoire-open" data-open-grimoire>✦ <span>Grimoire</span></button>
+      <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="sky-nav">
+        <i aria-hidden="true"></i><span class="sr-only">Menu</span>
+      </button>
+    </div>
+  </header>
+
+    <main id="realm" class="realm">
+    <section class="container threshold">
+      <div class="threshold-copy reveal">
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>HTTP Strict Transport Security (HSTS) Setup</h1>
-        <p class="lede">Enforcing HTTPS encrypted connections to protect user session cookies.</p>
-        <pre><code class="language-nginx">add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;</code></pre>
-        <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
-          <ul>
-            <li><a href="/blog/secure-http-headers/">Configuring Secure HTTP Headers for E-Commerce</a></li>
-          </ul>
+        <p class="lede">One header removes the plaintext request every HTTPS redirect leaves behind. It is also the header most likely to take your site off the internet, so here is how to ramp it safely — and what preload actually commits you to.</p>
+        <div class="blog-meta-info">
+          <span>By <strong>Kenneth D'Silva</strong></span> •
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
-      </article>
+      </div>
+
       <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -65,7 +101,469 @@
       </div>
     </section>
 
+    <div data-spine>
+      <svg class="spine" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="spine-gradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#a78bfa" />
+            <stop offset="50%" stop-color="#f0c060" />
+            <stop offset="100%" stop-color="#a78bfa" />
+          </linearGradient>
+        </defs>
+        <path class="spine-ghost" d="" />
+        <path class="spine-path" d="" />
+      </svg>
+    </div>
+
+    <section class="chapter container">
+      <article class="blog-post reveal">
+        <h2>1. The Redirect Nobody Looked At</h2>
+
+        <p>Every ecommerce site I audit has a line in its web server config that redirects HTTP to HTTPS. Everyone considers the job done at that point. It isn't, and the reason is a single request that happens before the redirect.</p>
+
+        <p>A customer types <code>shop.example.com</code> into the address bar, or clicks an old link, or taps a bookmark saved in 2019. The browser has no reason to assume HTTPS, so it makes a plain HTTP request. Your server answers with a 301 to the HTTPS version and everything proceeds normally. Total elapsed time: a couple hundred milliseconds. Total number of unencrypted requests: one.</p>
+
+        <p>That one request carries the hostname in plaintext, carries the full path, and — this is the part that matters — carries any cookie not marked <code>Secure</code>. On a coffee shop network, a compromised router, a hotel captive portal, or a hostile ISP, someone in the middle sees it. Worse, they can answer it. The attacker doesn't have to break TLS; they just have to make sure the browser never gets to TLS, serving a proxied copy of your storefront over plain HTTP and relaying everything to the real site. The padlock never appears, which most customers will not notice.</p>
+
+        <p>HTTP Strict Transport Security is one header that removes that request from existence. Once a browser has seen it, that browser will not make a plain HTTP request to your domain again for as long as the policy lasts — it rewrites the URL internally before anything hits the network. No redirect, no plaintext hop, nothing to intercept.</p>
+
+        <p>It is also the header most likely to take your site off the internet if you get it wrong, because it is deliberately difficult to undo. Both halves of that are worth understanding before you deploy it.</p>
+
+        <h2>2. What the Browser Actually Does</h2>
+
+        <p>The header is short:</p>
+
+        <pre><code class="language-http">Strict-Transport-Security: max-age=31536000; includeSubDomains</code></pre>
+
+        <p>When a browser receives this over a valid HTTPS connection, it records an entry: <em>this host is HTTPS-only, for this many seconds</em>. From then until the policy expires, three things change.</p>
+
+        <p>Any attempt to load <code>http://shop.example.com/anything</code> is rewritten to <code>https://</code> internally, before a connection is opened. Your server's redirect never runs because the browser never asks. This is why HSTS is faster as well as safer — you're removing a full round trip from the first visit of every session that starts without a scheme.</p>
+
+        <p>Certificate errors become fatal. Normally a browser shows an interstitial warning and lets a determined user click through. On an HSTS host it does not: there is no "proceed anyway" button, and the typed bypass phrases that work elsewhere do not work here. If your certificate expires, your site is simply gone for every visitor whose browser holds the policy. Not degraded. Gone.</p>
+
+        <p>Mixed content behaviour tightens, because subresources on the same host get the same upgrade treatment.</p>
+
+        <p>Two rules about the header itself. It is only honoured when received over HTTPS with a valid certificate — sending it over plain HTTP does nothing at all, which is a common misconfiguration in Nginx blocks that serve both. And the clock resets on every visit: each time a browser sees the header, the expiry is pushed out to the full <code>max-age</code> from that moment. A regular customer is under continuous protection; someone who hasn't visited in fourteen months is not.</p>
+
+        <h2>3. The Three Directives</h2>
+
+        <h3>max-age</h3>
+
+        <p>Seconds. <code>31536000</code> is a year, <code>63072000</code> is two. This is the one number people copy without thinking, and it deserves thought, because it is also how long a mistake lasts.</p>
+
+        <p>Set <code>max-age=63072000</code> on a domain with a subdomain that can't do HTTPS and you have made that subdomain unreachable for two years for every browser that saw the header. You cannot call it back. Changing the header to <code>max-age=0</code> only helps browsers that visit you again over HTTPS and receive the new value — which, for a subdomain that is now unreachable, they cannot do. That's the trap, and it is the reason the rollout section of this article exists.</p>
+
+        <h3>includeSubDomains</h3>
+
+        <p>Extends the policy to every subdomain, including ones you've forgotten about. This is the directive that causes essentially all HSTS incidents, and the list of casualties is predictable: legacy admin panels, a status page on shared hosting, an old staging environment, a partner integration endpoint, the marketing team's landing-page tool, an internal printer or NAS with a self-signed certificate on a subdomain of the corporate zone, a mail server's webmail interface.</p>
+
+        <p>It is also the directive that makes HSTS genuinely useful, because without it an attacker can target <code>anything.shop.example.com</code> — a hostname the browser has no policy for — and use it to set cookies on the parent domain. Cookie scoping does not respect the same-origin rules people assume it does, and a wildcard-adjacent host is a real attack path.</p>
+
+        <p>So you need it, and you need to enumerate your subdomains before you turn it on. Certificate Transparency logs are the fastest way to find hostnames nobody documented:</p>
+
+        <pre><code class="language-bash"># Every hostname that has ever had a public certificate issued
+curl -s "https://crt.sh/?q=%25.example.com&amp;output=json" \
+  | python3 -c "import sys,json;[print(n) for n in sorted({x for r in json.load(sys.stdin) for x in r['name_value'].split()})]"</code></pre>
+
+        <p>Run that and then check each result. In my experience the list is between two and five times longer than whatever internal documentation claims, and the surprises are almost always old.</p>
+
+        <h3>preload</h3>
+
+        <p>The directive that solves the remaining hole, at the cost of being the hardest thing on this page to reverse. It deserves its own section.</p>
+
+        <h2>4. The First Visit Problem</h2>
+
+        <p>HSTS is trust-on-first-use. The browser only knows your policy after it has successfully connected once over HTTPS. On a device that has never visited you — a new phone, a fresh browser profile, a customer clicking your ad for the first time — the very first request is still plain HTTP, and that request is exactly the one an attacker wants.</p>
+
+        <p>The preload list closes it. It's a list of domains compiled into the browser itself, shipped with the binary. If your domain is on it, browsers treat it as HTTPS-only from the moment they're installed, before ever contacting you. Chrome maintains the list; Firefox, Safari, Edge and Opera consume it.</p>
+
+        <p>The requirements, all of which must hold continuously:</p>
+
+        <ul>
+          <li>A valid certificate on the apex domain.</li>
+          <li>HTTP on port 80 redirects to HTTPS on the same host — not to a different hostname first.</li>
+          <li>All subdomains served over HTTPS, including <code>www</code>.</li>
+          <li>The header on the base domain with <code>max-age</code> of at least 31536000, plus <code>includeSubDomains</code>, plus <code>preload</code>.</li>
+        </ul>
+
+        <pre><code class="language-http">Strict-Transport-Security: max-age=63072000; includeSubDomains; preload</code></pre>
+
+        <p>Submission is at hstspreload.org and the check is automated. Inclusion is not: it takes weeks, and it lands in a browser release rather than instantly.</p>
+
+        <p><strong>Removal is the part to think hard about.</strong> Getting off the list means submitting a removal request, waiting for it to be processed, and then waiting for the browser releases that carry the change to reach your customers. Realistically several months, and users on old browser versions keep the old list indefinitely. There is no emergency exit.</p>
+
+        <p>My rule: preload the domain when the business is confident it will never need plain HTTP on any hostname under it, for any reason, for years. For a dedicated ecommerce domain that's usually an easy yes. For a corporate domain that also hosts twenty years of departmental subdomains, it's usually a no, and the right move is to preload the shop's own domain rather than the parent.</p>
+
+        <p>A pattern worth knowing: put the storefront on its own registrable domain if you can, preload that, and leave the sprawling corporate domain alone. It sidesteps the entire argument.</p>
+
+        <h2>5. Implementation</h2>
+
+        <h3>Nginx</h3>
+
+        <pre><code class="language-nginx">server {
+    listen 80;
+    server_name shop.example.com www.shop.example.com;
+    # No HSTS header here — it is ignored over plain HTTP anyway
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name shop.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/shop.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/shop.example.com/privkey.pem;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+}</code></pre>
+
+        <p>Two things people get wrong here. First, <code>always</code> — without it the header is omitted on error responses, and a browser that first meets your site via a 502 learns nothing. Second, and this one has bitten me: Nginx's <code>add_header</code> does not inherit into any block that declares its own <code>add_header</code>. If a <code>location</code> sets a single header, it silently loses every header from the parent. Grep your config for <code>add_header</code> and check each block repeats what it needs.</p>
+
+        <p>The redirect deserves a note too. <code>$host</code> rather than a hardcoded hostname keeps the redirect on the same host, which the preload requirements demand. Redirecting <code>http://example.com</code> straight to <code>https://www.example.com</code> is a very common config and it fails preload validation, because the first hop changes host.</p>
+
+        <h3>Apache</h3>
+
+        <pre><code class="language-apache">&lt;VirtualHost *:80&gt;
+    ServerName shop.example.com
+    RewriteEngine On
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}$1 [R=301,L]
+&lt;/VirtualHost&gt;
+
+&lt;VirtualHost *:443&gt;
+    ServerName shop.example.com
+    SSLEngine on
+
+    &lt;IfModule mod_headers.c&gt;
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    &lt;/IfModule&gt;
+&lt;/VirtualHost&gt;</code></pre>
+
+        <p>Use <code>set</code>, not <code>append</code> or <code>add</code>. Duplicate HSTS headers with different values produce undefined behaviour across browsers, and the way you get duplicates is a plugin or an application framework adding its own on top of yours.</p>
+
+        <h3>Cloudflare and other CDNs</h3>
+
+        <p>Cloudflare exposes HSTS as a toggle with fields for each directive, which is convenient and slightly dangerous — the settings live in a dashboard rather than in version control, and the person who enables <code>includeSubDomains</code> at 11pm may not be the person who knows about the legacy subdomain. If you can express it as a Transform Rule or a Worker instead, do; at minimum, document it somewhere your team reads.</p>
+
+        <p>Watch for the origin sending its own HSTS header as well. Two sources, two values, and whichever wins is not always the one you intended. Pick one layer and turn it off at the other.</p>
+
+        <h3>Magento 2</h3>
+
+        <p>Magento has HTTPS settings under Stores → Configuration → General → Web, and enabling "Use Secure URLs" is necessary but unrelated to HSTS — it controls the URLs Magento generates, not the header. Set the header at the web server. If you must do it in the application, a response plugin works, but there is no good reason to spend an application request cycle on a static header.</p>
+
+        <p>What does need attention on Magento is the base URL configuration. If <code>web/unsecure/base_url</code> still points at <code>http://</code>, Magento will generate plain HTTP links in emails, in the sitemap, and in canonical tags. HSTS will save the browser but you'll have an SEO mess of HTTP canonicals pointing at a site that only speaks HTTPS. Set both base URLs to <code>https://</code> and flush the config cache.</p>
+
+        <h3>Shopify</h3>
+
+        <p>Shopify serves HSTS on its own domains and on custom domains once SSL is provisioned. You don't configure it and you can't preload a Shopify-hosted domain yourself. What you do own is making sure every link, redirect, and email template uses HTTPS, and that any subdomain you run outside Shopify — a blog on another host, a help centre, a status page — is HTTPS too, because a preloaded parent would take them down.</p>
+
+        <h2>6. Order of Operations Matters</h2>
+
+        <p>A subtlety that costs people a rollout: the header must be on the HTTPS response, and the HTTP request must redirect to HTTPS <em>on the same host</em>. Get the ordering wrong and the policy is never delivered.</p>
+
+        <p>The chain you want, for a customer typing the bare domain:</p>
+
+        <pre><code class="language-text">http://example.com/       → 301 → https://example.com/     (same host, HSTS applies from here)
+https://example.com/      → 301 → https://www.example.com/ (canonical host change, over TLS)</code></pre>
+
+        <p>The chain to avoid:</p>
+
+        <pre><code class="language-text">http://example.com/       → 301 → https://www.example.com/  (host changed on the insecure hop)</code></pre>
+
+        <p>The second is one redirect shorter and it is what most people configure, because it looks more efficient. It fails preload validation, and more importantly the apex domain never gets to deliver its own policy, so <code>http://example.com</code> stays a plaintext request forever.</p>
+
+        <p>Check yours:</p>
+
+        <pre><code class="language-bash">curl -sIL http://example.com/ | grep -Ei '^(HTTP/|location:|strict-transport)'</code></pre>
+
+        <h2>7. What Breaks</h2>
+
+        <p>Every incident I've seen traces back to <code>includeSubDomains</code> meeting a host nobody remembered. The specific casualties, so you can go look for yours:</p>
+
+        <p><strong>Internal tooling on subdomains.</strong> Jenkins, Grafana, a wiki, an old ticketing system — frequently on <code>tools.example.com</code> with a self-signed certificate that everyone has clicked through for years. After HSTS, that click-through is gone. The tool is unreachable until it gets a real certificate, and the people affected are your own engineers, mid-incident, at the worst possible moment.</p>
+
+        <p><strong>Development and staging.</strong> <code>dev.example.com</code> on plain HTTP, or with a certificate that expired in 2022. Same failure, and it will be discovered by a developer who then spends an hour convinced they broke their own machine.</p>
+
+        <p><strong>Devices.</strong> Printers, NAS boxes, cameras, warehouse scanners, and building management systems with self-signed certificates on internal hostnames. If those hostnames sit under a domain you preload, they become unreachable from any browser. I have seen this take out a warehouse's label printers on a Monday morning.</p>
+
+        <p><strong>Partner and legacy endpoints.</strong> An integration that still posts to <code>http://api.example.com</code>. Note that HSTS is a browser mechanism — a server-to-server client typically ignores it — so this often survives, but any browser-based partner tooling will not.</p>
+
+        <p><strong>Expired certificates.</strong> The one that hurts most because it's not a subdomain problem. Without HSTS, an expired cert gives visitors a warning they can bypass; you lose some traffic and fix it within the hour. With HSTS, an expired cert is a hard outage with no bypass for anyone. This raises the stakes on certificate renewal from "important" to "existential," and it is the reason the monitoring section below is not optional.</p>
+
+        <h2>8. Cookies, and the Half This Doesn't Solve</h2>
+
+        <p>HSTS stops the browser making plaintext requests. It does nothing about cookies that were already scoped badly, and on an ecommerce site the cookies are usually where the actual value sits. The two controls belong in the same piece of work.</p>
+
+        <p>Three flags, and all three matter:</p>
+
+        <p><strong><code>Secure</code></strong> tells the browser never to send this cookie over plain HTTP. Without it, that one pre-HSTS request in the opening of this article carries the session identifier in clear text. With HSTS deployed the request never happens, so the flag looks redundant — but it isn't, because HSTS is per-browser and per-device, and a customer on a brand-new phone has no policy yet. Set both.</p>
+
+        <p><strong><code>HttpOnly</code></strong> keeps JavaScript from reading the cookie. This is what limits the damage of an XSS bug or a compromised third-party tag from stealing sessions wholesale. Session cookies should always have it; cookies your front end genuinely needs to read should be a short, deliberate list you can name.</p>
+
+        <p><strong><code>SameSite</code></strong> controls whether the cookie rides along on cross-site requests. <code>Lax</code> is the sensible default and is what browsers now assume when the attribute is absent. <code>None</code> requires <code>Secure</code> and should be reserved for cookies that genuinely need to work in a third-party context — an embedded checkout iframe, for instance. Every time I see <code>SameSite=None</code> on a first-party session cookie, it was set to fix a symptom rather than a cause.</p>
+
+        <p>There's also a naming convention worth adopting, because it's enforced by the browser rather than by your discipline:</p>
+
+        <pre><code class="language-http">Set-Cookie: __Host-session=abc123; Path=/; Secure; HttpOnly; SameSite=Lax</code></pre>
+
+        <p>A cookie whose name begins <code>__Host-</code> is only accepted if it is <code>Secure</code>, has <code>Path=/</code>, and has no <code>Domain</code> attribute. That last constraint is the useful one: it means the cookie cannot be set by a subdomain, which closes the cookie-injection path that <code>includeSubDomains</code> exists to mitigate. If you can rename your session cookie, this is a genuine hardening step that costs one deploy.</p>
+
+        <p>Audit what you're actually sending. It takes a minute:</p>
+
+        <pre><code class="language-javascript">// Run on your storefront, logged in, and read the flags in DevTools →
+// Application → Cookies. Anything without Secure and HttpOnly needs a reason.
+document.cookie.split('; ').map(c =&gt; c.split('=')[0]).sort().forEach(n =&gt; console.log(n));
+// Note: HttpOnly cookies will NOT appear here — which is the point.
+// If your session cookie shows up in this list, it is readable by every
+// script on the page, including every third-party tag.</code></pre>
+
+        <p>That last comment is the test I actually use. If the session cookie appears in <code>document.cookie</code>, stop reading this article and go fix that first. It is a larger problem than the header you came here for.</p>
+
+        <h2>9. Does It Help SEO?</h2>
+
+        <p>Directly, no. There is no ranking boost for sending the header, and no crawler behaviour that changes because of it. Anyone selling HSTS as an SEO tactic is padding a deliverable.</p>
+
+        <p>Indirectly, three real effects, in order of how much they matter.</p>
+
+        <p><strong>You remove a redirect hop.</strong> For visitors arriving without a scheme — typed URLs, old links, some app referrals — the plain HTTP request and its 301 disappear entirely. That's typically 100 to 300ms off the start of the navigation, and it lands squarely in Time to First Byte, which feeds Largest Contentful Paint. It is not a large win, but it is a free one on a metric Google measures.</p>
+
+        <p><strong>You stop leaking a duplicate-content surface.</strong> Sites with a half-finished HTTPS migration often serve both schemes with 200s, and then argue with their canonical tags. HSTS forces the issue: browsers stop asking for HTTP, and you're pushed into making the redirects correct. The SEO benefit is really the discipline, not the header.</p>
+
+        <p><strong>HTTPS is a ranking signal.</strong> A light one, confirmed years ago, and HSTS is part of doing HTTPS properly. Treat it as hygiene rather than leverage.</p>
+
+        <p>The honest framing for a stakeholder conversation: this is a security control with a small performance side effect. If you need SEO justification to get it prioritised, use the TTFB argument, and be straight that it's worth single-digit milliseconds on most pages rather than promising a ranking change.</p>
+
+        <h2>10. The TLS Configuration That Should Come With It</h2>
+
+        <p>Committing to HTTPS-only raises the stakes on your TLS setup, because there is no longer a degraded path. A few things worth getting right at the same time.</p>
+
+        <p><strong>Protocol versions.</strong> TLS 1.2 and 1.3 only. TLS 1.0 and 1.1 are deprecated, browsers have removed support, and PCI DSS has required their retirement for years. If you still have them enabled it's usually because a config file was written in 2016 and never revisited.</p>
+
+        <pre><code class="language-nginx">ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+
+ssl_session_cache shared:SSL:10m;
+ssl_session_timeout 1d;
+ssl_session_tickets off;
+
+ssl_stapling on;
+ssl_stapling_verify on;
+resolver 1.1.1.1 8.8.8.8 valid=300s;</code></pre>
+
+        <p><code>ssl_prefer_server_ciphers off</code> looks wrong to anyone who learned this a decade ago, but with a modern cipher list it is now the recommended setting — clients generally know better than your config file which cipher their hardware accelerates. TLS 1.3 negotiates its own suites regardless.</p>
+
+        <p><strong>OCSP stapling</strong> is worth enabling for the latency alone. Without it the browser may make its own request to the certificate authority to check revocation, adding a round trip to a third party you don't control. Stapling folds the answer into your handshake.</p>
+
+        <p><strong>Certificate automation, and alerting on the automation.</strong> Once HSTS is live with a long <code>max-age</code>, an expired certificate is a total outage. ACME with automatic renewal is the baseline. What people miss is monitoring the renewal <em>job</em> rather than the expiry date — a broken cron is silent for sixty days and then catastrophic on day ninety. Alert when a renewal attempt fails, not when the certificate gets close to expiring.</p>
+
+        <p><strong>CAA records.</strong> A DNS record naming which certificate authorities may issue for your domain. It doesn't affect visitors and it takes two minutes, and it constrains the mis-issuance risk that HSTS explicitly does not address:</p>
+
+        <pre><code class="language-text">example.com.  IN  CAA  0 issue "letsencrypt.org"
+example.com.  IN  CAA  0 iodef "mailto:security@example.com"</code></pre>
+
+        <p>The <code>iodef</code> line asks CAs to report policy violations to you, which is a free early warning that someone attempted issuance you didn't authorise.</p>
+
+        <h2>11. Rolling It Out Without Breaking Anything</h2>
+
+        <p>The whole risk profile of this header comes from <code>max-age</code> being a commitment you can't retract. So ramp it. Each stage below stays in place long enough to expose problems while the blast radius is still small.</p>
+
+        <p><strong>Stage zero — inventory.</strong> Pull the Certificate Transparency list above. Add anything in your DNS zone that CT doesn't know about. For each host, record whether it serves HTTPS with a valid public certificate. This is the entire risk assessment, and skipping it is how outages happen.</p>
+
+        <p><strong>Stage one — five minutes, no subdomains.</strong></p>
+
+        <pre><code class="language-http">Strict-Transport-Security: max-age=300</code></pre>
+
+        <p>If something is badly wrong, it self-heals in five minutes. Watch error rates and support volume for a day.</p>
+
+        <p><strong>Stage two — one week, no subdomains.</strong></p>
+
+        <pre><code class="language-http">Strict-Transport-Security: max-age=604800</code></pre>
+
+        <p>Long enough that a real problem surfaces, short enough that waiting it out is survivable.</p>
+
+        <p><strong>Stage three — add subdomains, short age.</strong></p>
+
+        <pre><code class="language-http">Strict-Transport-Security: max-age=604800; includeSubDomains</code></pre>
+
+        <p>This is the dangerous stage and it is deliberately at a one-week age. Tell your internal teams before you ship it, in a channel they read, with a sentence explaining what to report. Most subdomain breakage is invisible from the outside — it's your own staff who hit it first.</p>
+
+        <p><strong>Stage four — a year.</strong></p>
+
+        <pre><code class="language-http">Strict-Transport-Security: max-age=31536000; includeSubDomains</code></pre>
+
+        <p>Sit here for at least a month before considering preload. Nothing is gained by rushing, and this is the last stage that is comfortably reversible.</p>
+
+        <p><strong>Stage five — preload, if and only if the business is sure.</strong> Two years, the <code>preload</code> directive, and a submission. Make this a decision with a named owner rather than an engineering detail, because its consequences outlast most people's tenure.</p>
+
+        <p>Between stages, verify against real browsers rather than only curl. Chrome's internal page at <code>chrome://net-internals/#hsts</code> lets you query a host, see the stored policy, and delete it — which is indispensable for testing, because once your own browser has cached a long <code>max-age</code> you'll be unable to reproduce a first-time visitor's experience without clearing it.</p>
+
+        <h2>12. Mixed Content and the Long Tail</h2>
+
+        <p>HSTS upgrades navigations to your own host. It does not fix a page that references <code>http://</code> resources on other hosts, and on a store with years of content behind it, those references are everywhere.</p>
+
+        <p>The usual hiding places, in the order I find them: product descriptions with hardcoded image URLs pasted in by a merchandiser years ago, CMS blocks and static blocks, email templates, the XML sitemap, canonical tags generated from a stale base URL, hardcoded links in theme files, and third-party widget snippets from vendors who never updated their documentation.</p>
+
+        <p>For a database-backed platform, go and look rather than assuming:</p>
+
+        <pre><code class="language-sql">-- Magento: content that still references plain HTTP on your own domain
+SELECT entity_id, LEFT(value, 120) AS snippet
+FROM catalog_product_entity_text
+WHERE value LIKE '%http://shop.example.com%'
+LIMIT 50;
+
+SELECT block_id, title
+FROM cms_block
+WHERE content LIKE '%http://%';
+
+SELECT page_id, title, identifier
+FROM cms_page
+WHERE content LIKE '%http://%';</code></pre>
+
+        <p>Take a backup, then rewrite them. And prefer protocol-relative-free absolute HTTPS URLs over the old <code>//example.com/image.jpg</code> trick — protocol-relative URLs were a workaround for a mixed-scheme era that no longer exists, and they break when content is consumed outside a browser, such as in an email client or a feed.</p>
+
+        <p>As a safety net while you work through the backlog, there's a CSP directive that rewrites insecure subresource requests on the fly:</p>
+
+        <pre><code class="language-http">Content-Security-Policy: upgrade-insecure-requests</code></pre>
+
+        <p>It tells the browser to try <code>https://</code> for any <code>http://</code> subresource before giving up. It is genuinely useful during a migration, and it is not a fix — if the remote host doesn't serve HTTPS, the resource fails anyway, and you've simply hidden the problem from yourself. Use it as scaffolding, with a ticket to remove it.</p>
+
+        <p>To find what's actually failing in the wild rather than what you think is failing, collect reports:</p>
+
+        <pre><code class="language-http">Content-Security-Policy-Report-Only: default-src https: 'unsafe-inline' 'unsafe-eval'; report-uri /_csp-report</code></pre>
+
+        <p>Run that for a fortnight before you tighten anything. Real customer traffic hits pages your QA never opens — old campaign landing pages, deep category filters, order histories with products discontinued in 2018 — and those are precisely the pages with the stale URLs.</p>
+
+        <h2>13. Verifying and Monitoring</h2>
+
+        <p>A quick check of the header and the redirect chain:</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+set -uo pipefail
+host="${1:?usage: hsts-check.sh example.com}"
+
+echo "— redirect chain from plain HTTP"
+curl -sIL "http://$host/" | grep -Ei '^(HTTP/|location:)'
+
+echo "— header on HTTPS"
+curl -sI "https://$host/" | grep -i strict-transport-security \
+  || echo "  MISSING"
+
+echo "— header on an error response (should still be present)"
+curl -sI "https://$host/definitely-not-a-page" | grep -i strict-transport-security \
+  || echo "  MISSING on error responses — add 'always' in Nginx"
+
+echo "— certificate expiry"
+echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null \
+  | openssl x509 -noout -enddate</code></pre>
+
+        <p>That last check is the one to automate and alert on. Once HSTS is deployed with a long <code>max-age</code>, certificate expiry is no longer a degradation, it's an outage with no workaround. Alert at thirty days, again at seven, and page someone at two. If you're on ACME with automated renewal, alert on the renewal job failing rather than only on the expiry date — by the time the date is close, the automation has already been broken for weeks.</p>
+
+        <p>Add the header check to your deploy smoke tests. Headers regress silently: a CDN configuration change, a new <code>location</code> block, a platform upgrade. Nothing in a normal deploy tells you the policy stopped being sent, and browsers that already hold it won't notice for a year — so the failure is invisible right up until the day it isn't.</p>
+
+        <h2>14. A Migration, Start to Finish</h2>
+
+        <p>A janitorial supplies retailer, roughly £14m online, Magento 2 behind Cloudflare, one corporate domain shared with the rest of the business. They wanted preload because a penetration test had flagged its absence.</p>
+
+        <p><strong>The inventory.</strong> CT logs returned 31 hostnames. Their documentation listed nine. Of the 22 surprises: four were long-dead campaign microsites, three were staging environments from a 2019 replatform, two were partner-hosted subdomains for a returns portal and a loyalty programme, one was the warehouse's label printer interface, and the rest were dormant. Six of the 31 could not serve valid HTTPS.</p>
+
+        <p><strong>The argument.</strong> The returns portal was the blocker. It was hosted by a third party on <code>returns.example.com</code> with a certificate that had lapsed twice in the previous year, and the vendor's response to "please keep this valid forever" was not reassuring. Preloading the corporate domain would have made every certificate lapse at that vendor a hard outage for a customer-facing service.</p>
+
+        <p><strong>What we did instead.</strong> Stages zero through four on the corporate domain — HSTS with <code>includeSubDomains</code> at a one-year age, no preload. That required getting the six broken hosts onto valid certificates, which took three weeks and mostly consisted of decommissioning four of them. The staging environments moved to an internal-only domain, which they should have been on anyway.</p>
+
+        <p><strong>The preload question.</strong> They didn't preload the corporate domain, and I'd make the same call again. The storefront's own vanity domain, used for campaigns and with nothing else under it, was preloaded instead. That gave them the pen-test tick on the domain that mattered and left the messy parent alone.</p>
+
+        <p><strong>What went wrong.</strong> Stage three, exactly as predicted, and not on a customer-facing host. The label printer went unreachable and the warehouse escalated within about forty minutes. We'd announced the change in an engineering channel that warehouse operations did not read. A one-week <code>max-age</code> meant we could have simply waited it out; in practice the printer got a proper certificate the same afternoon. The lesson was about who gets told, not about the header.</p>
+
+        <p><strong>The measurable outcome.</strong> TTFB for sessions starting from a typed URL improved by about 180ms on median, which is real but small — those sessions were roughly 6% of traffic. The security outcome was the point, and the inventory that fell out of it was arguably worth more than the header: they decommissioned nine hostnames nobody had looked at in years, two of which were running unpatched software.</p>
+
+        <h2>15. The Rest of the Header Set</h2>
+
+        <p>HSTS rarely ships alone, and the headers that belong beside it are cheap enough that there's no reason to make them a separate project. A defensible baseline for a storefront:</p>
+
+        <pre><code class="language-nginx">add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=(self)" always;
+add_header Content-Security-Policy "frame-ancestors 'self'" always;</code></pre>
+
+        <p><code>X-Content-Type-Options: nosniff</code> stops the browser second-guessing your <code>Content-Type</code>. The attack it prevents is a user-uploaded file that the server labels as an image being sniffed as HTML and executed — which matters on any site that lets customers upload anything, and most do somewhere.</p>
+
+        <p><code>frame-ancestors 'self'</code> is the modern replacement for <code>X-Frame-Options</code>, and stops your pages being framed by someone else's site. On a checkout, that's the clickjacking defence. Keep <code>X-Frame-Options: SAMEORIGIN</code> alongside it only if you still care about very old browsers; otherwise the CSP directive is the one that counts.</p>
+
+        <p><code>Permissions-Policy</code> disables browser capabilities you don't use. The value above is a starting point rather than a recommendation — audit what your site actually needs, because <code>payment=(self)</code> matters if you use the Payment Request API and blocking it silently breaks Apple Pay and Google Pay buttons. That is a mistake worth avoiding in the same week you're already changing headers, because it presents as a conversion drop with no obvious cause.</p>
+
+        <p>Notice what is not in that list: a full <code>Content-Security-Policy</code> with a script allowlist. That one is a project rather than a line, and trying to ship it in the same change as HSTS means that when something breaks you won't know which header did it. Do HSTS, get it stable, then start CSP in report-only mode. Sequencing security headers one at a time is slower and it is the only way to keep the debugging tractable.</p>
+
+        <p>One operational note that applies to the whole set: put them in one place. Headers scattered across a CDN dashboard, a web server config, and application middleware are impossible to reason about, and duplicates with conflicting values are worse than absences. Pick the layer, own it there, and turn the others off.</p>
+
+        <h2>16. Questions People Ask</h2>
+
+        <p><strong>"Can I test HSTS without committing?"</strong> Yes — that's what <code>max-age=300</code> is for. Five minutes of exposure, and any mistake evaporates while you're still watching the dashboard. Never test with a long age on the theory that you'll change it later.</p>
+
+        <p><strong>"How do I undo it?"</strong> Set <code>max-age=0</code> and keep serving it over HTTPS. Browsers that visit again pick up the new value and drop the policy. Browsers that don't visit keep the old one until it expires. If you're preloaded, this doesn't help — removal from the list is a separate, months-long process.</p>
+
+        <p><strong>"A subdomain broke and I need it back now."</strong> Your options are to give that host a valid certificate — almost always the right answer and usually achievable within the hour with ACME — or to wait out the <code>max-age</code>. Individual users can clear the entry via <code>chrome://net-internals/#hsts</code>, which is a workable stopgap for a handful of internal staff and useless for customers.</p>
+
+        <p><strong>"Does it protect against a compromised certificate authority?"</strong> No. That was HPKP's job, and HPKP was removed from browsers because it was too easy to permanently break your own site with it. Certificate Transparency and CAA records are the current answers to that problem. HSTS only guarantees that the connection is encrypted, not that the certificate is one you'd have chosen.</p>
+
+        <p><strong>"What about APIs and non-browser clients?"</strong> HSTS is browser behaviour. A curl script, a mobile app's HTTP client, or a partner's server-side integration generally ignores it. Don't rely on HSTS to force those clients onto HTTPS — disable plain HTTP at the server for API hostnames if you need that guarantee.</p>
+
+        <p><strong>"Should <code>www</code> and the apex both send it?"</strong> Yes. They're distinct hosts as far as HSTS is concerned, and both should carry the policy. With <code>includeSubDomains</code> on the apex, <code>www</code> is covered — but sending it from both is belt and braces and costs nothing.</p>
+
+        <p><strong>"Our security scanner says it's missing on some pages."</strong> Nginx inheritance, nine times in ten. A <code>location</code> block set one header and silently dropped the rest. Check the specific URL the scanner tested, and check a 404 while you're there.</p>
+
+        <h2>17. The Part That Isn't About the Header</h2>
+
+        <p>Adding <code>Strict-Transport-Security</code> takes one line and about a minute. If your domain is simple — a dedicated storefront domain, HTTPS everywhere, no forgotten hosts — go and add it with a short <code>max-age</code> today, ramp it over a few weeks, and you're done.</p>
+
+        <p>The reason this article is long is that the header is not really the work. The work is finding out what actually exists under your domain, which for most organisations is a genuinely uncomfortable exercise. The retailer in the case study found nine hostnames nobody owned and two running software with known vulnerabilities. They went looking because HSTS forced them to. That inventory was worth more than the header, and they would never have done it otherwise.</p>
+
+        <p>So treat the ramp as the deliverable and the header as the by-product. Enumerate your hosts. Get certificates onto the ones that matter, decommission the ones that don't, and find out who owns the rest. Then turn the policy on, slowly, and let the short <code>max-age</code> catch whatever you missed — because you will have missed something, and the entire design of the rollout above exists to make that survivable.</p>
+
+        <div class="blog-suggested-reads">
+          <h3>Suggested &amp; Related Reading</h3>
+          <ul>
+            <li><a href="/blog/secure-http-headers/">Configuring Secure HTTP Headers for E-Commerce</a></li>
+          </ul>
+        </div>
+      </article>
+    </section>
   </main>
+
+
+<footer class="horizon-footer">
+    <div class="container">
+      <div class="horizon-grid">
+        <div>
+          <p class="rune">Kenneth D'Silva</p>
+          <p class="mt-2">Magento and Shopify specialist. Ecommerce, CMS, ERP, SEO, and custom web systems, available globally.</p>
+        </div>
+        <div class="horizon-col">
+          <b>Pages</b>
+          <a href="/services/">Services</a>
+          <a href="/work/">Work</a>
+          <a href="/about/">About</a>
+          <a href="/blog/">Blog</a>
+          <a href="/contact/">Contact</a>
+        </div>
+        <div class="horizon-col">
+          <b>Connect</b>
+          <a href="https://github.com/Modracx" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://linkedin.com/in/kenneth-dsilva-kd" target="_blank" rel="noopener">LinkedIn</a>
+          <a href="mailto:kd.xtrm@gmail.com">Email</a>
+        </div>
+      </div>
+      <div class="horizon-base">
+        <p>© 2026 Kenneth D'Silva — MODRACX. All rights reserved. • <button type="button" class="modracx-cookie-trigger">Cookie Preferences</button></p>
+        <p class="beacon">Available for projects</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 
 </html>

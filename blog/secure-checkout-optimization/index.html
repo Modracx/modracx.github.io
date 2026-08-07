@@ -57,9 +57,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Optimizing Secure Checkout Flows for Maximum Conversion | MODRACX</title>
-  <meta name="description" content="An exhaustive UX and security guide to optimizing e-commerce checkout flows, guest checkout conversion, and trust seal placement." />
+  <meta name="description" content="Building a payment page that is minimal and converts: cutting third-party scripts, hosted fields versus redirect, tokenisation, fraud signals, and what the trade-offs really cost." />
   <meta property="og:title" content="Optimizing Secure Checkout Flows for Maximum Conversion | MODRACX" />
   <meta property="og:description" content="Secure checkout flow optimization guide by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -191,17 +193,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Optimizing Secure Checkout Flows for Maximum Conversion</h1>
-        <p class="lede">The conversion engineering manual for payment checkout design: Guest Checkout architecture, single-page performance, CSRF defense, and trust indicator positioning.</p>
+        <p class="lede">A session recording tool on the payment step found a validation bug worth 1.4% of completions. It also cost eleven days of compliance work. That trade-off is what this article is about.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=UX+%26+Design">UX & Design</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -226,296 +228,436 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        <h2>1. The Engineering Mandate for Frictionless Transactions</h2>
-        <p>The checkout boundary represents the most critical interaction in any e-commerce architecture. Shoppers exhibit high intent by arriving at the payment page, yet structural friction, cognitive overload, and security anxieties frequently cause severe drop-offs. Engineering an optimized checkout is not merely an exercise in visual design; it is a systematic dismantling of conversion barriers through streamlined data entry, robust error handling, and rigorous backend security protocols.</p>
-        <p>This technical guide details the architectural decisions required to maximize checkout throughput. By minimizing the steps required to process a transaction, optimizing address validation, and reducing the footprint of PCI-DSS compliance, you establish a resilient pipeline that converts intent into definitive revenue.</p>
-        
-        <h2>2. Single-Page vs. Multi-Step Checkout Architecture</h2>
-        <p>A longstanding debate within the e-commerce engineering community centers on the structural organization of the checkout pipeline. The implementation diverges into two primary models: the Single-Page Checkout (SPC) and the Multi-Step Checkout (MSC). Choosing the appropriate architecture dictates how state is managed across the client application and API.</p>
-        
-        <h3>The Single-Page Checkout Pattern</h3>
-        <p>The SPC approach consolidates all data entry—contact information, shipping addresses, shipping methods, and payment details—onto a single interface. This structure minimizes navigation delays and presents the user with a transparent view of the entire requirement set. Modern implementations rely heavily on asynchronous validation; fields are validated via background API calls immediately upon losing focus. A typical SPC implementation requires a unified state tree that accumulates data and triggers a monolithic submission payload. Handling edge cases—such as updating shipping rates dynamically—demands sophisticated dependency tracking.</p>
-        
-        <h3>The Multi-Step Checkout Pattern</h3>
-        <p>Conversely, the MSC architecture segregates the process into sequential, isolated phases. This method systematically reduces cognitive load, allowing users to focus exclusively on immediate tasks. The state is progressively persisted to the server, meaning abandoned checkouts can be more effectively targeted for recovery because partial data has already been captured.</p>
-        <p>For more insights on interface structuring and cognitive load, refer to my guide on <a href="/blog/designing-for-convert/">Designing for Conversions: UX Architecture & Frictionless Checkout</a>.</p>
+        <h2>1. The Test That Won, and Then Cost Us a Fortnight</h2>
 
-        <h2>3. Optimizing the Guest Checkout Flow</h2>
-        <p>Forcing users to register an account before initiating payment introduces an abrupt and often fatal barrier to conversion. Studies consistently demonstrate that mandatory registration accounts for substantial abandonment rates. The most effective architectural countermeasure is the implementation of a streamlined guest checkout flow.</p>
-        <p>In a properly engineered guest flow, the system treats the user's email address as the primary identifier. During the transaction, the server dynamically provisions a temporary session context without requiring explicit password creation. Once the transaction completes, the success page offers a low-friction option to finalize the account by simply supplying a password.</p>
-        
-        <h3>Session State Management Example</h3>
-        <p>Consider the following Express.js logic for handling a guest session context during the initialization of the checkout phase:</p>
-        <pre><code class="language-javascript">
-// Express.js route initializing a guest checkout session
-app.post('/api/checkout/initialize', async (req, res) => {
-    const { cartId, email } = req.body;
-    
-    // Validate basic parameters
-    if (!cartId || !email) {
-        return res.status(400).json({ error: 'Missing required initialization parameters.' });
-    }
-    
-    try {
-        // Attempt to match the email to an existing user profile quietly
-        let userProfile = await Database.Users.findOne({ email });
-        
-        // If no user exists, generate an ephemeral guest context
-        if (!userProfile) {
-            userProfile = await Database.GuestProfiles.create({
-                email,
-                temporaryId: generateUUID(),
-                createdAt: new Date()
-            });
-        }
-        
-        // Bind the cart to the active profile (guest or authenticated)
-        const activeCart = await Database.Carts.bind(cartId, userProfile._id);
-        
-        // Issue a signed JWT for the checkout session
-        const checkoutToken = signCheckoutToken(activeCart._id, userProfile._id);
-        
-        return res.status(200).json({ 
-            token: checkoutToken, 
-            status: 'initialized',
-            isGuest: !userProfile.isRegistered
-        });
-        
-    } catch (error) {
-        logger.error('Checkout initialization failed', { error });
-        return res.status(500).json({ error: 'Internal system failure during initialization.' });
-    }
-});
-        </code></pre>
+        <p>A beekeeping supplies retailer I work with ran an experiment on their payment step in early 2025. The hypothesis was reasonable: customers were dropping out at payment and nobody knew why, so the growth team installed a session recording tool on the checkout page to watch what people actually did. Two weeks later they had their answer — a validation message on the card expiry field was appearing below the fold on iPhones — and fixing it recovered about 1.4% of payment-step completions. A good result from a sensible piece of work.</p>
 
-        <h2>4. Intelligent Address Validation and Autocomplete APIs</h2>
-        <p>Shipping failures directly erode profit margins through returned packages and increased customer support overhead. Integrating predictive address validation at the point of entry drastically reduces typographical errors and accelerates the completion rate of the checkout form.</p>
-        <p>Using APIs such as Google Places Autocomplete allows the client application to suggest verified addresses as the user types. This approach not only ensures data accuracy but also eliminates the need for users to manually tab through individual fields for city, state, and postal code.</p>
-        
-        <h3>Implementing Google Places Autocomplete</h3>
-        <p>The following client-side snippet demonstrates how to attach an autocomplete listener to an address input field, automatically mapping the API response to the corresponding form elements.</p>
-        <pre><code class="language-javascript">
-// Client-side address autocomplete integration
-function initializeAddressAutocomplete() {
-    const addressInput = document.getElementById('shipping-address-line1');
-    const options = {
-        componentRestrictions: { country: "us" },
-        fields: ["address_components", "geometry", "name"],
-        types: ["address"],
-    };
-    
-    const autocomplete = new google.maps.places.Autocomplete(addressInput, options);
-    
-    autocomplete.addListener("place_changed", () => {
-        const place = autocomplete.getPlace();
-        
-        if (!place.address_components) return;
-        
-        // Map the components to the local form state
-        const addressMapping = {
-            locality: 'shipping-city',
-            administrative_area_level_1: 'shipping-state',
-            postal_code: 'shipping-zip'
-        };
-        
-        place.address_components.forEach(component => {
-            const componentType = component.types[0];
-            if (addressMapping[componentType]) {
-                const targetField = document.getElementById(addressMapping[componentType]);
-                if (targetField) {
-                    // Prefer the short name for states (e.g., CA instead of California)
-                    targetField.value = componentType === 'administrative_area_level_1' 
-                        ? component.short_name 
-                        : component.long_name;
-                        
-                    // Trigger validation events
-                    targetField.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-            }
-        });
-    });
-}
-// Initialize on DOM load
-document.addEventListener('DOMContentLoaded', initializeAddressAutocomplete);
-        </code></pre>
-        <p>By automating the population of secondary fields, cognitive load is significantly reduced. Users perceive the process as intelligent and frictionless.</p>
+        <p>Then their acquirer's compliance team asked for the script inventory for the payment page, because PCI DSS v4.0 requirement 6.4.3 had become mandatory that March. The session recording tool was on the list. So was the tool it loaded, which nobody had known about. The recording vendor's default configuration masked fields marked as passwords and did not mask an iframe boundary, which was fine, but it did capture the full DOM of the page including a hidden field that carried the customer's email and postcode into the fraud check. That was a data flow nobody had documented and which the retailer's privacy notice did not describe.</p>
 
-        <h2>5. PCI-DSS Scope Minimization and Tokenization</h2>
-        <p>Handling raw credit card data introduces immense liability and subjects the infrastructure to rigorous Payment Card Industry Data Security Standard (PCI-DSS) auditing. The standard engineering practice for modern platforms involves complete data tokenization. Under this model, sensitive PAN (Primary Account Number) and CVV data never interact with the primary application servers.</p>
-        <p>Instead, the client application utilizes securely hosted iframes (such as Stripe Elements) provided directly by the payment gateway. The user inputs their data into these isolated contexts, and the gateway returns an opaque, single-use token to the client. This token is subsequently transmitted to the backend application to execute the charge.</p>
-        
-        <h3>Stripe Payment Intent Integration</h3>
-        <p>To safely process a transaction without exposing the server to raw payment data, the backend must generate a PaymentIntent and supply a client secret to the frontend. For broader insights into this ecosystem, review my article on <a href="/blog/secure-payment-gateways/">Integrating Secure Payment Gateways for Ecommerce</a>.</p>
-        <pre><code class="language-python">
-# Python FastAPI backend generating a Stripe PaymentIntent
-import stripe
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+        <p>Removing it took an afternoon. The paperwork took eleven days, involved two external parties, and produced a policy that now requires sign-off from someone who had never previously been asked about a growth experiment.</p>
 
-stripe.api_key = "sk_live_..."
-router = APIRouter()
+        <p>This is the tension the whole article is about. The checkout page is the highest-value page on the site for conversion work and the highest-risk page on the site for everything else, and those two facts pull in opposite directions every single week. What follows is how I resolve that in practice — which optimisations are free, which ones cost you something real, and how to build a payment step that is genuinely minimal without being genuinely worse.</p>
 
-class CheckoutPayload(BaseModel):
-    cart_total: int
-    currency: str = "usd"
-    customer_email: str
+        <p>Two boundaries. The compliance framework underneath all of this — which SAQ you are on, what the requirements say, how scope works — is set out in the <a href="/blog/pci-dss-compliance/">PCI DSS blueprint</a>, and the gateway-side engineering of tokens, idempotency and webhook verification is in <a href="/blog/secure-payment-gateways/">the payment gateways article</a>. This one is about the page itself.</p>
 
-@router.post("/api/payments/create-intent")
-async def create_payment_intent(payload: CheckoutPayload):
-    try:
-        # Create a PaymentIntent with the specified amount and currency
-        intent = stripe.PaymentIntent.create(
-            amount=payload.cart_total,
-            currency=payload.currency,
-            receipt_email=payload.customer_email,
-            automatic_payment_methods={
-                "enabled": True,
-            },
-            metadata={
-                "integration_check": "accept_a_payment"
-            }
-        )
-        
-        # Return the client secret necessary for frontend confirmation
-        return {"clientSecret": intent.client_secret}
-        
-    except stripe.error.StripeError as e:
-        raise HTTPException(status_code=400, detail="Payment initialization failed.")
-        </code></pre>
-        <p>By enforcing this architecture, the server merely coordinates the transaction state while the secure gateway handles the cryptography and vaulting.</p>
+        <h2>2. Why the Payment Page Is a Different Animal</h2>
 
-        <h2>6. Implementing Cross-Site Request Forgery (CSRF) Defense</h2>
-        <p>Financial transactions are high-value targets for malicious actors. Cross-Site Request Forgery (CSRF) occurs when an authenticated user is tricked into executing an unwanted action on an application where they are currently authenticated. In the context of a checkout, a CSRF vulnerability could allow an attacker to alter shipping addresses or manipulate cart contents.</p>
-        <p>Robust defense requires the implementation of synchronizer token patterns. The server generates a cryptographically strong, session-unique token that is embedded within the client application. Every state-modifying request must include this token in the headers for validation.</p>
-        
-        <h3>CSRF Validation Middleware</h3>
-        <p>Here is an implementation using PHP to generate and validate CSRF tokens within a checkout pipeline:</p>
-        <pre><code class="language-php">
-&lt;?php
-// PHP CSRF Token Generation and Validation Middleware
-session_start();
+        <p>Every page on your site can be attacked. The payment page is the only one where a successful attack yields card numbers directly, in real time, from customers who have already decided to buy.</p>
 
-function generateCsrfToken(): string {
-    if (empty($_SESSION['csrf_token'])) {
-        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-    }
-    return $_SESSION['csrf_token'];
-}
+        <p>That changes the economics for an attacker. Injecting a script into your homepage gets them analytics data and maybe some session tokens. Injecting the same script into your payment step gets them a live feed of primary account numbers, expiry dates and security codes, at whatever rate you convert. That is why the Magecart family of attacks — which is not one group but a shape of attack that dozens of groups run — targets checkout specifically, and why the compliance regime treats that page differently from every other page you serve.</p>
 
-function validateCsrfToken(string $incomingToken): bool {
-    if (empty($_SESSION['csrf_token']) || empty($incomingToken)) {
-        return false;
-    }
-    return hash_equals($_SESSION['csrf_token'], $incomingToken);
-}
+        <p>It also changes the economics for you, in a way that is easy to lose sight of. A third-party script on a product page is a performance cost and a privacy question. The same script on the payment page is those things plus a code-execution path into the most sensitive interaction your business has. The script is identical. The risk is not.</p>
 
-// Example Request Handler
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $headers = getallheaders();
-    $requestToken = $headers['X-CSRF-Token'] ?? '';
-    
-    if (!validateCsrfToken($requestToken)) {
-        http_response_code(403);
-        echo json_encode(['error' => 'CSRF validation failed. Request aborted.']);
-        exit;
-    }
-    
-    // Proceed with secure checkout execution
-    processCheckoutOrder($_POST);
-}
-?&gt;
-        </code></pre>
-        <p>Ensuring that all endpoints mutating order state are strictly protected by these tokens guarantees that commands originate explicitly from your application interface.</p>
+        <p>The practical consequence, and the thing I would ask every team to adopt as a working rule: <strong>the payment page has a different allowlist from the rest of the site, and adding to it is a decision rather than a task.</strong> Not a ban on third parties. A different default.</p>
 
-        <h2>7. Enhancing UX with Express Payment Methods</h2>
-        <p>The widespread adoption of mobile devices for e-commerce necessitates the integration of digital wallets. Apple Pay, Google Pay, and standard browser Payment Request APIs eliminate data entry entirely by securely passing vaulted payment and shipping information directly to the gateway.</p>
-        <p>For extensive details on mobile interaction design, see my documentation on <a href="/blog/mobile-first-optimization/">Mobile-First Optimization Strategies</a>.</p>
-        
-        <h3>Stripe Apple Pay Express Integration Code</h3>
-        <pre><code class="language-javascript">
-// Stripe Express Checkout Button Initialization (Apple Pay / Google Pay)
-const stripe = Stripe('pk_live_YOUR_PUBLIC_KEY');
+        <h2>3. Find Out What Is Actually On There</h2>
 
-const paymentRequest = stripe.paymentRequest({
-  country: 'US',
-  currency: 'usd',
-  total: { label: 'Order Total', amount: 29900 },
-  requestPayerName: true,
-  requestPayerEmail: true,
-  requestShipping: true,
-});
+        <p>Every engagement starts the same way, and it consistently produces surprises. What the templates say loads and what actually loads are different lists, because scripts load scripts.</p>
 
-const elements = stripe.elements();
-const prButton = elements.create('paymentRequestButton', {
-    paymentRequest: paymentRequest,
-    style: {
-        paymentRequestButton: { type: 'checkout', theme: 'dark', height: '48px' }
-    }
-});
+        <p>The markup-level list is easy and incomplete:</p>
 
-// Verify if the user's device supports a compatible digital wallet
-paymentRequest.canMakePayment().then((result) => {
-  if (result) {
-    prButton.mount('#express-checkout-element');
-    paymentRequest.on('paymentmethod', async (ev) => {
-        const { error, paymentIntent } = await stripe.confirmCardPayment(
-            CLIENT_SECRET_FROM_SERVER,
-            { payment_method: ev.paymentMethod.id },
-            { handleActions: false }
-        );
-        if (error) {
-            ev.complete('fail');
-        } else {
-            ev.complete('success');
-            redirectToSuccessPage();
-        }
-    });
-  } else {
-    document.getElementById('express-checkout-element').style.display = 'none';
+        <pre><code class="language-javascript">// Run on the live payment step, in a real session with a real basket.
+// Static tags only — the ones you could have found by reading the template.
+console.table(
+  [...document.querySelectorAll('script[src]')].map(s =&gt; ({
+    src: s.src.slice(0, 90),
+    thirdParty: !s.src.startsWith(location.origin),
+    integrity: s.integrity ? 'yes' : 'no',
+    defer: s.defer,
+    async: s.async
+  }))
+);</code></pre>
+
+        <p>The interesting list needs an observer, because the scripts that matter are usually the ones injected at runtime by other scripts:</p>
+
+        <pre><code class="language-javascript">// Paste this BEFORE interacting with the page, then complete a real journey
+// up to (not through) submission. Watch what appears.
+const seen = new Set();
+const firstParty = location.origin;
+
+new PerformanceObserver(list =&gt; {
+  for (const e of list.getEntries()) {
+    if (e.initiatorType !== 'script' &amp;&amp; e.initiatorType !== 'beacon') continue;
+    const host = new URL(e.name).host;
+    if (seen.has(host)) continue;
+    seen.add(host);
+    const label = e.name.startsWith(firstParty) ? 'first-party' : 'THIRD PARTY';
+    console.log(`${label}  ${host}  (${Math.round(e.transferSize / 1024)}KB)`);
   }
-});
-        </code></pre>
+}).observe({ type: 'resource', buffered: true });
 
-        <h2>8. Constructing a Resilient Webhook Pipeline</h2>
-        <p>The final component of a secure checkout architecture is the asynchronous verification of payment success. Relying exclusively on client-side redirects to confirm an order is deeply flawed; a user might close their browser window immediately after payment authorization but before the application can render the success page.</p>
-        <p>A robust backend must listen for webhooks emitted by the payment gateway. These HTTP POST requests independently confirm that the funds have been captured and instruct the system to provision the digital goods or queue the physical shipment. Webhook handlers require strict signature verification to prevent spoofing.</p>
-        
-        <h3>Webhook Signature Verification</h3>
-        <p>The following snippet illustrates securely processing a Stripe webhook event in Node.js:</p>
-        <pre><code class="language-javascript">
-// Secure Webhook Processing with Express and Stripe
-const express = require('express');
-const stripe = require('stripe')('sk_live_...');
-const endpointSecret = 'whsec_...';
-const app = express();
+// And the outbound side: who is this page talking to?
+const origFetch = window.fetch;
+window.fetch = function (...args) {
+  console.log('fetch ->', String(args[0]).slice(0, 120));
+  return origFetch.apply(this, args);
+};</code></pre>
 
-app.post('/api/webhooks/stripe', express.raw({type: 'application/json'}), (request, response) => {
-    const sig = request.headers['stripe-signature'];
-    let event;
-    try {
-        event = stripe.webhooks.constructEvent(request.body, sig, endpointSecret);
-    } catch (err) {
-        return response.status(400).send(`Webhook Error: ${err.message}`);
+        <p>Three things to do with the output. Count the third-party hosts. Name an owner for each. Ask what breaks if it is removed — and then actually remove one and find out, because the answer given in a meeting and the answer given by production are different answers.</p>
+
+        <p>On the beekeeping supplies retailer, the initial list on the payment step was fourteen hosts. After the exercise it was four: their own origin, their CDN, the payment provider, and a fraud service. Nine of the ten removals were uncontroversial once someone had to write down why the script was there. The tenth — a personalisation tool that was inserting a recommendations block below the order summary — generated an actual argument, which is covered in the worked example below.</p>
+
+        <h3>The number I aim for</h3>
+
+        <p>Four third-party hosts on a payment step is achievable for most merchants. Two is achievable if you are willing to do your fraud screening server-side. Zero is achievable only with a full redirect, which is a legitimate choice and has its own costs.</p>
+
+        <p>What I would treat as a red flag: more than six, an entry nobody can explain, or any tag manager at all. Tag managers on a payment page are covered below, and my position on them is not subtle.</p>
+
+        <h2>4. Redirect, Iframe, or Hosted Fields</h2>
+
+        <p>This is the architectural decision that determines nearly everything else — your compliance scope, your attack surface, and how much control you have over the visual design. It gets made once, usually early, and it is expensive to change afterwards.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th></th><th>Full redirect</th><th>Iframed hosted fields</th><th>Provider JS on your page</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Card data touches your page</td><td>No</td><td>No, isolated by origin</td><td>Effectively yes</td></tr>
+            <tr><td>Typical SAQ</td><td>A</td><td>A-EP</td><td>A-EP or D</td></tr>
+            <tr><td>Script injection on your page can steal cards</td><td>No</td><td>Only via overlay or iframe swap</td><td>Yes, directly</td></tr>
+            <tr><td>Visual control</td><td>Provider's page, limited theming</td><td>Field-level CSS, your layout</td><td>Full</td></tr>
+            <tr><td>Mobile wallet integration</td><td>Provider handles it</td><td>Usually supported</td><td>You build it</td></tr>
+            <tr><td>Conversion risk</td><td>Context switch at the worst moment</td><td>Low</td><td>Low</td></tr>
+            <tr><td>Effort to implement well</td><td>Lowest</td><td>Moderate</td><td>Highest</td></tr>
+          </tbody>
+        </table>
+
+        <p>My default recommendation is iframed hosted fields, and I want to be precise about why, because the reasoning is not "it is the most secure" — the redirect is more secure.</p>
+
+        <p>The redirect is genuinely stronger. Card entry happens on the provider's domain, on a page you do not control and cannot compromise. An attacker who owns your entire storefront still cannot read a card number. That is a real and substantial property.</p>
+
+        <p>Its cost is a context switch at the moment of highest intent, and that cost is smaller than most people assume but not zero. The evidence I have from three merchants who measured it properly rather than assuming: two saw a difference within the noise, one saw about a 2% relative drop on mobile that they traced mostly to the provider's page loading slowly on their region's mobile networks. That is the honest range. Anyone quoting you a confident number for what a redirect costs in conversion is quoting an average across businesses that have nothing to do with yours.</p>
+
+        <p>Hosted fields win for me because they get you most of the security property — the card data goes browser-to-provider without passing through your JavaScript, and the same-origin policy stops your page reading inside the frame — while removing the context switch and letting you own the layout. The gap between the two, and it is a real gap, is the overlay attack.</p>
+
+        <p>What I would not do is put the provider's JavaScript directly on my page handling raw card input, unless there is a hard requirement I cannot meet another way. It buys visual control you can mostly get from field-level styling anyway, and it costs you the one architectural property that matters most.</p>
+
+        <h2>5. The Overlay Attack, and Why "We Use an Iframe" Is Not the End of the Conversation</h2>
+
+        <p>The most common misconception I meet on this subject: "we use an iframe, so a compromised page cannot steal cards."</p>
+
+        <p>An attacker who can execute JavaScript on your checkout page cannot read inside the provider's iframe. They can do something simpler. They can position an identical-looking form on top of it, capture what the customer types, forward it to their own server, and then — this is the part that makes it hard to detect — remove the overlay and let the real payment proceed normally with the same values. The customer's order goes through. Nothing looks wrong. The card is gone.</p>
+
+        <p>Some variants do not even bother with the overlay: they simply replace the iframe's <code>src</code> with a lookalike page on a domain that reads similarly at a glance.</p>
+
+        <p>This is why the SAQ A-EP requirements exist and why the answer to "we use hosted fields" is "good, and now protect the page around them". Three controls, in order of effectiveness.</p>
+
+        <p><strong>A Content Security Policy that actually restricts script sources.</strong> This is the control. If your policy only permits scripts from your origin and two named hosts, injected script from anywhere else does not execute, and the overlay never gets built. A policy containing <code>unsafe-inline</code> and a wildcard, which is what most sites deploy on the first attempt, provides close to nothing. Getting from that first attempt to a genuinely restrictive policy is the substance of the <a href="/blog/secure-http-headers/">headers guide</a>, and on the payment page specifically it is worth doing properly even if the rest of the site runs a looser policy.</p>
+
+        <pre><code class="language-nginx"># The payment step gets its own, much tighter policy. Nonce is generated
+# per-request; there is no unsafe-inline and no wildcard anywhere.
+location = /checkout/payment {
+    add_header Content-Security-Policy "
+      default-src 'none';
+      script-src 'nonce-$request_id' https://js.stripe.com;
+      frame-src https://js.stripe.com https://hooks.stripe.com;
+      connect-src 'self' https://api.stripe.com;
+      style-src 'self' 'nonce-$request_id';
+      img-src 'self' data:;
+      font-src 'self';
+      form-action 'self';
+      frame-ancestors 'none';
+      base-uri 'none';
+      report-uri /csp-report" always;
+
+    # base-uri 'none' matters more than it looks: without it, an injected
+    # &lt;base&gt; tag can redirect every relative script URL on the page.
+    add_header Referrer-Policy "same-origin" always;
+    try_files $uri /index.php$is_args$args;
+}</code></pre>
+
+        <p><strong>Integrity checks on the scripts you do allow.</strong> Subresource integrity means a modified file simply does not run. It does not apply cleanly to payment provider SDKs, which are deliberately unversioned so the provider can push fixes, and that trade-off plus the tag manager problem is worked through in <a href="/blog/sri-implementation/">the SRI article</a>. Apply it to everything else.</p>
+
+        <p><strong>Detection, because prevention is never complete.</strong> A baseline of the payment page's script set and header set, checked on a schedule, with a diff that requires human approval. This is also what requirement 11.6.1 asks for, and it is about thirty lines of shell.</p>
+
+        <pre><code class="language-javascript">// A lightweight client-side tripwire. Not a control — a signal.
+// Reports when a script element appears that was not in the rendered page.
+(function () {
+  const allowed = new Set([location.host, 'js.stripe.com', 'cdn.example.net']);
+
+  new MutationObserver(mutations =&gt; {
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (node.nodeName !== 'SCRIPT') continue;
+        const src = node.src || '';
+        const host = src ? new URL(src, location.href).host : '(inline)';
+        if (!allowed.has(host)) {
+          // Beacon, not fetch: survives the page being navigated away from.
+          navigator.sendBeacon('/security/script-alert', JSON.stringify({
+            host, src: src.slice(0, 200), path: location.pathname, t: Date.now()
+          }));
+        }
+      }
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+})();</code></pre>
+
+        <p>Be honest about what that last one is. An attacker who has script execution can disable it. It catches the careless injection, the misconfigured tag, and the vendor who started loading something new — which is the majority of what actually happens — and it will not catch a competent targeted attack. Deploy it for what it is.</p>
+
+        <h2>6. Tokenisation, and What a Token Is Actually Worth</h2>
+
+        <p>Tokenisation is the reason a modern storefront can offer saved cards, one-click reorder and subscriptions without ever holding a card number.</p>
+
+        <p>The mechanism, briefly, because the detailed engineering is in <a href="/blog/secure-payment-gateways/">the gateway article</a>: the card data goes from the customer's browser to the provider, the provider returns an opaque reference, and you store the reference. Charging the reference later works only from your authenticated merchant account. A stolen token database is worth close to nothing to an attacker, which is a genuinely different security posture from a stolen card database.</p>
+
+        <p>The things that go wrong are not usually in the tokenisation itself.</p>
+
+        <p><strong>Storing more than the token.</strong> You need the token, the last four digits and the card brand to render a saved-card list. You do not need the expiry, the cardholder name, or the BIN, and storing the first six digits alongside the last four is a documented reconstruction risk. Store the minimum that renders the UI.</p>
+
+        <p><strong>Letting the token become a bearer credential in your own system.</strong> If your API accepts a token and a customer ID and charges the card, then an attacker who can enumerate customer IDs can charge other people's cards to their own orders. The token must only be usable in the context of the customer it belongs to, verified server-side against the session, on every single call.</p>
+
+        <pre><code class="language-php">&lt;?php
+// The check that is missing more often than you would believe.
+// A saved payment method belongs to a customer; verify that server-side
+// from the session, never from anything the client sent.
+public function chargeSavedMethod(int $methodId, Quote $quote): Payment
+{
+    $customerId = $this-&gt;session-&gt;getCustomerId();   // from the session, not the request
+    if (!$customerId) {
+        throw new LocalizedException(__('Not signed in.'));
     }
 
-    switch (event.type) {
-        case 'payment_intent.succeeded':
-            fulfillOrder(event.data.object.metadata.orderId);
-            break;
-        case 'payment_intent.payment_failed':
-            console.warn(`Payment failed`);
-            break;
+    $method = $this-&gt;vaultRepository-&gt;getById($methodId);
+
+    // Ownership check. Without this, methodId is an enumerable reference
+    // to somebody else's card.
+    if ((int) $method-&gt;getCustomerId() !== $customerId) {
+        // Do not distinguish "not yours" from "does not exist" in the response;
+        // the difference is an enumeration oracle.
+        $this-&gt;logger-&gt;warning('vault ownership mismatch', [
+            'method_id' =&gt; $methodId, 'session_customer' =&gt; $customerId,
+        ]);
+        throw new LocalizedException(__('Payment method not available.'));
     }
-    response.send();
+
+    if ($method-&gt;getIsExpired()) {
+        throw new LocalizedException(__('That card has expired.'));
+    }
+
+    return $this-&gt;gateway-&gt;charge($method-&gt;getGatewayToken(), $quote-&gt;getGrandTotal());
+}</code></pre>
+
+        <p><strong>Not planning for the token to be portable.</strong> Provider tokens are provider-specific. Migrating gateways means a token migration, which most major providers will do for you but which requires a PCI-scoped process and lead time. If there is any prospect of changing provider, ask about it before you sign, not two years later when you are trying to leave.</p>
+
+        <h2>7. Fraud Signals Without Fingerprinting Everyone</h2>
+
+        <p>Fraud screening is where security and conversion collide most directly, because every fraud control also declines some real customers, and every relaxation lets some fraud through.</p>
+
+        <p>The default approach is to install a vendor's client-side script, which collects a device fingerprint and behavioural signals and returns a score. It works. It also puts a large third-party script on your payment page with broad access to the DOM, which is precisely what the rest of this article argues against.</p>
+
+        <p>The resolution I have arrived at, and it is a compromise rather than a clean answer:</p>
+
+        <p><strong>Move what you can server-side.</strong> A surprising amount of fraud signal comes from data you already hold and never needed a browser script for. Billing and shipping address mismatch. Order value versus the customer's history. Time between account creation and first order. Number of distinct cards attempted in a session. Velocity across the last hour. None of that requires client-side code.</p>
+
+        <pre><code class="language-sql">-- Velocity signals from data you already have, computed at checkout.
+-- Cheap, effective against card testing, and involves no third party.
+SELECT
+  COUNT(DISTINCT o.customer_email)                       AS emails_from_ip,
+  COUNT(*)                                               AS attempts_1h,
+  SUM(o.state = 'canceled')                              AS declines_1h,
+  COUNT(DISTINCT p.cc_last_4)                            AS distinct_cards
+FROM sales_order o
+JOIN sales_order_payment p ON p.parent_id = o.entity_id
+WHERE o.remote_ip = :ip
+  AND o.created_at &gt;= NOW() - INTERVAL 1 HOUR;
+
+-- Distinct cards from one address in an hour is the single strongest
+-- card-testing indicator I have used. Three is unusual. Ten is an attack.</code></pre>
+
+        <p><strong>Where you need a vendor script, scope it.</strong> Load the fraud provider's collector on the cart or the address step rather than the payment step, and pass the resulting session identifier server-to-server. Most fraud vendors support this and few merchants ask, because the copy-and-paste integration guide puts the script everywhere. Asking removes a script from your payment page and changes almost nothing about the signal quality, because the useful behavioural data is collected before payment anyway.</p>
+
+        <p><strong>Be deliberate about what "fraud signal" means for privacy.</strong> Device fingerprinting is processing personal data, and in most jurisdictions the fraud-prevention justification is available but it is not unlimited. It should appear in your privacy notice and your records of processing, and the vendor should appear on your third-party list. The retailer in the opening story discovered they had none of that for a tool the growth team had installed.</p>
+
+        <h3>3-D Secure and the honest conversion trade</h3>
+
+        <p>Strong customer authentication is mandatory in a lot of markets, so for many merchants this is not a choice. Where you do have discretion — exemptions, low-value transactions, trusted beneficiary flows — the trade-off is real and worth measuring rather than assuming.</p>
+
+        <p>What I have seen consistently: frictionless 3DS2 authentication, where the issuer approves on the risk data alone, costs almost nothing in conversion. A challenge — the one-time code, the banking app redirect — costs meaningfully more, with abandonment on the challenge screen commonly in the range of 5% to 12% depending on issuer and device. That number varies enough between merchants that yours is the only one worth acting on.</p>
+
+        <p>Two practical levers. First, send the optional data fields the provider offers, because richer risk data means more frictionless approvals; a lot of integrations send the minimum and then complain about challenge rates. Second, if you are eligible for exemptions, apply them on the transactions where the fraud risk is genuinely low, and monitor the resulting chargeback rate, because exemptions move liability to you.</p>
+
+        <h2>8. Analytics and Session Recording: Where I Draw the Line</h2>
+
+        <p>This is the argument you will have most often, so it is worth having a clear position.</p>
+
+        <p><strong>Session recording on the payment step: no.</strong> The tools are good, the vendors are mostly careful, and the masking features generally work. It remains a third-party script with full DOM access on the page where card data is entered, and the failure modes are severe: a masking rule that does not match a newly added field, a vendor breach, a configuration change nobody reviewed. The beekeeping supplies retailer's incident is the mild version of what goes wrong. Run session recording on the basket, the address step, and everywhere else — that is where most usability problems live anyway — and stop it at payment.</p>
+
+        <p><strong>Analytics on the payment step: yes, but carefully.</strong> You need to know how many people reached payment and how many completed. You do not need a full analytics library to know that. Server-side event tracking on the order confirmation, or a single first-party beacon fired from your own code, gives you the funnel without a third-party script.</p>
+
+        <pre><code class="language-javascript">// First-party funnel events. No vendor library on the page; your own
+// endpoint forwards to whatever analytics stack you use, server-side.
+function track(event, detail) {
+  navigator.sendBeacon('/events', JSON.stringify({
+    e: event,
+    // Deliberately no field values, no DOM state, no user identifiers
+    // beyond the session the server already knows about.
+    d: detail,
+    p: location.pathname,
+    t: Date.now()
+  }));
+}
+
+document.addEventListener('DOMContentLoaded', () =&gt; track('payment_view'));
+document.querySelector('form.payment').addEventListener('submit', () =&gt; {
+  track('payment_submit');
 });
-        </code></pre>
+window.addEventListener('pagehide', () =&gt; track('payment_leave'), { once: true });</code></pre>
+
+        <p><strong>Tag managers on the payment step: no, and I will argue this one.</strong> The purpose of a tag manager is to let non-engineers add arbitrary JavaScript to a page without a deploy. On a page where card data is entered, that is the exact capability an attacker wants, granted permanently to an account protected by whatever password the marketing team chose. It is also flatly incompatible with the requirement to authorise and inventory every script, since the container's contents can change at any moment.</p>
+
+        <p>The objection is always conversion tracking. It is solvable: fire conversion events from the order confirmation page, where no card data has ever been present, or send them server-side from the order webhook, which is more accurate anyway because it does not depend on the customer's browser reaching the confirmation page. Server-side conversion tracking usually improves attribution, which means this conversation can be framed as an upgrade rather than a removal. That framing has worked for me more often than the compliance argument.</p>
+
+        <h2>9. The Optimisations That Are Free</h2>
+
+        <p>Plenty of checkout conversion work has no security cost at all, and it is where I would spend effort first. In rough order of what has moved numbers for clients.</p>
+
+        <p><strong>Guest checkout, prominent and unapologetic.</strong> Forcing account creation is still the single most reliable way to lose customers at the top of checkout. Offer account creation after the order, pre-filled from what they just typed. It also reduces the amount of personal data you hold for one-time buyers, which is a privacy win from a conversion change.</p>
+
+        <p><strong>Correct autofill semantics.</strong> Browsers and password managers will fill an entire address in one tap if you let them, and most custom checkouts break this without realising. The attribute values are specified and unforgiving — <code>address-line1</code>, not <code>address1</code>.</p>
+
+        <pre><code class="language-html">&lt;!-- Autofill works when the names are the specified ones and the fields
+     sit inside a form element. Custom checkouts frequently fail on both. --&gt;
+&lt;form method="post" action="/checkout/address"&gt;
+  &lt;input name="email"     type="email" autocomplete="email"
+         inputmode="email" spellcheck="false" required&gt;
+  &lt;input name="tel"       type="tel"   autocomplete="tel" inputmode="tel"&gt;
+  &lt;input name="name"      type="text"  autocomplete="name"&gt;
+  &lt;input name="line1"     type="text"  autocomplete="address-line1"&gt;
+  &lt;input name="line2"     type="text"  autocomplete="address-line2"&gt;
+  &lt;input name="city"      type="text"  autocomplete="address-level2"&gt;
+  &lt;input name="postcode"  type="text"  autocomplete="postal-code"
+         inputmode="text" autocapitalize="characters"&gt;
+  &lt;input name="country"   type="text"  autocomplete="country-name"&gt;
+&lt;/form&gt;
+
+&lt;!-- One-time passcode fields: this lets iOS and Android offer the code
+     from the SMS directly above the keyboard. Costs one attribute. --&gt;
+&lt;input name="otp" inputmode="numeric" autocomplete="one-time-code"
+       pattern="[0-9]*" maxlength="6"&gt;</code></pre>
+
+        <p><strong>Validate on blur, not on every keystroke.</strong> Telling someone their email is invalid while they are on the third character is hostile. Validate when they leave the field, and re-validate on submit.</p>
+
+        <p><strong>Put the error where the eye is.</strong> The beekeeping supplies retailer's entire 1.4% was a validation message rendered below the fold on small screens. Scroll the first invalid field into view and focus it, every time.</p>
+
+        <p><strong>Mobile wallets, high and early.</strong> Apple Pay and Google Pay bypass most of the form entirely, and they are also the most secure path available, since the merchant receives a network token rather than a card number. This is one of the rare cases where the conversion win and the security win are the same change, and it is why I lead with it whenever a merchant asks where to start.</p>
+
+        <p><strong>Do not ask for what you do not need.</strong> Every field costs completions. A phone number that only exists because the courier integration was configured that way in 2019, a title dropdown, a "how did you hear about us" — each of them is a small tax, and each is also personal data you now hold and must protect.</p>
+
+        <h2>10. Trust Signals: What Works and What Is Theatre</h2>
+
+        <p>Merchants spend a lot on this and much of it is decorative.</p>
+
+        <p><strong>Security badges from certificate vendors.</strong> I have seen these tested repeatedly and the results are inconsistent — sometimes a small positive, sometimes a small negative, frequently nothing. What is not inconsistent is the cost: many of them are third-party scripts on the payment page, which is exactly the thing this article says to remove. If you want a badge, serve a static image from your own origin. The remotely-loaded, animated, click-to-verify version is buying you an attack surface for a graphic.</p>
+
+        <p><strong>Real reassurance about what happens next.</strong> "You will be charged £84.20 today. Delivery Thursday 14th. Free returns within 30 days." That works. It answers the questions people actually have at the payment step, which are about money and delivery, not cryptography.</p>
+
+        <p><strong>Recognisable payment marks.</strong> The card scheme logos and the wallet buttons, as static images. Familiar and useful for scanning whether their preferred method is available.</p>
+
+        <p><strong>Not hiding the padlock story.</strong> Customers do not read certificates, but they do notice mixed-content warnings and interstitials. That is the <a href="/blog/hsts-secure-seo/">HSTS and transport</a> side of the job, and it is worth getting right because its failure modes are the ones customers actually see.</p>
+
+        <p>My general view: trust at checkout is earned before the customer arrives there, by the site being fast, coherent and honest about delivery. A badge does not rescue a checkout that feels wrong, and a good checkout does not need one.</p>
+
+        <h2>11. Performance, Which Is a Security Argument Too</h2>
+
+        <p>Removing scripts from the payment page makes it faster, and a faster payment page converts better. That is the argument that makes this whole exercise fundable.</p>
+
+        <p>The specifics that matter on this page more than elsewhere. The payment provider's SDK is usually the largest third-party asset, and it cannot be deferred, because the fields cannot render until it loads. Preconnect to the provider's origin early — in the head of the page before checkout, not on the payment page itself — so the TLS handshake is already done when the SDK is requested.</p>
+
+        <pre><code class="language-html">&lt;!-- On the page BEFORE payment, so the connection is warm on arrival. --&gt;
+&lt;link rel="preconnect" href="https://js.stripe.com" crossorigin&gt;
+&lt;link rel="dns-prefetch" href="https://js.stripe.com"&gt;
+
+&lt;!-- On the payment page: the SDK is critical path, so no defer. Everything
+     else on this page should be first-party and small. --&gt;
+&lt;script src="https://js.stripe.com/v3/"&gt;&lt;/script&gt;</code></pre>
+
+        <p>Measure the payment step separately from the rest of the site. Aggregate site-wide field data will hide a slow payment page completely, because payment views are a small fraction of page views. Segment your real-user monitoring by page type or you will not see the problem you are trying to fix.</p>
+
+        <p>One caution from experience: do not lazy-load or defer the payment SDK to improve a lab score. I watched a team do this and the Lighthouse number improved by nine points while the payment fields took an extra 700ms to become interactive on mobile, which is a real conversion cost paid for a synthetic gain. Optimise the metric that is the customer's experience of paying, not the metric that is easiest to move.</p>
+
+        <h2>12. Measuring Both Sides at Once</h2>
+
+        <p>If you only measure conversion, every security control looks like a cost. If you only measure risk, every optimisation looks like a threat. The teams that handle this well track a small number of things on both sides and look at them together.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Why it earns its place</th><th>Review</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Payment step completion rate</td><td>The conversion number this page owns; everything else is upstream</td><td>Daily</td></tr>
+            <tr><td>Third-party hosts on the payment page</td><td>Your attack surface, as a single integer</td><td>Every deploy</td></tr>
+            <tr><td>Time to interactive payment field</td><td>The performance number customers feel, segmented to this page</td><td>Weekly</td></tr>
+            <tr><td>3DS challenge rate and challenge abandonment</td><td>Separates issuer friction from your own</td><td>Weekly</td></tr>
+            <tr><td>Gateway decline rate by reason code</td><td>A rise in "do not honour" often means card testing, not customers</td><td>Daily</td></tr>
+            <tr><td>Distinct cards per IP per hour, 99th percentile</td><td>The earliest card-testing signal available</td><td>Alert</td></tr>
+            <tr><td>CSP violation reports on the payment path</td><td>Something loaded that should not have</td><td>Alert</td></tr>
+            <tr><td>Payment page baseline diff</td><td>Scripts or headers changed without a release</td><td>Alert</td></tr>
+            <tr><td>Chargeback rate</td><td>The consequence metric for every fraud decision above</td><td>Monthly</td></tr>
+          </tbody>
+        </table>
+
+        <p>The one I would add first if you have none of them is the third row down from the bottom — distinct cards per address per hour. Card testing is the most common attack on a payment endpoint by volume, it costs you gateway fees and eventually your acquirer's attention, and it is trivially detectable.</p>
+
+        <h2>13. A Worked Rebuild: Six Weeks on the Fashion Retailer</h2>
+
+        <p>Around 11,000 orders a month, Magento 2.4 with a custom single-page checkout, roughly 68% mobile. Baseline payment-step completion was 82.6%.</p>
+
+        <p><strong>Weeks one and two — inventory and the easy removals.</strong> Fourteen third-party hosts on the payment step. Nine went without argument: two abandoned pixels from campaigns that had ended, a heatmap tool nobody had opened in a year, a live chat widget that was also on every other page, a currency converter that was loading on a single-currency store, a review widget, and three scripts pulled in by the tag manager whose owners could not be identified at all. Payment page transferred bytes dropped from 1.42MB to 610KB. Time to interactive payment field on a throttled 4G profile went from 4.1s to 2.3s.</p>
+
+        <p>Payment-step completion after two weeks: 84.1%. That was almost entirely the speed change, and it was the single largest conversion result of the whole project, which came from a security exercise.</p>
+
+        <p><strong>Week three — the argument.</strong> The personalisation tool. The growth team had data showing the recommendations block below the order summary drove a measurable increase in average order value, and they were right; it was worth roughly £6 per order on the orders where someone added something. Removing it was not free.</p>
+
+        <p>The resolution took two attempts. The first was to server-side render the recommendations, calling the vendor's API from our backend and rendering the block in our own template. That worked and lost the personalisation quality, because the vendor's model relied on client-side session behaviour we were not sending. The second attempt kept the client-side collector on the basket and address steps, where the behavioural data is actually generated, and rendered the payment-step block server-side from a session identifier passed through. Average order value held within noise, and the payment page kept its script count. That took nine days and one genuinely bad-tempered meeting, and it is the pattern I now reach for first.</p>
+
+        <p><strong>Week four — the tag manager.</strong> Removed from the payment step only, retained everywhere else. Conversion tracking moved to the order confirmation page for the client-side tags and to a server-side webhook for the two that mattered most. Attribution improved by about 4% of tracked conversions, because the server-side path does not depend on the customer's browser reaching the confirmation page or on their ad blocker permitting it. That result did more to settle the argument than anything I said.</p>
+
+        <p><strong>Week five — CSP and detection.</strong> A payment-specific policy, deployed report-only for eight days first. It caught two things we had missed: a font loading from a Google origin that the design system had introduced, and a legacy inline script in the order summary template. Both fixed, then enforced. The baseline diff job went into CI and into a nightly cron.</p>
+
+        <p><strong>Week six — fraud and the thing that went wrong.</strong> The fraud vendor's collector moved off the payment step to the address step. Here is where we made a mistake: nobody told the fraud team that the collector's page context had changed, and their rules included a signal derived from time-on-payment-page, which now returned null. The model degraded quietly and their manual review queue grew by about 40% over ten days before anyone connected the two. Fixed by passing the timing signal from our own instrumentation, but it should have been a conversation before the change rather than a diagnosis after it.</p>
+
+        <p><strong>Where it landed.</strong> Payment-step completion 85.2%, up 2.6 points from baseline. Third-party hosts on the payment page: four. Time to interactive payment field on mobile: 2.1s. Two months later the acquirer's script inventory request was answered from a file in the repository in about twenty minutes.</p>
+
+        <p><strong>What is still open.</strong> The CSP permits <code>'unsafe-inline'</code> for styles because the checkout component library generates inline style attributes and refactoring it was out of scope. That is a real weakness and it is written down with a date. And the mobile wallet integration, which I would have led with, kept getting pushed because it needed design input; it shipped four months later and produced a bigger conversion gain than everything above combined. I should have sequenced it first and I did not, because it looked like the hardest item on the list rather than the most valuable one.</p>
+
+        <h2>14. Questions That Come Up</h2>
+
+        <p><strong>"Our conversion team wants to A/B test the payment page. Is that a problem?"</strong> Testing layout, copy, field order and button placement is fine and you should do it. What needs a gate is the mechanism: most A/B tools work by injecting a script that rewrites the DOM, which on a payment page is exactly the attack you are defending against, and the anti-flicker snippet makes it worse by blocking render until the vendor responds. Run payment-page tests server-side, rendering variants from your own templates. Slower to set up, and it removes the tooling from the page entirely.</p>
+
+        <p><strong>"Is a one-page checkout more or less secure than a multi-step one?"</strong> Neither, inherently. What matters is whether card entry is isolated. A one-page checkout that keeps the customer's address, basket and card fields in the same DOM has more code and more state around the sensitive part, which is a modest argument for a discrete payment step. The conversion difference between the two shapes is smaller than the difference between doing either one well or badly.</p>
+
+        <p><strong>"Can we keep card details in the browser between steps to make going back easier?"</strong> No. Not in <code>sessionStorage</code>, not in a JavaScript variable, not in a hidden field. If a customer navigates back from payment they can re-enter the card, and that small friction is worth an enormous amount of avoided risk. With hosted fields the question does not arise, because the values were never yours to keep.</p>
+
+        <p><strong>"How do I know if we are being card-tested right now?"</strong> A sudden rise in declines with a low average order value, many distinct cards from few addresses, and a spike in orders that fail at authorisation. The SQL earlier in this article catches it. Act quickly, because acquirers monitor authorisation-to-decline ratios and a sustained attack can cost you your rates or your account.</p>
+
+        <p><strong>"Should we build our own payment form to control the experience?"</strong> No. The visual control you gain over hosted fields is small — field-level CSS gets you most of the way — and the compliance and risk cost is enormous. This is the clearest cost-benefit call in the whole area and I have never seen a merchant who was glad they did it.</p>
+
+        <p><strong>"Our payment provider's SDK is slow. Can we self-host it?"</strong> Almost never, and check the terms — most providers forbid it, precisely because they need to be able to push fixes. If it is genuinely slow, preconnect early, load it on the page before payment rather than at payment, and raise it with the provider, who can usually tell you whether you are hitting a suboptimal edge.</p>
+
+        <p><strong>"How often should the script allowlist be reviewed?"</strong> Automatically on every deploy, with the build failing on an unlisted host, and by a human quarterly to ask whether each entry still earns its place. The automated check catches additions. The human review catches the ones that were justified two years ago and are now just habit.</p>
+
+        <p><strong>"We are a small merchant. Is all of this proportionate?"</strong> The script inventory and the CSP are proportionate at any size and are a few days of work. Hosted fields or a redirect is a decision you make once. The rest — detection tooling, custom fraud signals, server-side testing infrastructure — scales with your volume, and at low volume a full redirect to your provider's hosted page is a completely respectable answer that removes most of this article from your life.</p>
+
+        <h2>15. Where I'd Start</h2>
+
+        <p>Open your live payment step and run the runtime script observer, on a real journey with a real basket rather than a cold page load. Write down every third-party host. That list is the article's whole argument in one artefact, and it usually persuades people faster than anything else.</p>
+
+        <p>Find an owner for each entry. Remove the ones with no owner today — they are almost always abandoned campaign tags — and measure the page weight difference, because that is the number that funds the rest of the work.</p>
+
+        <p>Check how card entry is actually implemented. If your own JavaScript can read the card field, that is the most important thing on this page and it changes both your risk and your compliance scope. Move to hosted fields or a redirect.</p>
+
+        <p>Then, over the following month: get a payment-specific Content Security Policy into report-only mode, watch it for a week, fix what it catches, and enforce it. Take the tag manager off the payment step and move conversion tracking server-side, leading with the attribution improvement rather than the compliance argument. Add the card-testing query as an alert. Put a payment-page baseline diff in CI.</p>
+
+        <p>And if you have not shipped mobile wallets, do that first, before any of it. It is the only change I know of that simultaneously removes friction, removes fields, and improves the security properties of the transaction, and it is the one I have most often deprioritised for bad reasons.</p>
+
+        <p>The framing I would leave you with is the one the beekeeping supplies retailer's numbers make. Their largest conversion gain came from deleting nine third-party scripts — a security exercise, funded as a security exercise, that turned out to be the best performance work anyone had done on that page in three years. The tension between securing the payment page and optimising it is real in a handful of specific cases, and in most cases it is not a tension at all. A payment page with four scripts on it is faster, safer, easier to reason about and cheaper to answer questions about than one with fourteen. The disagreements are worth having on the few items where the trade is genuine. For everything else, the two goals point the same way, and the job is mostly having the argument once and then writing down what you decided.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/designing-for-convert/">Designing for Conversions: UX Architecture & Frictionless Checkout</a></strong>
+              <strong><a href="/blog/designing-for-convert/">Designing for Conversions: UX Architecture &amp; Frictionless Checkout</a></strong>
               <p>Cognitive load reduction and One-Step Checkout.</p>
             </li>
             <li>
@@ -557,6 +699,6 @@ app.post('/api/webhooks/stripe', express.raw({type: 'application/json'}), (reque
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

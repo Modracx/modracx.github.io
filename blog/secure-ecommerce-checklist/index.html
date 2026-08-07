@@ -66,10 +66,12 @@
     <link rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" />
   </noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Securing Your Ecommerce Store: The Technical Hardening Blueprint | MODRACX</title>
   <meta name="description"
-    content="An exhaustive engineering security checklist for Magento 2 and Shopify merchants. Covers PCI-DSS 4.0 compliance, Magecart mitigation, WAF configurations, Content Security Policy, and database hardening." />
+    content="An operational security checklist for a storefront: asset inventory, access control, admin hardening, patching, dependency and third-party estate, secrets, backups, logging and incident readiness." />
   <meta property="og:title" content="Securing Your Ecommerce Store: The Technical Hardening Blueprint | MODRACX" />
   <meta property="og:description"
     content="An exhaustive engineering security checklist for Magento 2 and Shopify merchants by Kenneth D'Silva." />
@@ -211,17 +213,16 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Securing Your Ecommerce Store: The Technical Hardening Blueprint</h1>
-        <p class="lede">An exhaustive security engineering guide covering PCI-DSS 4.0 compliance, Magecart credit card
-          skimming prevention, Web Application Firewall (WAF) expression rules, CSP nonces, and Linux infrastructure
-          isolation.</p>
+        <p class="lede">An old contractor account with a reused password edited a CMS block, and the block rendered on checkout. Nobody exploited anything. Here is the operational checklist that would have caught it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
+
       <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -247,100 +248,429 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
+        <h2>1. The Ticket That Arrived at 04:12</h2>
 
-        <h2>1. The E-Commerce Threat Landscape in 2026</h2>
-        <p>E-commerce platforms remain incredibly high-value targets for specialized cybercriminal syndicates, and the sophistication of attacks targeting these platforms has expanded significantly since the early days of simple SQL injection and brute-force password guessing. Today, online stores process a massive volume of sensitive credit card information, customer personally identifiable information (PII), and intricate financial transaction streams that represent a goldmine on the dark web. The fallout from a single successful security breach is often devastating. Engineering teams are looking at enormous financial penalties under strict compliance regimes like PCI-DSS 4.0 and GDPR, alongside the mandatory forensic audits that easily run into the hundreds of thousands of dollars. The loss of customer trust, compounded by catastrophic brand reputation damage, is an even more difficult metric to recover from.</p>
-        <p>The operational reality for modern merchants is that traditional perimeter defenses are no longer sufficient. Attackers understand that the core checkout flow is usually fortified, so they target the weakest links in the supply chain—the myriad of third-party scripts, analytics tools, marketing pixels, and customer support widgets that front-end teams integrate to optimize conversion rates. When these external dependencies are compromised, the attacker effectively gains unrestricted execution privileges within the browser of every consumer visiting the storefront. This shift fundamentally redefines where security must be implemented. Defenses must now operate concurrently at the edge, the application layer, the infrastructure layer, and directly inside the client's browser execution context.</p>
+        <p>A cycling retailer I work with pushed a routine content release on a Tuesday evening. At 04:12 the following morning their fraud team's automated report flagged nineteen declined authorisations from cards that had never been used on the site before. By 07:00 someone had noticed that the checkout page was loading a script from a domain nobody recognised, served from a bucket registered eleven days earlier.</p>
 
-        <p>The single most prolific attack vector targeting online storefronts today is <strong>Magecart supply-chain skimming</strong>. In a Magecart attack, malicious actors typically do not attempt to breach the primary payment gateway, database, or backend application directly, as these systems are often heavily monitored. Instead, they execute a highly targeted compromise of third-party JavaScript dependencies. This might include compromising the infrastructure of a live chat widget provider, a real-time analytics script, a tag manager, or a product review plugin. Once the attacker injects their malicious code into these distributed scripts, the payload is silently delivered to every browser rendering your checkout page.</p>
-        <p>Within the browser context, this injected script operates silently. It uses DOM traversal techniques (like <code>document.getElementById()</code> or <code>document.querySelectorAll()</code>) to bind event listeners to the credit card input fields in the checkout form. As the customer types their primary account number (PAN), expiration date, and CVV, the script records these keystrokes. Before the user even clicks the 'Submit' button—and certainly before the application has a chance to encrypt the payload and send it to the payment processor—the stolen data is serialized and asynchronously exfiltrated via a hidden <code>fetch()</code> or <code>XMLHttpRequest</code> call to an offshore Command and Control (C2) server controlled by the attackers. Because this entire process occurs client-side, traditional backend intrusion detection systems and server-side logs remain completely oblivious to the data theft.</p>
+        <p>The interesting part was not the script. The interesting part was the chain that let it get there. An agency contractor who had left in March still had an admin account. That account had no second factor because it predated the policy. The password had been reused on a forum that leaked in 2023. The account had permission to edit CMS blocks, one of which was rendered on every page including checkout. Nothing was exploited. Nothing was even hacked, in the sense that word usually implies. Somebody logged in.</p>
 
-        <h2>3. PCI-DSS 4.0: Requirement 6.4.3 & 11.6.1 Explained</h2>
-        <p>In response to the catastrophic rise in Magecart and formjacking attacks, the Payment Card Industry Security Standards Council (PCI SSC) released PCI-DSS v4.0. This new standard introduces a paradigm shift in how merchants must secure their payment pages. Most notably, Requirement 6.4.3 dictates strict oversight over all payment page scripts that are loaded and executed in the consumer's browser. It mandates that merchants must maintain a detailed, living inventory of all scripts present during the checkout process, explicitly justify the necessity of each script, and verify the cryptographic integrity of these scripts to ensure they have not been tampered with.</p>
+        <p>The post-incident review produced a list of thirty-one items. Twenty-nine of them were things the team already knew they should be doing. That is the pattern I see almost every time. Ecommerce security failures are rarely a clever attack against a well-run system; they are an ordinary attack against a system where six ordinary things had quietly stopped being true.</p>
 
-        <h2>4. Content Security Policy (CSP): The Ultimate Defense</h2>
-        <p>The most robust, fundamental, and effective browser-level defense against both Magecart skimming and general Cross-Site Scripting (XSS) vulnerabilities is a meticulously crafted <strong>Content Security Policy (CSP)</strong>. A CSP is delivered via HTTP response headers and explicitly instructs the consumer's web browser on exactly which domains are authorized to load executable scripts, styles, images, and other resources. By enforcing a strict whitelist, any unauthorized script—whether injected via a cross-site scripting vulnerability or loaded from a compromised third-party domain—will be immediately blocked from execution by the browser itself.</p>
-        <p>Implementing a strict CSP on a complex e-commerce platform is notoriously difficult due to the sheer volume of legitimate third-party integrations required by modern marketing teams. A poorly configured CSP will break checkout functionality entirely. The most secure approach involves utilizing cryptographic nonces for inline scripts and strict domain allowlists for external resources. A nonce (number used once) is a randomly generated, unguessable string uniquely created by the server for every single HTTP response. This nonce is added to the CSP header and must match the <code>nonce</code> attribute on any inline <code>&lt;script&gt;</code> tag. If an attacker injects an inline script, they cannot guess the correct nonce, and the browser will refuse to execute the payload.</p>
+        <p>This article is the operational checklist I use for that. Not the network layer — that lives in the <a href="/blog/security-hardening-checklist/">infrastructure hardening checklist</a>, which covers SSH, firewalls, file permissions and database access on a Magento-style stack. Not the response headers either; those are covered in depth in the <a href="/blog/secure-http-headers/">HTTP security headers guide</a>. This is the layer above both: the accounts, the patching, the dependencies, the backups, the logs, and the human process that decides whether any of the technical controls stay true six months after you configure them.</p>
 
-        <pre><code class="language-nginx"># Strict Nginx Content Security Policy Header with Nonces
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'nonce-rAnd0mN0nc3Key' https://js.stripe.com https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://api.stripe.com https://www.google-analytics.com; object-src 'none'; frame-ancestors 'none';" always;</code></pre>
+        <p>It is written to be worked through. Take a morning, go down it, and write "yes" or "no" next to each item honestly. The honest "no" is the valuable output.</p>
 
-        <h2>5. Subresource Integrity (SRI) Hashes</h2>
-        <p>While CSP restricts *where* scripts can be loaded from, it does not guarantee that a permitted script hasn't been maliciously altered at the source. If an attacker compromises a whitelisted CDN or a trusted third-party provider's infrastructure, the CSP will still allow the compromised script to execute. This is where <strong>Subresource Integrity (SRI)</strong> becomes critical. SRI allows the browser to verify that the fetched resource has been delivered without unexpected manipulation. It functions by providing a cryptographic hash (typically SHA-256, SHA-384, or SHA-512) that the fetched file must exactly match.</p>
-        <p>When loading third-party scripts from external CDNs, it is imperative to always include these cryptographic hashes using the <code>integrity</code> attribute within the script tag. Upon fetching the file, the browser computes the hash of the downloaded content. If the computed hash does not precisely match the hash specified in the <code>integrity</code> attribute, the browser immediately aborts execution of the script and throws a network error. This mechanism guarantees that even if a vendor's infrastructure is entirely compromised, the injected malicious payload cannot be executed on your store, neutralizing the supply-chain threat.</p>
-        
-        <pre><code class="language-html">&lt;!-- SRI Verified External Script Tag --&gt;
-&lt;script 
-  src="https://cdn.example.com/library-v2.js" 
-  integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC" 
-  crossorigin="anonymous"&gt;&lt;/script&gt;</code></pre>
+        <h2>2. Why Most Security Checklists Are Useless</h2>
 
-        <h2>6. Server Hardening & OS Level Security</h2>
-        <p>While browser-based defenses handle client-side threats, robust backend infrastructure isolation is essential to prevent lateral movement and deep compromise if an initial vulnerability is exploited. Server hardening must begin at the operating system level. For self-hosted platforms like Magento 2 or custom headless backends, securing the Linux environment is non-negotiable. This involves enforcing strict file permissions to ensure that the web server user (such as `www-data` or `nginx`) only possesses write access to specific, required directories (like `/var` or `/pub/media` in Magento), while keeping the core application files strictly read-only.</p>
-        <p>SSH access must be heavily restricted. Root login should be entirely disabled in the <code>sshd_config</code>, and password-based authentication must be replaced with mandatory RSA or Ed25519 cryptographic key pairs. Implementing <code>fail2ban</code> is standard practice to automatically detect and ban IP addresses that exhibit malicious behavior, such as repeated failed authentication attempts against SSH or the application's administrative backend. Furthermore, the server's network exposure should be minimized using a host-based firewall like UFW or iptables, strictly allowing inbound traffic only on ports 80 (HTTP) and 443 (HTTPS), while restricting administrative ports to a whitelist of corporate VPN IP addresses.</p>
+        <p>I have read a lot of ecommerce security checklists. Most of them fail for one of three reasons.</p>
 
-        <h2>7. Database Security & Least Privilege Configuration</h2>
-        <p>Within the database itself, access control must be granular. The application should never connect to the database using the root administrative account. Instead, create dedicated, isolated database user roles with the absolute minimum privileges required for the application to function. A standard application user might require <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> privileges on specific tables, but should explicitly be denied the ability to <code>DROP</code> tables, alter schemas, or manage other users. By compartmentalizing database access, even if the web application is fully compromised via an RCE vulnerability, the attacker's ability to manipulate or destroy the underlying data architecture is severely hampered.</p>
+        <p>The first is that they list controls rather than states. "Enable two-factor authentication" is a control. "Every account that can reach the admin panel has a second factor, and there is a query I can run that proves it" is a state. Controls get enabled once and then drift; states can be checked. Whenever I write a checklist item now I try to phrase it as something I could verify in under five minutes, because an item I cannot verify is an item I will assume is fine.</p>
 
-        <h2>8. Web Application Firewalls (WAF) & Edge Mitigation</h2>
-        <p>A Web Application Firewall (WAF) serves as the primary edge defense mechanism, sitting transparently between the public internet and your origin servers. Deploying an enterprise-grade WAF solution like Cloudflare WAF or AWS WAF provides critical protection by actively inspecting all incoming HTTP and HTTPS request payloads before they are routed to your PHP, Node.js, or Go application layer. The WAF evaluates request signatures, headers, and body parameters against extensive, continuously updated threat intelligence databases and rule sets, specifically targeting the OWASP Top 10 vulnerabilities.</p>
-        
-        <pre><code class="language-hcl"># Terraform AWS WAF v2 Rule for Admin Path Protection
-resource "aws_wafv2_web_acl" "ecommerce_waf" {
-  name        = "ecommerce-protection-acl"
-  scope       = "REGIONAL"
-  default_action { allow {} }
+        <p>The second is that they treat every item as equally important. A checklist that puts "remove the server version banner" next to "make sure your backups restore" has told you nothing about where to spend Tuesday. In practice a small number of items account for nearly all real-world compromise: credentials, unpatched software, third-party code, and over-broad access. Everything else matters, but it matters after those.</p>
 
-  rule {
-    name     = "BlockUnauthorizedAdminAccess"
-    priority = 1
+        <p>The third is that nobody owns the checklist. It gets produced during an audit, lands in a shared drive, and is never opened again. The checklists that work have a named owner per section and a recurrence — quarterly, or tied to a release cycle — and the recurrence is the part that does the work.</p>
 
-    action { block {} }
+        <p>So the structure below is deliberately ordered. If you get through the first six sections and stop, you will have addressed most of your actual risk. The later sections are the ones that turn a good position into a durable one.</p>
 
-    statement {
-      and_statement {
-        statement {
-          byte_match_statement {
-            search_string         = "/admin_"
-            field_to_match { uri_path {} }
-            positional_constraint = "STARTS_WITH"
-            transformation_type   = "LOWERCASE"
-          }
-        }
-        statement {
-          not_statement {
-            statement {
-               ip_set_reference_statement {
-                arn = aws_wafv2_ip_set.corporate_ips.arn
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}</code></pre>
+        <h2>3. Draw the Map Before You Harden Anything</h2>
 
-        <hr />
+        <p>You cannot secure a system you cannot enumerate, and almost nobody can enumerate theirs on the first attempt.</p>
 
-        <h2>9. Frequently Asked Questions (FAQ)</h2>
+        <p>The exercise takes an afternoon and produces a document that will be wrong within a month, which is fine — the point is that it is wrong in known ways rather than unknown ones. Four lists.</p>
 
-        <h3>What is a Magecart attack and how can e-commerce engineering teams stop it?</h3>
-        <p>Magecart is a form of digital credit card skimming where attackers compromise third-party JavaScript libraries or administrative credentials to inject malicious scripts into payment checkout pages. The script intercepts user credit card inputs before encryption and exfiltrates them to attacker-controlled C2 servers. Combat Magecart by enforcing strict Content Security Policy (CSP) headers with nonces, Subresource Integrity (SRI) hashes on external scripts, and iframe sandboxing for payment gateways.</p>
+        <p><strong>Every system that can reach production data.</strong> Not just the web servers. The CI runner that deploys. The analytics warehouse that syncs orders nightly. The ERP connector. The developer laptop with a database dump from the incident in January. The staging environment restored from a production snapshot two years ago and never touched since.</p>
 
-        <h3>What are the new technical requirements introduced in PCI-DSS 4.0 for e-commerce checkouts?</h3>
-        <p>PCI-DSS 4.0 introduces explicit requirements for managing payment page JavaScript assets (Requirement 6.4.3 and 11.6.1). Merchants must maintain an audited inventory of all scripts executing in consumer browsers during payment processing, verify the cryptographic integrity of each script, and implement automated change detection mechanisms to detect unauthorized script modifications.</p>
+        <p><strong>Every human and machine identity that can log in to any of them.</strong> Include service accounts, API keys, and the shared login that the warehouse uses. Include the agency. Include the person who set the whole thing up in 2019 and now works elsewhere.</p>
 
-        <h3>How does a Web Application Firewall (WAF) protect against SQL Injection and Remote Code Execution?</h3>
-        <p>A Web Application Firewall (WAF) inspects incoming HTTP/S traffic before it reaches origin servers. It evaluates payload signatures against OWASP Top 10 rules. When malicious inputs (such as SQL injection vectors like <code>' UNION SELECT</code> or RCE commands) are detected in request body parameters or headers, the WAF immediately blocks the request at the edge with a 403 Forbidden response.</p>
-        
-        <h3>Why is performance important for SEO alongside security?</h3>
-        <p>Security is just one pillar of a successful online storefront. Fast sites rank better in search engines, which directly influences top-line revenue. Dive into our <a href="/blog/performance-optimization/">performance optimization</a> and <a href="/blog/why-seo-matters/">SEO fundamentals</a> articles to understand the complete picture of modern e-commerce engineering, ensuring your platform is both highly secure and optimized for maximum visibility.</p>
+        <p><strong>Every piece of code you did not write that runs in production.</strong> Extensions, apps, npm packages, Composer packages, tag manager containers, the chat widget, the review widget, the pixel your marketing agency added last quarter without telling anybody.</p>
 
-        <hr />
+        <p><strong>Every place customer data leaves your control.</strong> Email service, error tracker, session recording tool, support desk, fulfilment partner, the spreadsheet someone exports monthly.</p>
+
+        <p>That fourth list is the one that surprises people. On the homeware account it ran to fourteen entries, four of which nobody could name a current owner for. Two of those four were still receiving data.</p>
+
+        <h3>A cheap first pass</h3>
+
+        <p>You can get a rough version of the third list mechanically. On a Magento 2 estate:</p>
+
+        <pre><code class="language-bash"># Everything installed, including things nobody remembers installing
+bin/magento module:status --enabled | sort
+
+# Composer packages that are not first-party, with their installed versions
+composer show --direct --format=json \
+  | python3 -c 'import json,sys; [print(p["name"], p["version"]) for p in json.load(sys.stdin)["installed"] if not p["name"].startswith("magento/")]'
+
+# Anything that has been patched in place — a classic source of upgrade pain
+ls -la vendor/*/*/ 2>/dev/null | grep -i patch
+composer show -i 2>/dev/null | wc -l</code></pre>
+
+        <p>And in the browser, on the live site, for the client-side half:</p>
+
+        <pre><code class="language-javascript">// Paste into the console on a product page and again on checkout.
+// The two lists are usually different, and the difference is the interesting part.
+const here = location.origin;
+const rows = performance.getEntriesByType('resource')
+  .filter(e =&gt; e.initiatorType === 'script' || e.initiatorType === 'xmlhttprequest')
+  .filter(e =&gt; !e.name.startsWith(here))
+  .map(e =&gt; ({ host: new URL(e.name).host, type: e.initiatorType }));
+
+// Collapse to hosts so the output is readable rather than exhaustive
+const byHost = {};
+for (const r of rows) byHost[r.host] = (byHost[r.host] || 0) + 1;
+console.table(byHost);</code></pre>
+
+        <p>Run that on a real customer journey rather than a cold page load — some vendors only inject their second-stage script after a consent event or a cart action, and a single page view will not see them.</p>
+
+        <h2>4. Access Control, Which Is Where the Incidents Come From</h2>
+
+        <p>If you do nothing else from this article, do this section. In my experience the overwhelming majority of ecommerce compromises begin with a valid credential rather than a memory-safety bug.</p>
+
+        <p><strong>Individual accounts, always.</strong> No shared logins, including for the agency, including for the warehouse, including for the seasonal temp. A shared account means you cannot attribute an action, cannot revoke access for one person without disrupting everyone, and cannot answer the first question a forensic investigator asks. If the objection is licensing cost, the licensing cost is smaller than the incident.</p>
+
+        <p><strong>A second factor on everything that reaches production.</strong> Admin panel, hosting console, DNS registrar, source control, CI, payment provider dashboard, email service. The DNS registrar is the one people forget, and it is arguably the worst one to lose — an attacker with your DNS can reissue certificates and receive your mail.</p>
+
+        <p><strong>Prefer hardware keys or app-based TOTP over SMS.</strong> SIM swap attacks against ecommerce staff are not theoretical; I have seen one succeed against a finance director whose mobile number was on the company's own contact page. If SMS is the only option a vendor supports, that is a reason to raise it with the vendor.</p>
+
+        <p><strong>Least privilege that is actually enforced.</strong> Most platforms have role systems that nobody uses because the default admin role is easier. The content team does not need to change payment configuration. The support team does not need to install modules. Building three or four real roles takes an afternoon and permanently reduces the blast radius of a phished password.</p>
+
+        <p><strong>A joiners-movers-leavers process that has a technical step.</strong> Not "HR emails IT". A checklist item, in the offboarding document, that says which systems to revoke, with a named owner. Then a quarterly reconciliation: export the account list from every system and compare it against the current staff list. The March contractor in the opening story would have been caught by a single reconciliation run in April.</p>
+
+        <h3>Making the reconciliation cheap</h3>
+
+        <p>The reason nobody reconciles accounts is that it takes an hour of clicking. Automate the export and it takes five minutes.</p>
+
+        <pre><code class="language-sql">-- Magento 2: admin users, last login, and 2FA state.
+-- Run this monthly and diff it against last month.
+SELECT
+  u.username,
+  u.email,
+  u.is_active,
+  u.created,
+  u.logdate                       AS last_login,
+  DATEDIFF(NOW(), u.logdate)      AS days_since_login,
+  (SELECT COUNT(*) FROM tfa_user_config c WHERE c.user_id = u.user_id) AS tfa_rows
+FROM admin_user u
+ORDER BY days_since_login DESC;</code></pre>
+
+        <p>Anything with a null last login, or more than sixty days idle, or zero 2FA rows, is a question. Not necessarily a problem — the release account may legitimately be idle — but a question with an answer that someone writes down.</p>
+
+        <p>The variation I like better, for teams that will not run SQL monthly, is a scheduled job that posts the same output into a Slack channel on the first of the month. Making the data arrive unprompted is the difference between a process that happens and one that is documented.</p>
+
+        <h2>5. The Admin Panel Is a Separate Application</h2>
+
+        <p>Treat your admin as if it were a different product with different users, because it is.</p>
+
+        <p><strong>Move it off the default path.</strong> On Magento, changing <code>/admin</code> to something unguessable is not security — the URL will leak eventually, through a referrer header or a bookmark or a screenshot in a support ticket. What it does do is remove you from the vast background noise of automated login attempts, which makes your logs readable and your rate limiting meaningful. That is worth having on its own.</p>
+
+        <p><strong>Restrict by network where you can.</strong> If your staff work from known locations or through a VPN, an allowlist at the edge is the single strongest control available and takes ten minutes. If they do not, a device-based or identity-aware proxy achieves the same thing with more setup. The version I would avoid is an allowlist that gets a new exception every fortnight until it covers half the internet.</p>
+
+        <p><strong>Rate limit and lock out.</strong> Failed login attempts should slow down and eventually stop. Then alert on lockouts, because a lockout on an account belonging to someone on holiday is a signal.</p>
+
+        <p><strong>Give it a stricter policy than the storefront.</strong> Shorter session lifetime, no third-party scripts at all, a tighter Content Security Policy. The admin does not need your analytics tag. This is one of the places where the headers work and the access work meet, and the reasoning is set out in the admin-panel section of the <a href="/blog/secure-http-headers/">headers guide</a>.</p>
+
+        <p>A caveat I would offer about session lifetime, because I got this wrong once. I set an admin session to fifteen minutes on a client with a large customer service team, and within a week they had all started leaving a tab open with a browser extension clicking a button every ten minutes. The control was technically in place and practically inverted. Thirty minutes with a re-authentication prompt for sensitive actions would have been better than fifteen minutes with a workaround.</p>
+
+        <h2>6. Patching, and the Backlog Nobody Owns</h2>
+
+        <p>Unpatched software is the second reliable route in. The problem is almost never that a team disagrees about patching; it is that nobody owns the calendar.</p>
+
+        <p><strong>Know your sources.</strong> For Magento, that is the Adobe security bulletins and the quarterly release cycle. For Shopify, the platform patches itself but your apps and your theme do not. For the operating system, your distribution's security feed. For your language runtime, its end-of-life schedule — running an unsupported PHP or Node version means no security fixes at all, which is a different and worse category of problem than being a month behind.</p>
+
+        <p><strong>Set a target and measure against it.</strong> Critical patches within a week, high within a month, everything else within a quarter is a reasonable starting position and matches what most compliance regimes expect. What matters more than the exact numbers is that they exist and that someone reports against them.</p>
+
+        <p><strong>Make the boring path the easy path.</strong> If applying a security release requires a two-day regression test by hand, you will not do it monthly. The investment that pays here is a smoke test suite covering the twenty journeys that matter — add to cart, checkout, login, search, admin order edit — that runs in under fifteen minutes. That is what converts patching from a project into a routine.</p>
+
+        <pre><code class="language-yaml"># .github/workflows/security-watch.yml
+# Runs nightly. Fails loudly rather than opening a PR nobody reviews.
+name: security-watch
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Composer advisories
+        run: composer audit --format=plain --abandoned=report
+
+      - name: JS advisories (production dependencies only)
+        # Dev-only advisories are noise here; they cannot reach a customer.
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Base image CVEs
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/example/storefront:latest
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true   # a CVE with no fix available is a decision, not a build failure</code></pre>
+
+        <p>The <code>ignore-unfixed</code> flag is the one I would draw attention to. Without it, teams learn within a fortnight that the security job is always red and start ignoring it, which is worse than not having it. A scanner that cries wolf is a scanner you have disabled.</p>
+
+        <h3>The dependency you cannot patch</h3>
+
+        <p>Every estate has one. An extension whose vendor stopped responding in 2022, sitting on a version of a library with a known deserialisation bug. The options are honest and limited: fork and patch it yourself, replace it, or accept the risk with a documented compensating control and a date to revisit.</p>
+
+        <p>What I would not do is leave it undocumented. On one project we found a payment-adjacent module in exactly this state, and the decision to keep it was defensible; the problem was that the decision had been made verbally eighteen months earlier by someone who had since left, so it had to be made again from scratch during an audit. A three-line entry in a risk register would have saved a fortnight.</p>
+
+        <h2>7. Third-Party Code Is Your Code</h2>
+
+        <p>Every extension, app and script runs with your privileges, on your domain, in front of your customers. The legal boundary and the technical boundary are not in the same place.</p>
+
+        <p>The questions I ask before anything new goes in:</p>
+
+        <p><strong>What does it actually need?</strong> A review widget needs to render on product pages. It does not need to run on checkout. Most tag and app installs default to "everywhere" and almost none of them need to be.</p>
+
+        <p><strong>Who has admin on it?</strong> A Shopify app that requests write access to orders and customers is an account with those permissions. If the vendor is breached, so are you, and the merchant's app list is functionally an access list.</p>
+
+        <p><strong>Is it maintained?</strong> Last release date, open issue count, whether the vendor publishes security contacts. A package whose last commit was three years ago is not stable; it is unmaintained, and those are different words.</p>
+
+        <p><strong>Can I pin it?</strong> Scripts loaded from a vendor CDN with no version in the URL can change under you at any time. That is the polyfill.io shape of problem, and it is exactly what <a href="/blog/sri-implementation/">subresource integrity</a> exists to catch — with the honest caveat, covered there, that SRI and tag managers do not get on.</p>
+
+        <p>For the checkout page specifically, the bar should be much higher than everywhere else, and PCI DSS v4.0 now requires you to be able to justify and inventory every script that runs on it. The mechanics of that requirement, and the scope questions underneath it, are in the <a href="/blog/pci-dss-compliance/">PCI DSS blueprint</a>. The operational version, which is what belongs on this checklist, is simpler: maintain a file in your repository listing every third-party script on the payment page with an owner and a reason, and fail the build if the rendered page contains a script host that is not in it.</p>
+
+        <pre><code class="language-python">#!/usr/bin/env python3
+"""checkout-scripts.py — compare live checkout script hosts to the allowlist.
+Run in CI after deploy, and nightly. Exit 1 on drift."""
+import re
+import sys
+from urllib.parse import urlparse
+from urllib.request import urlopen
+
+URL = "https://shop.example.com/checkout"
+ALLOWED = {  # host -> owner, reason
+    "shop.example.com":        ("platform",  "first-party bundle"),
+    "js.stripe.com":           ("payments",  "hosted fields"),
+    "cdn.example-cdn.net":     ("platform",  "static assets"),
+}
+
+html = urlopen(URL, timeout=20).read().decode("utf-8", "replace")
+hosts = {urlparse(src).netloc or urlparse(URL).netloc
+         for src in re.findall(r'&lt;script[^&gt;]+src="([^"]+)"', html)}
+
+unexpected = sorted(hosts - set(ALLOWED))
+if unexpected:
+    print("UNEXPECTED SCRIPT HOSTS ON CHECKOUT:", file=sys.stderr)
+    for h in unexpected:
+        print(f"  {h}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"checkout ok — {len(hosts)} known hosts")</code></pre>
+
+        <p>That catches the markup case only. Scripts injected at runtime by other scripts need a browser to see, which means running the same idea in a headless browser against a real page load — more setup, and worth it for a payment page.</p>
+
+        <h2>8. Secrets, and the Ones Already in Git</h2>
+
+        <p>Two separate problems: keeping new secrets out, and dealing with the ones that are already in.</p>
+
+        <p>For new secrets, the rules are unremarkable. Nothing sensitive in the repository. Configuration comes from the environment or a secrets manager. Local development uses its own credentials that have no production access. CI gets scoped, short-lived tokens rather than a long-lived key with broad permissions.</p>
+
+        <p>For existing secrets, the uncomfortable truth is that if a credential has ever been committed, it is compromised, even if the commit was reverted and the repository is private. Git history is durable, backups exist, clones exist, and a former contractor's laptop exists. Rotate it. A scan takes minutes:</p>
+
+        <pre><code class="language-bash"># Full-history scan. On a large repo this takes a while — let it run.
+docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+  detect --source=/repo --report-format=json --report-path=/repo/gitleaks.json
+
+# Then, for a Magento estate specifically, the file that matters most
+grep -n 'crypt\|key' app/etc/env.php | head</code></pre>
+
+        <p>The Magento encryption key deserves its own sentence. It encrypts payment configuration and other sensitive values in the database. If it leaks, the database dump that leaked with it is far more interesting to an attacker. If you find it in a repository, in a Slack message, or in a wiki page, rotating it is a real piece of work — it re-encrypts values across the install — but it is work you have to do, and the mechanics belong in the same conversation as the file permission rules covered in the <a href="/blog/security-hardening-checklist/">server hardening checklist</a>.</p>
+
+        <p>A pattern I have adopted and would recommend: put the secret scan in a pre-commit hook as well as in CI. CI catches it after it is in history, which means you are already rotating. The hook catches it before, which means you are not.</p>
+
+        <h2>9. Backups That Have Actually Been Restored</h2>
+
+        <p>Ransomware turned backups from an availability control into a security control, and most ecommerce backup arrangements were designed for the availability case only.</p>
+
+        <p>Three properties, in order of how often I find them missing.</p>
+
+        <p><strong>Tested.</strong> An untested backup is a hypothesis. Restore into a scratch environment on a schedule — quarterly at minimum — and time it. The number you want is not "we have backups" but "we restored the 14 March snapshot into a clean environment in 47 minutes and the order count matched". Write the number down; it is also your honest recovery time objective, which is usually longer than the one in the contract.</p>
+
+        <p><strong>Offline or immutable.</strong> If the credentials that run your application can delete your backups, an attacker with those credentials can delete your backups, and several ransomware operators do exactly that before encrypting anything. Object storage with an immutability policy, or a copy in a separate account that production has no path to, is the control. This is the item I most often find missing on otherwise well-run estates.</p>
+
+        <p><strong>Retained long enough to cover slow discovery.</strong> The median time between compromise and detection is measured in weeks, not hours. Seven days of retention means that by the time you find out, every backup you hold already contains the attacker's web shell. Keep a longer tail — monthly snapshots for a year is cheap at ecommerce data volumes.</p>
+
+        <p>Also, and this is the one that bites during an actual restore: back up the things that are not the database. The media directory. The generated configuration. The <code>env.php</code>. The TLS certificates and the DNS zone file. On one recovery I sat through, the database came back in twenty minutes and the product imagery took two days because it lived on a volume that the backup job had never included.</p>
+
+        <h2>10. Logging: Collect Less, Read More</h2>
+
+        <p>Most merchants have logs. Very few have logs anyone looks at, and a log nobody reads is a storage bill with a compliance story attached.</p>
+
+        <p>The events that are worth alerting on, in roughly the order I would add them:</p>
+
+        <p><strong>Admin authentication.</strong> Successes, failures, lockouts, and especially successes from a country or ASN you have never seen before. This single alert would have caught the opening incident eleven days early.</p>
+
+        <p><strong>Privilege and configuration change.</strong> A new admin user, a role change, a change to payment configuration, a change to a CMS block that renders on checkout. These are rare, high-consequence events; alerting on all of them produces a handful of notifications a month.</p>
+
+        <p><strong>New or changed files in the application directory.</strong> On a deployed-artefact setup, nothing in the application tree should change between deployments. If it does, that is either a bad deployment process or a web shell, and both are worth knowing about.</p>
+
+        <p><strong>Outbound connections to hosts you did not expect.</strong> Data exfiltration and command-and-control both look like this. Harder to set up and disproportionately valuable.</p>
+
+        <pre><code class="language-bash"># A poor man's file integrity monitor for a Magento tree.
+# Baseline after deploy; compare on a timer.
+BASE=/var/backups/fim
+APP=/var/www/shop
+
+baseline() {
+  find "$APP" -type f \
+    \( -name '*.php' -o -name '*.phtml' -o -name '*.js' \) \
+    -not -path "*/var/*" -not -path "*/generated/*" -not -path "*/pub/static/*" \
+    -exec sha256sum {} + | sort -k2 &gt; "$BASE/current.sha256"
+}
+
+case "${1:-check}" in
+  baseline) mkdir -p "$BASE"; baseline; mv "$BASE/current.sha256" "$BASE/known.sha256" ;;
+  check)
+    baseline
+    if ! diff -u "$BASE/known.sha256" "$BASE/current.sha256" &gt; "$BASE/drift.txt"; then
+      # Only report added/changed files; deletions during cleanup are noisy.
+      grep '^+' "$BASE/drift.txt" | grep -v '^+++' | mail -s "FIM drift on $(hostname)" ops@example.com
+      exit 1
+    fi
+    echo "no drift" ;;
+esac</code></pre>
+
+        <p>That is deliberately crude. Proper file integrity monitoring tools exist and are better. But a crude one that runs beats a good one that is on the roadmap, and I have found real problems with almost exactly this script.</p>
+
+        <p>One warning from experience: the first week of any file-integrity or anomaly alerting is unbearable. You will discover that your deployment process touches files you did not know about, that a cron job rewrites a config every night, and that a caching layer writes into a directory you assumed was static. Push through that week and tune. Teams that give up in the noise phase end up with the tool installed and the alerts muted, which is the worst of both.</p>
+
+        <h2>11. The Storefront Attack Surface</h2>
+
+        <p>The customer-facing side has its own set of items, and they are mostly about not trusting input and not shipping code you cannot account for.</p>
+
+        <p><strong>Bot and enumeration defence.</strong> Credential stuffing against customer accounts, card testing against your payment endpoint, and inventory scraping all look like ordinary traffic in aggregate and obvious abuse per-session. Rate limit login, password reset, gift card balance checks, and the payment endpoint separately from general traffic — the payment one especially, because card testing at scale will get you fined by your acquirer long before it costs you a fraud loss.</p>
+
+        <p><strong>Do not leak account existence.</strong> "No account with that email" on a login form is a free enumeration oracle. Same message, same timing, for both cases.</p>
+
+        <p><strong>Uploads.</strong> Anywhere a customer can upload a file — returns portals, custom product artwork, support attachments — validate type by content rather than extension, store outside the web root, and serve through a handler. The classic ecommerce breach of this shape is a personalisation feature that accepts an image and cheerfully stores <code>logo.php</code>.</p>
+
+        <p><strong>Response headers.</strong> A Content Security Policy is the strongest single control against the injected-script class of attack, and it is also the one most likely to be deployed in report-only mode and left there for a year. Getting it enforcing is a project of its own; the staged approach I use is set out in the <a href="/blog/secure-http-headers/">headers article</a>, and strict transport security in the <a href="/blog/hsts-secure-seo/">HSTS guide</a>.</p>
+
+        <p><strong>Know what your CDN is doing.</strong> Caching rules that vary by cookie, or do not, are a security question as much as a performance one. The classic failure is a personalised block cached at the edge without varying on the session, serving one customer's name and order history to everyone. I have seen that happen twice, both times after a well-intentioned performance change.</p>
+
+        <h2>12. People, Process, and the Agency With Admin Access</h2>
+
+        <p>The technical controls above are the easy part. What decides whether they are still true next year is process, and process on an ecommerce team usually means three or four specific things.</p>
+
+        <p><strong>Change control that is proportionate.</strong> Not a change advisory board for a copy tweak. But a payment configuration change, a new admin user, or a new script on checkout should require a second pair of eyes. The lightweight version — those changes go through a pull request even when the platform allows them in the UI — works well because it puts a review and an audit trail on exactly the actions that matter.</p>
+
+        <p><strong>Vendor access with an expiry.</strong> Agencies, contractors and support engineers should get time-limited accounts. Most platforms do not support expiry natively, which means it becomes a calendar entry, which means it needs an owner. The quarterly reconciliation described earlier is the backstop when that fails, and it will fail.</p>
+
+        <p><strong>Phishing awareness that is specific.</strong> Generic training is close to useless. Training that says "our finance team will never be asked by email to change bank details for a supplier, and here is what the last three attempts looked like" is not. Ecommerce teams get targeted with plausible, industry-specific lures: fake chargeback notices, fake marketplace suspension warnings, fake courier claims.</p>
+
+        <p><strong>A written division of responsibility with every provider.</strong> Who patches the operating system on your managed hosting — you or them? Who is responsible for the WAF ruleset? Who monitors the payment provider's status page? Most merchants have contracts and not answers, and the moment to find out is not during an incident.</p>
+
+        <h2>13. Incident Readiness, Which Is Mostly Paperwork Done Early</h2>
+
+        <p>Every merchant I have worked with who handled an incident well had done the same small amount of preparation, and it was never a large document.</p>
+
+        <p>One page. Who declares an incident. Who has authority to take the site offline — and, importantly, whether they can be reached at 04:00. Who contacts the acquirer, and within what window, because your merchant agreement almost certainly specifies one measured in hours. Who talks to customers. Who engages the forensic investigator, and from which approved list. Where the out-of-hours numbers are, including the ones for your hosting provider and your payment provider, and where that page lives if your systems are the thing that is down.</p>
+
+        <p>That last detail is not a joke. I have watched a team try to find their escalation contacts in a wiki hosted on the infrastructure they had just isolated.</p>
+
+        <p>Then the technical readiness items, which take a day and save a week:</p>
+
+        <p><strong>Know how to preserve evidence.</strong> The instinct during an incident is to clean up: delete the web shell, reset the password, redeploy. That destroys the evidence needed to find out what else was touched. Snapshot first, then remediate. Have the snapshot command written down, because nobody composes it correctly under pressure.</p>
+
+        <p><strong>Know how to revoke everything quickly.</strong> A documented procedure to invalidate all admin sessions, rotate all API keys, and force a customer password reset. Practise the session invalidation at least once — on several platforms it is less obvious than it should be.</p>
+
+        <p><strong>Have a holding page ready.</strong> A static page you can put in front of the site in minutes, that does not depend on the application. If you have to write one during an incident you will get the DNS wrong.</p>
+
+        <p><strong>Run a tabletop once a year.</strong> Ninety minutes, a made-up scenario, the actual people in the room. It always finds two or three gaps, and it converts the plan from a document into something people have rehearsed.</p>
+
+        <h2>14. A Worked Example: Ninety Days on a Homeware Retailer</h2>
+
+        <p>Back to the client from the opening. Around 4,000 orders a month, Magento 2.4 on managed hosting, an in-house team of three developers and an agency doing front-end work. Here is what the ninety days after the incident actually looked like, including the parts that went badly.</p>
+
+        <p><strong>Week one.</strong> Containment and the obvious. All admin sessions invalidated, all admin passwords reset, 2FA made mandatory with no grandfathering. Fourteen admin accounts disabled, of which two turned out to be in active use by people who had not been on the account list anyone gave us — a warehouse supervisor and someone at the fulfilment partner. That was an unwelcome surprise that produced two angry phone calls and, on reflection, an accurate picture of who actually had access. The malicious CMS block was removed and a snapshot taken first, which mattered later because it let the investigator confirm that the injection had only been live for nine hours.</p>
+
+        <p><strong>Weeks two and three.</strong> Inventory. The four lists from earlier in this article. The third-party script list on checkout came to eleven entries; after asking each owner what would break if it were removed, six survived. Page weight on checkout dropped by 214KB and the largest contentful paint improved by about 400ms on a throttled 4G profile, which is a performance result that arrived entirely as a side effect of a security exercise. That is a common enough pattern that I now use it to sell the exercise.</p>
+
+        <p><strong>Weeks four to six.</strong> Patching. The estate was five security releases behind. This is where the plan slipped, badly. Two extensions broke on the upgrade, one of them the shipping rate calculator, which is not a module you can be casual about. We lost eleven days to it. In hindsight I should have run the upgrade against a production-data staging environment in week one, in parallel with containment, rather than starting it after the inventory. The dependency was not real; I sequenced them for tidiness and it cost a fortnight.</p>
+
+        <p><strong>Weeks seven and eight.</strong> Logging and alerting. Admin authentication events, configuration changes and the file integrity check wired into their existing monitoring. The first six days produced 61 alerts, of which two were interesting: a deployment process that rewrote a template file outside of a release, and a scheduled export job that was authenticating as a named individual who had left in January. Both were fixed. After tuning, the steady state settled at roughly three alerts a week.</p>
+
+        <p><strong>Weeks nine to twelve.</strong> Backups and rehearsal. Immutable copies into a separate account, retention extended from 14 days to 12 months on monthly snapshots, and a restore test. The restore test is the number I would put in front of a board: the database restored in 34 minutes, and the media directory took 31 hours, because it had never been part of the backup and had to be rebuilt from a mixture of the CDN cache and a two-year-old archive. Eleven hundred product images were unrecoverable and had to be re-shot. Their stated recovery time objective before the test was four hours.</p>
+
+        <p>The residual honest position at the end of ninety days: two extensions still unpatched with documented compensating controls and a review date, no enforcing Content Security Policy yet — it was still report-only, and getting it enforcing took another two months — and a WAF ruleset nobody in the building fully understood. That is a normal end state. Security work does not finish; it reaches a defensible position with a written list of what is still open.</p>
+
+        <h2>15. The Checklist, Condensed</h2>
+
+        <p>What follows is the version I hand to teams. Each item is phrased so that the answer is yes or no, and the no is actionable.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Area</th><th>The state you want</th><th>Cadence</th><th>Typical effort</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Accounts</td><td>Every admin account maps to one named person, and a query proves it</td><td>Monthly</td><td>1 day to set up</td></tr>
+            <tr><td>Accounts</td><td>Second factor on admin, hosting, DNS, source control, CI, payment dashboard</td><td>Quarterly check</td><td>1 day</td></tr>
+            <tr><td>Accounts</td><td>Leavers revoked within 24 hours, verified by quarterly reconciliation</td><td>Quarterly</td><td>Half a day</td></tr>
+            <tr><td>Access</td><td>At least three distinct roles in use; nobody on the default super-admin unless they need it</td><td>Quarterly</td><td>1 day</td></tr>
+            <tr><td>Patching</td><td>Critical patches applied within 7 days, measured and reported</td><td>Continuous</td><td>Ongoing</td></tr>
+            <tr><td>Patching</td><td>Runtime versions are all in vendor support</td><td>Quarterly</td><td>Varies wildly</td></tr>
+            <tr><td>Dependencies</td><td>Automated advisory scanning on every build, with a triage owner</td><td>Continuous</td><td>Half a day</td></tr>
+            <tr><td>Dependencies</td><td>Checkout script allowlist enforced in CI</td><td>Continuous</td><td>1 day</td></tr>
+            <tr><td>Secrets</td><td>No credentials in repository history; anything found is rotated</td><td>Continuous</td><td>1 to 5 days</td></tr>
+            <tr><td>Backups</td><td>Restore tested end to end, with a recorded duration</td><td>Quarterly</td><td>1 day per test</td></tr>
+            <tr><td>Backups</td><td>At least one copy production credentials cannot delete</td><td>Quarterly check</td><td>1 day</td></tr>
+            <tr><td>Logging</td><td>Alerts on admin auth, privilege change, config change, file drift</td><td>Continuous</td><td>2 to 3 days</td></tr>
+            <tr><td>Storefront</td><td>Rate limits on login, reset, and payment endpoints</td><td>Continuous</td><td>1 day</td></tr>
+            <tr><td>Incident</td><td>One-page plan with real names and numbers, rehearsed annually</td><td>Annual</td><td>Half a day</td></tr>
+          </tbody>
+        </table>
+
+        <p>Effort figures assume a team that knows the estate. Add substantially for an inherited system, and add a great deal for one where the previous team has gone.</p>
+
+        <h2>16. What This Costs, Honestly</h2>
+
+        <p>The question I get from finance is what the programme costs, and the answer that lands is not a security answer.</p>
+
+        <p>Setting up everything above on a mid-sized Magento estate is somewhere between fifteen and thirty engineering days spread over a quarter, plus a modest run rate afterwards — an hour a month for reconciliation, a day a quarter for restore tests, and whatever triage the advisory scanning generates, which after tuning is usually under an hour a week.</p>
+
+        <p>Against that, roughly half the items pay for themselves outside security. The script inventory made checkout faster. The smoke test suite that made patching routine also made every other release safer. The backup restore test surfaced a data loss exposure that had nothing to do with attackers. The role definitions stopped a marketing contractor from accidentally disabling a payment method, which had happened twice before.</p>
+
+        <p>The cost of the alternative is the part nobody can price honestly in advance. On the homeware account the direct incident cost — forensics, the acquirer's requirements, agency time, re-shooting product photography — ran to a number that would have funded the entire programme roughly four times over, and that excludes two weeks of a leadership team doing nothing else.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"We're on Shopify, so most of this doesn't apply, right?"</strong> The infrastructure sections mostly do not — Shopify patches its own servers and you cannot touch them. Everything about accounts, apps, staff access, secrets in your own repositories, and the code in your theme applies exactly as written. And if you have built a headless storefront or a custom checkout, more of it applies than you would like, because those are your systems.</p>
+
+        <p><strong>"Isn't a WAF enough?"</strong> A WAF is a useful layer and it is not a substitute for any item on this list. It will not stop a valid login with a stolen password, which is how the opening incident happened. A WAF you deployed and never tuned is also weaker than most people assume; ask when the ruleset was last reviewed and what it blocked yesterday.</p>
+
+        <p><strong>"How do I get budget for this when nothing has gone wrong?"</strong> Do the inventory first and present the four lists. In my experience the list of third parties receiving customer data, with the unowned entries highlighted, does more to unlock budget than any amount of general argument. It is concrete, it is specific to the business, and nobody has to take a security opinion on faith.</p>
+
+        <p><strong>"Our developers need production database access to debug."</strong> Common, and usually solvable with better logging and a staging environment holding realistic-but-synthetic data. Where genuine production access is needed, time-limited elevation with an approval trail is the pattern. Standing production access for a whole team is a finding waiting to happen, and it also makes the account reconciliation meaningless.</p>
+
+        <p><strong>"How often should we run a penetration test?"</strong> Annually, and after any significant architectural change — a replatform, a new payment provider, a move to a new hosting arrangement. What matters more than frequency is scoping: a test that only covers the public storefront will not tell you anything about the admin panel or the API, and those are usually where the interesting findings are.</p>
+
+        <p><strong>"Should we run a bug bounty?"</strong> Not until the items in this article are done. A bounty programme against an estate that has not had a patching cadence produces a flood of low-severity reports and a triage burden you have not resourced. A published security contact address and a policy that says you will not sue people who report things in good faith costs nothing and is worth having from day one.</p>
+
+        <p><strong>"We inherited this system and have no documentation. Where do we start?"</strong> Access first, because you can do it without understanding the code: enumerate every account on every system, disable everything you cannot attribute to a person who currently works there, and turn on 2FA. It is disruptive for a week and it removes the single largest category of risk while you learn everything else.</p>
+
+        <h2>18. What I'd Do First</h2>
+
+        <p>In this order, and the first three are a single day's work.</p>
+
+        <p>Export the admin user list and the list of accounts on your hosting console, your DNS registrar and your source control. Disable anything you cannot attribute to a named current employee or an in-contract supplier. Expect to find something.</p>
+
+        <p>Turn on mandatory two-factor authentication for the admin panel and the DNS registrar. Those two, today, before anything else on the list.</p>
+
+        <p>Run the script inventory on your live checkout page, including a real journey and not just a cold load. Find an owner for every entry. Delete the ones with no owner.</p>
+
+        <p>Then, over the following fortnight: get a secret scan over your repository history and rotate whatever it finds. Check whether your backups include the media directory, and whether anything with your production credentials could delete them. Set up advisory scanning in CI with the unfixed-CVE noise suppressed so people keep looking at it.</p>
+
+        <p>Then the quarterly rhythm: reconcile accounts, restore a backup and time it, review the third-party list, and re-read the incident plan to check the phone numbers still belong to people who work there.</p>
+
+        <p>The framing I would leave you with is the one from the opening incident. Nobody exploited a vulnerability on that site. An old account with a reused password logged in through the front door and edited a piece of content. Every single one of the controls that would have prevented it — individual accounts, mandatory second factor, offboarding with a technical step, quarterly reconciliation, alerting on admin logins from unusual locations, a review requirement on content that renders at checkout — is boring, cheap, and was already on somebody's list.</p>
+
+        <p>The difference between merchants who get compromised and merchants who do not is almost never sophistication. It is whether the boring list has an owner and a date.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -353,7 +683,7 @@ resource "aws_wafv2_web_acl" "ecommerce_waf" {
             </li>
             <li>
               <strong><a href="/blog/waf-implementation/">Implementing a Web Application Firewall (WAF) for Ecommerce</a></strong>
-              <p>Cloudflare & AWS WAF expression rules.</p>
+              <p>Cloudflare &amp; AWS WAF expression rules.</p>
             </li>
             <li>
               <strong><a href="/blog/secure-payment-gateways/">Architecting Secure Payment Gateways</a></strong>
@@ -361,7 +691,6 @@ resource "aws_wafv2_web_acl" "ecommerce_waf" {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -395,7 +724,7 @@ resource "aws_wafv2_web_acl" "ecommerce_waf" {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 
 </html>

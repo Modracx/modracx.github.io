@@ -66,10 +66,12 @@
     <link rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" />
   </noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Technical SEO & Structured Data Implementation for E-Commerce | MODRACX</title>
   <meta name="description"
-    content="An exhaustive engineering guide to e-commerce technical SEO, JSON-LD `@graph` architecture, Google Merchant Center rich snippets, and variant product schema modeling." />
+    content="Site-wide structured data: the @graph entity model, BreadcrumbList, Organization and WebSite, what happened to FAQ and HowTo, and a request-scoped assembler that stops three layers emitting duplicates." />
   <meta property="og:title" content="Technical SEO & Structured Data Implementation for E-Commerce | MODRACX" />
   <meta property="og:description"
     content="Technical SEO and structured data implementation guide by Kenneth D'Silva." />
@@ -204,14 +206,13 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Technical SEO & Structured Data Implementation for E-Commerce</h1>
-        <p class="lede">The engineering blueprint for JSON-LD `@graph` schema design, Google Merchant Center rich
-          snippets, variant product modeling, and PHP/Node.js automated schema generators.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Technical SEO &amp; Structured Data Implementation for E-Commerce</h1>
+        <p class="lede">One product page emitted three BreadcrumbList blocks and Google picked the wrong one. Site-wide structured data is an architecture problem before it is a markup problem.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=SEO+%26+Marketing">SEO & Marketing</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=SEO+%26+Marketing">SEO &amp; Marketing</a></span>
         </div>
       </div>
 
@@ -240,414 +241,763 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
+        <h2>1. Three Breadcrumbs, One Page, Two Of Them Lying</h2>
 
-        <h2>1. Structured Data as Machine Readable API Contracts</h2>
-        <p>Semantic search requires JSON-LD structured data as a machine-readable API contract. This defines entities and prices without relying on DOM heuristics, essential for React/Vue SPAs.</p>
-        <p>Robust structured data is non-negotiable, powering Merchant Center snippets. JSON-LD requires API-level rigor: strict schema validation, comprehensive data, and error handling.</p>
-        <p>Decoupling data from markup allows dynamic generation. This is critical in headless setups where frontends map API data to Schema.org independently of the DOM.</p>
+        <p>A garden equipment distributor asked me why their search results showed the breadcrumb trail <code>example.co.uk › Sale › Clearance</code> for a product that had been full price for eight months. Not a ranking problem. Not a traffic problem, particularly. Just a URL line in the SERP that said something untrue about every one of the 2,300 products that had ever been in a sale.</p>
 
-        <hr />
+        <p>The page emitted three <code>BreadcrumbList</code> nodes. One from the theme's header partial, rendering the visible trail. One from a "SEO booster" extension installed in 2022, which built its trail from the product's <em>first</em> assigned category by ID — and category ID 84 was Clearance, created early and assigned to everything that had ever been discounted. And one from a category-landing-page module that had been copy-pasted into the product template by someone who wanted the same visual component.</p>
 
-        <h2>2. The Superiority of the JSON-LD `@graph` Architecture</h2>
-        <p>Fragmenting entities across independent script blocks is an anti-pattern. It fails to define relationships, forcing search engines to infer connections and degrading performance.</p>
-        <p>The <code>@graph</code> architecture is the solution. Wrapping entities in an <code>@graph</code> array with <code>@id</code> references constructs an interconnected Knowledge Graph.</p>
-        <p>This primary <code>Product</code> references the <code>WebPage</code> and <code>Organization</code> using @id, reducing ambiguity.</p>
+        <p>Google picked the second one. It had no reason not to; all three were structurally valid, all three were on the page, and nothing in the specification says which wins when a page contradicts itself. The fix took forty minutes. Finding it took most of a day, because the three blocks were emitted from three layers of the stack and none of them appeared in the same template file.</p>
+
+        <p>That is the shape of nearly every site-wide structured data problem I get called about. Not "the markup is wrong" but "the site says several things at once and something downstream had to choose." Product-level markup — <code>Product</code>, <code>Offer</code>, prices, ratings, merchant listing requirements — is a self-contained problem with its own rulebook, and I have written about it separately in the piece on <a href="/blog/structured-data-ecommerce-seo/">product schema for ecommerce</a>. This article is about everything else: the nodes that describe the site rather than the item, the features Google has quietly withdrawn, and the mechanics of getting exactly one correct block onto every page from a template system that was not designed to guarantee it.</p>
+
+        <h2>2. The Two Jobs Site-Wide Structured Data Does</h2>
+
+        <p>It is worth being precise about why any of this is worth building, because a lot of it is not.</p>
+
+        <p>The first job is earning a specific SERP feature. Breadcrumb trails replacing the URL line. A sitelinks search box. A knowledge panel with your logo in it. These are visible, measurable, and — this is the part people forget — entirely at Google's discretion to withdraw.</p>
+
+        <p>The second job is disambiguation. Telling Google that <code>alderwoodhome.co.uk</code>, <code>@alderwoodhome</code> on three social platforms, a Companies House registration, and a Wikipedia stub are all the same organisation. Telling it that this product sits inside this category inside this section. None of that produces a visible feature directly. It produces correctness in systems you cannot inspect — entity resolution, the Shopping graph, whatever assembles AI overviews this quarter.</p>
+
+        <p>The first job has been shrinking for three years. The second has not. If you are deciding where to spend effort, I would put it in the second, and I say that as someone who spent a lot of 2022 building FAQ markup that is now dead weight.</p>
+
+        <h2>3. The Entity Graph, and What @id Is Actually For</h2>
+
+        <p>Most implementations emit a pile of independent JSON-LD blocks: a breadcrumb here, an organisation there, a product somewhere else. That works, in the sense that each is parsed. What it does not do is state the relationships between them, and the relationships are where the disambiguation value lives.</p>
+
+        <p>The <code>@graph</code> construct lets you emit one block containing several nodes that reference each other by <code>@id</code>.</p>
 
         <pre><code class="language-json">{
   "@context": "https://schema.org",
   "@graph": [
     {
       "@type": "Organization",
-      "@id": "https://example.com/#organization",
-      "name": "Acme Corp",
-      "url": "https://example.com/"
+      "@id": "https://alderwoodhome.co.uk/#organization",
+      "name": "Alderwood Home",
+      "url": "https://alderwoodhome.co.uk/",
+      "logo": {
+        "@type": "ImageObject",
+        "@id": "https://alderwoodhome.co.uk/#logo",
+        "url": "https://alderwoodhome.co.uk/media/logo-600x600.png",
+        "width": 600,
+        "height": 600
+      }
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://alderwoodhome.co.uk/#website",
+      "url": "https://alderwoodhome.co.uk/",
+      "name": "Alderwood Home",
+      "publisher": { "@id": "https://alderwoodhome.co.uk/#organization" },
+      "inLanguage": "en-GB"
     },
     {
       "@type": "WebPage",
-      "@id": "https://example.com/product/acme-widget/#webpage",
-      "url": "https://example.com/product/acme-widget/",
-      "name": "Acme Widget - Product Page",
-      "isPartOf": { "@id": "https://example.com/#organization" }
+      "@id": "https://alderwoodhome.co.uk/products/oak-lamp-classic#webpage",
+      "url": "https://alderwoodhome.co.uk/products/oak-lamp-classic",
+      "name": "Classic Oak Table Lamp",
+      "isPartOf": { "@id": "https://alderwoodhome.co.uk/#website" },
+      "breadcrumb": { "@id": "https://alderwoodhome.co.uk/products/oak-lamp-classic#breadcrumb" },
+      "primaryImageOfPage": { "@id": "https://alderwoodhome.co.uk/products/oak-lamp-classic#primaryimage" }
     },
     {
-      "@type": "Product",
-      "@id": "https://example.com/product/acme-widget/#product",
-      "name": "Acme Super Widget",
-      "sku": "WIDGET-001",
-      "description": "The ultimate widget for all your engineering and manufacturing needs.",
-      "mainEntityOfPage": { "@id": "https://example.com/product/acme-widget/#webpage" },
-      "brand": { "@id": "https://example.com/#organization" }
+      "@type": "BreadcrumbList",
+      "@id": "https://alderwoodhome.co.uk/products/oak-lamp-classic#breadcrumb",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Home",
+          "item": "https://alderwoodhome.co.uk/" },
+        { "@type": "ListItem", "position": 2, "name": "Lighting",
+          "item": "https://alderwoodhome.co.uk/lighting/" },
+        { "@type": "ListItem", "position": 3, "name": "Table Lamps",
+          "item": "https://alderwoodhome.co.uk/lighting/table-lamps/" },
+        { "@type": "ListItem", "position": 4, "name": "Classic Oak Table Lamp" }
+      ]
     }
   ]
 }</code></pre>
 
-        <p>When developing custom structured data generators for robust platforms such as Magento 2, Shopware, or Shopify Plus, architecting the dynamic output strictly around the <code>@graph</code> array should be the non-negotiable standard practice. It dramatically simplifies downstream validation, reduces payload redundancy (as static entities like the parent Organization can be defined exactly once and referenced via the `@id` node throughout the document), and aligns perfectly with how modern semantic search engines process entity relationships.</p>
+        <p>The convention worth adopting: fragment identifiers on the origin for site-wide nodes (<code>/#organization</code>, <code>/#website</code>) and fragment identifiers on the page URL for page-level nodes (<code>/products/x#webpage</code>). It reads clearly, it is stable across a site migration as long as the domain holds, and every node in the graph then has a name you can reference from anywhere.</p>
 
-        <hr />
+        <p>Is the graph strictly necessary? No. Google will happily parse four separate script blocks and infer some of the same relationships. What the graph gives you is a single assembly point in your code — one function that produces the whole page's structured data — which turns "three breadcrumbs from three layers" into a structurally impossible outcome. That is the real argument for it, and it is an engineering argument rather than an SEO one.</p>
 
-        <h2>3. Google Merchant Center Rich Snippets and Product Offer Modeling</h2>
-        <p>Structured data secures enhanced SERP visibility via rich snippets displaying price, stock, and shipping. The <code>Product</code> requires a populated <code>offers</code> property.</p>
-        <p>Merchant Center demands strict compliance. The schema must explicitly include ISO currency, item condition, and <code>ItemAvailability</code>. Identifiers like GTIN match catalogs.</p>
+        <h3>Where the product node fits</h3>
 
-        <p>Below is a highly technical example of a robust, production-grade <code>Offer</code> block designed specifically to meet Google's stringent, uncompromising requirements for comprehensive rich snippet generation:</p>
+        <p>On a product page, the <code>Product</code> node joins the same graph, with <code>mainEntity</code> on the <code>WebPage</code> pointing at it. The internals of that node — offers, availability, ratings — are their own subject, covered in the <a href="/blog/structured-data-ecommerce-seo/">product schema article</a>. What matters here is that it is one more node in one graph produced by one assembler, not a fifth script tag added by a fifth developer.</p>
 
-        <pre><code class="language-json">"offers": {
-  "@type": "Offer",
-  "url": "https://example.com/product/acme-widget/",
-  "priceCurrency": "USD",
-  "price": "49.99",
-  "priceValidUntil": "2027-12-31",
-  "itemCondition": "https://schema.org/NewCondition",
-  "availability": "https://schema.org/InStock",
-  "seller": {
-    "@type": "Organization",
-    "name": "Acme Corp"
-  },
-  "shippingDetails": {
-    "@type": "OfferShippingDetails",
-    "shippingRate": {
-      "@type": "MonetaryAmount",
-      "value": "5.00",
-      "currency": "USD"
-    },
-    "deliveryTime": {
-      "@type": "ShippingDeliveryTime",
-      "businessDays": {
-        "@type": "OpeningHoursSpecification",
-        "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-      },
-      "transitTime": {
-        "@type": "QuantitativeValue",
-        "minValue": 2,
-        "maxValue": 5,
-        "unitCode": "d"
-      }
-    }
-  }
-}</code></pre>
+        <h2>4. BreadcrumbList: The One That Still Reliably Pays</h2>
 
-        <p>The explicit inclusion of the <code>shippingDetails</code> node is a relatively recent, highly impactful addition to the schema.org vocabulary that Google has aggressively adopted across its ecosystem. By proactively exposing shipping costs and highly accurate estimated delivery times directly in the SERPs, e-commerce merchants can significantly, measurably improve organic click-through rates, as users are significantly more likely to engage with search listings that provide completely transparent, upfront fulfillment data prior to the initial page click.</p>
+        <p>Breadcrumbs are the most dependable site-wide rich result left. Google has shown them for years, has given no indication of withdrawing them, and they replace an ugly truncated URL with a readable hierarchy. On mobile especially, that is real estate.</p>
 
-        <hr />
+        <p>The rules are short and people break all of them.</p>
 
-        <h2>4. Variant Product Schema Modeling for Complex Catalogs</h2>
-        <p>Accurately modeling variants—items sharing a base definition but differing in attributes—is complex. Generic <code>Product</code> schemas fail to communicate distinct SKUs.</p>
-        <p>Schema.org addresses this via <code>ProductGroup</code> and <code>hasVariant</code>. Developers define a parent encapsulating shared attributes and an array of individual <code>Product</code> variants.</p>
-        <p>The backend generator must recursively iterate over configurable attributes to build distinct entities for each permutation.</p>
+        <p><strong>Position starts at 1 and increments by 1.</strong> No gaps, no zero-indexing. I have seen a React implementation emit positions 0 through 3 and lose the feature entirely.</p>
 
-        <pre><code class="language-json">{
-  "@context": "https://schema.org",
-  "@type": "ProductGroup",
-  "name": "Acme Running Shoe Pro",
-  "description": "High-performance running shoe designed specifically for competitive marathons and ultra-endurance events.",
-  "brand": {
-    "@type": "Brand",
-    "name": "Acme"
-  },
-  "productGroupID": "ACME-SHOE-PRO-BASE",
-  "hasVariant": [
-    {
-      "@type": "Product",
-      "name": "Acme Running Shoe Pro - Crimson Red / Size 10",
-      "sku": "ACME-SHOE-RED-10",
-      "gtin14": "12345678901234",
-      "color": "Crimson Red",
-      "size": "10",
-      "offers": {
-        "@type": "Offer",
-        "priceCurrency": "USD",
-        "price": "149.99",
-        "availability": "https://schema.org/InStock"
-      }
-    },
-    {
-      "@type": "Product",
-      "name": "Acme Running Shoe Pro - Cobalt Blue / Size 10",
-      "sku": "ACME-SHOE-BLU-10",
-      "gtin14": "12345678901235",
-      "color": "Cobalt Blue",
-      "size": "10",
-      "offers": {
-        "@type": "Offer",
-        "priceCurrency": "USD",
-        "price": "149.99",
-        "availability": "https://schema.org/OutOfStock"
-      }
-    }
-  ]
-}</code></pre>
+        <p><strong>The last item should omit <code>item</code>.</strong> The current page does not need a URL — it is the page. Including a self-referential URL is tolerated but the cleaner form is <code>name</code> alone. What is not tolerated is <code>item</code> pointing somewhere else, which happens when a template reuses the category breadcrumb builder on a product page.</p>
 
-        <p>This explicitly verbose modeling guarantees that when a highly motivated user specifically searches for "Acme Running Shoe Pro Crimson Red Size 10," Google possesses the precise, exact data required to instantly surface the exact variant, complete with accurate, real-time pricing and stock status, thereby maximizing search relevance and immensely boosting the baseline conversion probability.</p>
+        <p><strong>The trail must match a real path through the site.</strong> This is the one the garden distributor broke. Google compares your breadcrumb against the URL structure and the internal linking. A trail that says Home › Sale › Clearance for a URL of <code>/lighting/table-lamps/oak-lamp-classic</code> is a contradiction, and when Google resolves contradictions it does not always resolve them your way.</p>
 
-        <hr />
+        <p><strong>One trail per page.</strong> If a product genuinely belongs to three categories, pick one — the primary one, the one the canonical internal linking uses — and be consistent. Emitting three <code>BreadcrumbList</code> nodes to express three valid paths is permitted by the vocabulary and is a bad idea in practice, because it gives Google a choice you would rather make yourself.</p>
 
-        <h2>5. Dynamic JSON-LD Injection via PHP (Magento 2 Block & Plugin Architecture)</h2>
-        <p>Generating JSON-LD in enterprise platforms like Magento 2 requires a custom module with Block classes, heavily cached via FPC and Varnish.</p>
-        <p>This Block class builds the payload using `@graph`, handling JSON formatting to prevent escaping issues.</p>
+        <p>That last point deserves a paragraph of honesty, because it is the question I get most. Google's documentation does allow multiple breadcrumb trails for a page reachable by several paths. In principle you can express "this lamp is in Lighting › Table Lamps and also in Brands › Alderwood." In practice, across maybe fifteen implementations, I have never seen the second trail produce a benefit and I have twice seen the wrong one selected. Pick one. If your merchandising team insists a product's primary category is ambiguous, that ambiguity is a taxonomy problem to solve in the catalogue, not a schema problem to solve with markup — and it is worth reading alongside how keywords map to page types in the piece on <a href="/blog/advanced-keyword-research/">intent-led keyword research</a>, because the two problems have the same root.</p>
+
+        <h3>Building the trail from the right source</h3>
+
+        <p>The trail in your markup should come from the same data as the trail on your page. Not a parallel implementation. If they are computed separately, they will diverge, and the divergence will be invisible because nobody reads JSON-LD by eye.</p>
+
+        <p>In Magento, that means reading the breadcrumbs block rather than re-deriving the category path:</p>
 
         <pre><code class="language-php">&lt;?php
-namespace Modracx\Seo\Block;
+declare(strict_types=1);
 
-use Magento\Framework\View\Element\Template;
-use Magento\Catalog\Model\Product;
-use Magento\Framework\Registry;
-use Magento\Store\Model\StoreManagerInterface;
-use Magento\Review\Model\Review\SummaryFactory;
+namespace Modracx\Schema\Model\Node;
 
-class JsonLdProductBlock extends Template
+use Magento\Framework\View\LayoutInterface;
+
+class Breadcrumb
 {
-    protected Registry $_registry;
-    protected StoreManagerInterface $_storeManager;
-    protected SummaryFactory $_reviewSummaryFactory;
-
     public function __construct(
-        Template\Context $context,
-        Registry $registry,
-        StoreManagerInterface $storeManager,
-        SummaryFactory $reviewSummaryFactory,
-        array $data = []
+        private LayoutInterface $layout
     ) {
-        $this-&gt;_registry = $registry;
-        $this-&gt;_storeManager = $storeManager;
-        $this-&gt;_reviewSummaryFactory = $reviewSummaryFactory;
-        parent::__construct($context, $data);
     }
 
-    public function getJsonLdSchema(): string
+    /**
+     * Read the crumbs the page is actually rendering. If the visible trail is
+     * wrong, the markup will be wrong in the same way — which is a bug you can
+     * see, rather than one hiding in a script tag.
+     */
+    public function build(string $pageUrl): ?array
     {
-        /** @var Product|null $product */
-        $product = $this-&gt;_registry-&gt;registry('current_product');
-        if (!$product || !$product-&gt;getId()) {
-            return '';
+        $block = $this-&gt;layout-&gt;getBlock('breadcrumbs');
+        if (!$block) {
+            return null;
         }
 
-        $storeId = $this-&gt;_storeManager-&gt;getStore()-&gt;getId();
-        $currency = $this-&gt;_storeManager-&gt;getStore()-&gt;getCurrentCurrencyCode();
-        
-        $schema = [
-            '@context' =&gt; 'https://schema.org',
-            '@graph' =&gt; []
-        ];
+        $crumbs = $block-&gt;getCacheKeyInfo()['crumbs'] ?? null;
+        $crumbs = $crumbs ? json_decode(base64_decode($crumbs), true) : [];
+        if (!$crumbs) {
+            return null;
+        }
 
-        $productEntity = [
-            '@type' =&gt; 'Product',
-            '@id' =&gt; $product-&gt;getProductUrl() . '#product',
-            'name' =&gt; $product-&gt;getName(),
-            'sku' =&gt; $product-&gt;getSku(),
-            'description' =&gt; strip_tags($product-&gt;getDescription()),
-            'image' =&gt; $this-&gt;getProductImages($product),
-            'offers' =&gt; [
-                '@type' =&gt; 'Offer',
-                'price' =&gt; number_format($product-&gt;getFinalPrice(), 2, '.', ''),
-                'priceCurrency' =&gt; $currency,
-                'availability' =&gt; $product-&gt;isAvailable() ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
-                'url' =&gt; $product-&gt;getProductUrl()
-            ]
-        ];
-
-        // Safely append AggregateRating if verified reviews exist
-        $this-&gt;_reviewSummaryFactory-&gt;create()-&gt;appendSummaryDataToObject($product, $storeId);
-        if ($product-&gt;getRatingSummary()) {
-            $productEntity['aggregateRating'] = [
-                '@type' =&gt; 'AggregateRating',
-                'ratingValue' =&gt; $product-&gt;getRatingSummary() / 20, // Convert standard percentage to accurate 5-star scale
-                'reviewCount' =&gt; $product-&gt;getReviewsCount()
+        $items = [];
+        $position = 0;
+        foreach ($crumbs as $crumb) {
+            $position++;
+            $item = [
+                '@type'    =&gt; 'ListItem',
+                'position' =&gt; $position,
+                'name'     =&gt; (string) ($crumb['label'] ?? ''),
             ];
-        }
-
-        $schema['@graph'][] = $productEntity;
-
-        return json_encode($schema, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-    }
-    
-    private function getProductImages(Product $product): array
-    {
-        $images = [];
-        $gallery = $product-&gt;getMediaGalleryImages();
-        if ($gallery) {
-            foreach ($gallery as $image) {
-                $images[] = $image-&gt;getUrl();
+            // Last crumb is the current page: no URL.
+            if (!empty($crumb['link']) &amp;&amp; $position &lt; count($crumbs)) {
+                $item['item'] = (string) $crumb['link'];
             }
+            $items[] = $item;
         }
-        return $images;
+
+        return [
+            '@type'           =&gt; 'BreadcrumbList',
+            '@id'             =&gt; $pageUrl . '#breadcrumb',
+            'itemListElement' =&gt; $items,
+        ];
     }
 }</code></pre>
 
-        <p>This dynamic implementation ensures the generated schema adapts to the localized currency, store view, and review data.</p>
+        <p>Reading from the layout block rather than the category model is deliberate. It means the markup inherits whatever logic the theme uses to pick a category path, including the client's custom rules, and it means a wrong trail is visible on the page rather than only in the source.</p>
 
-        <hr />
+        <h2>5. Organization: The Node That Earns Nothing And Matters Most</h2>
 
-        <h2>6. Node.js & Next.js Middleware for Headless Schema Injection</h2>
-        <p>In headless architectures, Next.js App Router and React Server Components fetch data, construct JSON-LD, and inject it without client-side JS.</p>
-        <p>Server-rendered JSON-LD guarantees immediate availability, bypassing rendering queues.</p>
-        <p>Below is a Next.js component securely injecting the payload.</p>
+        <p><code>Organization</code> produces no rich result on its own. No stars, no annotation, nothing you can screenshot for a stakeholder. It is also the node I would keep if I had to delete everything else, because it is what connects a domain to an entity, and entity resolution is upstream of a great deal you cannot see.</p>
 
-        <pre><code class="language-typescript">import { Metadata } from 'next';
-import { notFound } from 'next/navigation';
+        <pre><code class="language-json">{
+  "@type": "Organization",
+  "@id": "https://alderwoodhome.co.uk/#organization",
+  "name": "Alderwood Home",
+  "legalName": "Alderwood Home Limited",
+  "url": "https://alderwoodhome.co.uk/",
+  "logo": {
+    "@type": "ImageObject",
+    "url": "https://alderwoodhome.co.uk/media/logo-600x600.png",
+    "width": 600,
+    "height": 600
+  },
+  "image": "https://alderwoodhome.co.uk/media/logo-600x600.png",
+  "email": "hello@alderwoodhome.co.uk",
+  "telephone": "+44-1225-555010",
+  "vatID": "GB384920117",
+  "iso6523Code": "0060:213456789",
+  "address": {
+    "@type": "PostalAddress",
+    "streetAddress": "14 Milsom Street",
+    "addressLocality": "Bath",
+    "addressRegion": "Somerset",
+    "postalCode": "BA1 1DE",
+    "addressCountry": "GB"
+  },
+  "sameAs": [
+    "https://www.linkedin.com/company/alderwood-home",
+    "https://www.instagram.com/alderwoodhome",
+    "https://find-and-update.company-information.service.gov.uk/company/09183774"
+  ],
+  "contactPoint": [{
+    "@type": "ContactPoint",
+    "telephone": "+44-1225-555010",
+    "contactType": "customer service",
+    "areaServed": "GB",
+    "availableLanguage": ["English"]
+  }]
+}</code></pre>
 
-interface ProductProps {
-  params: { slug: string };
+        <p>Points worth making about that.</p>
+
+        <p><strong>The logo has real requirements.</strong> Minimum 112×112 pixels, crawlable, not blocked in robots.txt, and — the one people miss — it should be the logo on a background, not a transparent PNG that renders as black-on-black in a dark context. Square is safest. I keep a dedicated 600×600 asset for this rather than reusing the header SVG, because SVG is not accepted and because the header logo is usually a horizontal lockup that crops badly.</p>
+
+        <p><strong><code>sameAs</code> should be identity, not marketing.</strong> Links to profiles that unambiguously belong to this organisation. A Companies House record, a Wikidata item, a verified LinkedIn page are worth more than six social profiles with fourteen followers. Padding the list with every platform you registered a handle on adds noise, and I have no evidence it helps. Three strong links beat nine weak ones.</p>
+
+        <p><strong>Do not use <code>LocalBusiness</code> unless you are one.</strong> An online-only retailer with a warehouse is not a local business, and marking up an unstaffed unit on an industrial estate with opening hours to try for a map pack listing is both ineffective and the kind of thing that gets a Business Profile suspended. If you have real shops customers can visit, model each shop as its own <code>Store</code> node on its own location page, with the <code>Organization</code> as <code>parentOrganization</code>.</p>
+
+        <p><strong><code>vatID</code> and <code>iso6523Code</code> are new-ish and cheap.</strong> Google has been explicit that structured business identifiers help with entity confidence, particularly for the merchant knowledge panels that show alongside shopping results. Two lines of static template. I add them by default now.</p>
+
+        <p>This node is identical on every page, which means it is the perfect candidate for the site-wide half of your assembler and the perfect thing to get wrong exactly once and everywhere.</p>
+
+        <h2>6. WebSite, and the Search Box Google Took Away</h2>
+
+        <p>The <code>WebSite</code> node has two uses and one of them died in November 2024.</p>
+
+        <p>The dead one first, because people are still building it. <code>potentialAction</code> with a <code>SearchAction</code> was the mechanism for the sitelinks search box — the search field Google sometimes rendered under a brand's homepage result, letting a user search your site directly from the SERP.</p>
+
+        <pre><code class="language-json">{
+  "@type": "WebSite",
+  "@id": "https://alderwoodhome.co.uk/#website",
+  "url": "https://alderwoodhome.co.uk/",
+  "potentialAction": {
+    "@type": "SearchAction",
+    "target": {
+      "@type": "EntryPoint",
+      "urlTemplate": "https://alderwoodhome.co.uk/search?q={search_term_string}"
+    },
+    "query-input": "required name=search_term_string"
+  }
+}</code></pre>
+
+        <p>Google deprecated the sitelinks search box feature in November 2024 and stopped showing it. The markup is not harmful and the property is still valid vocabulary, but it will not produce the feature, and any agency proposing it as a deliverable in 2026 is either behind or hoping you are. I leave existing implementations in place — removing them costs time and buys nothing — and I do not build new ones.</p>
+
+        <p>The live use is duller and better: <code>WebSite</code> as the anchor for site name in search results. Google uses the <code>name</code> property, alongside the <code>og:site_name</code> meta and your title patterns, to decide what to display as the site name above a result. If your results show <code>alderwoodhome.co.uk</code> rather than <code>Alderwood Home</code>, this node is one of the levers. It only works on the homepage — Google reads it from the root document — and it takes weeks to settle.</p>
+
+        <pre><code class="language-json">{
+  "@type": "WebSite",
+  "@id": "https://alderwoodhome.co.uk/#website",
+  "url": "https://alderwoodhome.co.uk/",
+  "name": "Alderwood Home",
+  "alternateName": "Alderwood",
+  "inLanguage": "en-GB",
+  "publisher": { "@id": "https://alderwoodhome.co.uk/#organization" }
+}</code></pre>
+
+        <p>Give <code>alternateName</code> a genuine alternative — an abbreviation people actually use, not a keyword phrase. "Alderwood Home | Lighting &amp; Homeware Bath" is not an alternate name, it is a title tag, and putting it there is the kind of thing that makes Google ignore the field.</p>
+
+        <h2>7. FAQ and HowTo: What Actually Happened</h2>
+
+        <p>Between August and September 2023, Google removed two rich results that a great deal of agency work had been built on. It is worth stating precisely what happened, because the misremembered version leads people to either keep building dead markup or conclude that all structured data is a waste.</p>
+
+        <p><strong>FAQ rich results</strong> — the expandable question list under a search result — were restricted in August 2023 to "well-known, authoritative government and health websites." Not removed from the vocabulary, not penalised, simply no longer shown for the overwhelming majority of sites. A retailer marking up FAQs today gets no feature. The markup is still parsed and there is no evidence it hurts.</p>
+
+        <p><strong>HowTo rich results</strong> were removed entirely on desktop in September 2023, having already gone from mobile. No exceptions, no authoritative-site carve-out.</p>
+
+        <p>Both changes were announced, both were unambiguous, and both are still being sold. I have reviewed proposals in the last year quoting FAQ schema as a route to "double your SERP real estate."</p>
+
+        <p>So should you strip existing FAQ markup? Generally no. It costs engineering time, it carries a small regression risk, and there is a reasonable argument — unprovable, but reasonable — that structured question-and-answer pairs help whatever assembles AI overviews and answer boxes. What you should stop doing is treating it as a feature investment or letting it drive content decisions. The pattern where a product page grows six invented questions purely so it can carry FAQ markup was always bad for users and now buys nothing at all.</p>
+
+        <p>The durable lesson is about dependency. Anything Google renders, Google can stop rendering, and the announcement will come the same week it happens. Build the markup that describes reality — what this page is, what it sells, who publishes it — and treat rich results as an upside rather than the reason. The nodes that survived 2023 untouched were the descriptive ones.</p>
+
+        <h2>8. What Is Actually Worth Building In 2026</h2>
+
+        <p>A blunt table, based on what I currently recommend and what I have watched work.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Node</th><th>Visible feature?</th><th>Build it?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>BreadcrumbList</td><td>Yes, breadcrumb trail in results</td><td>Always</td></tr>
+            <tr><td>Organization</td><td>No direct feature</td><td>Always — entity confidence</td></tr>
+            <tr><td>WebSite (name)</td><td>Site name in results</td><td>Yes, homepage only</td></tr>
+            <tr><td>WebSite (SearchAction)</td><td>Retired Nov 2024</td><td>No new builds</td></tr>
+            <tr><td>WebPage</td><td>No</td><td>Only as graph connective tissue</td></tr>
+            <tr><td>Product / Offer</td><td>Yes, price and availability</td><td>Always, on product pages</td></tr>
+            <tr><td>FAQPage</td><td>Restricted since Aug 2023</td><td>Keep existing, build no more</td></tr>
+            <tr><td>HowTo</td><td>Removed Sept 2023</td><td>No</td></tr>
+            <tr><td>ItemList (collections)</td><td>Occasionally, carousels</td><td>Yes on category pages</td></tr>
+            <tr><td>Article / BlogPosting</td><td>Modest, in Discover</td><td>Yes on editorial</td></tr>
+            <tr><td>VideoObject</td><td>Yes, video results and key moments</td><td>Yes if you have real video</td></tr>
+            <tr><td>LocalBusiness / Store</td><td>Yes, with a Business Profile</td><td>Only if you have real premises</td></tr>
+          </tbody>
+        </table>
+
+        <p>The two on that list most often skipped that I would prioritise are <code>ItemList</code> on category pages and <code>VideoObject</code>. Category <code>ItemList</code> is cheap — you are already rendering the products — and it makes explicit that this URL is a list rather than a thing, which reduces the chance of a category page being treated as a product page. <code>VideoObject</code> with <code>hasPart</code> clip markers still produces genuine SERP features for anyone with product video, and almost nobody in ecommerce bothers.</p>
+
+        <h2>9. Emitting It Exactly Once: The Assembler Pattern</h2>
+
+        <p>Now the mechanics, which is where the garden distributor's problem actually lived. Three breadcrumbs on one page is not a schema mistake; it is an architecture mistake. The defence is structural: make it impossible for more than one component to write structured data.</p>
+
+        <p>The pattern is the same in every stack. One registry that collects nodes during the request. One emitter that runs once, late, and prints the graph. Individual components contribute nodes; none of them can print.</p>
+
+        <h3>Magento 2</h3>
+
+        <pre><code class="language-php">&lt;?php
+declare(strict_types=1);
+
+namespace Modracx\Schema\Model;
+
+/**
+ * Request-scoped collector. Nodes are keyed by @id, so a second contribution
+ * for the same @id replaces rather than duplicates — which is exactly the
+ * failure mode we are defending against.
+ */
+class Graph
+{
+    private array $nodes = [];
+
+    public function add(array $node): void
+    {
+        $id = $node['@id'] ?? null;
+        if ($id === null) {
+            // Anonymous nodes are allowed but cannot be de-duplicated, so they
+            // are appended under a synthetic key.
+            $this-&gt;nodes[] = $node;
+            return;
+        }
+        $this-&gt;nodes[$id] = $node;
+    }
+
+    public function has(string $id): bool
+    {
+        return isset($this-&gt;nodes[$id]);
+    }
+
+    public function isEmpty(): bool
+    {
+        return $this-&gt;nodes === [];
+    }
+
+    public function toArray(): array
+    {
+        return [
+            '@context' =&gt; 'https://schema.org',
+            '@graph'   =&gt; array_values($this-&gt;nodes),
+        ];
+    }
+}</code></pre>
+
+        <p>The emitter is a single block placed in <code>default.xml</code> so it exists on every page, rendering nothing when the graph is empty:</p>
+
+        <pre><code class="language-xml">&lt;page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      layout="1column"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd"&gt;
+    &lt;body&gt;
+        &lt;referenceContainer name="before.body.end"&gt;
+            &lt;block class="Modracx\Schema\Block\GraphEmitter"
+                   name="modracx.schema.graph"
+                   template="Modracx_Schema::graph.phtml"
+                   cacheable="true" /&gt;
+        &lt;/referenceContainer&gt;
+    &lt;/body&gt;
+&lt;/page&gt;</code></pre>
+
+        <p>Placing it in <code>before.body.end</code> rather than <code>head.additional</code> is a deliberate choice and one I changed my mind about. Head placement feels tidier, but blocks that contribute nodes — the product block, the breadcrumb block — render after the head does, so a head-placed emitter sees an empty graph. Google does not care where in the document the script tag sits. Put it last.</p>
+
+        <p>The template is four lines and the escaping in it is the entire security story:</p>
+
+        <pre><code class="language-php">&lt;?php /** @var \Modracx\Schema\Block\GraphEmitter $block */ ?&gt;
+&lt;?php if (!$block-&gt;isEmpty()): ?&gt;
+&lt;script type="application/ld+json"&gt;
+&lt;?= /* @noEscape */ $block-&gt;getJson() ?&gt;
+&lt;/script&gt;
+&lt;?php endif; ?&gt;</code></pre>
+
+        <p>And the block's <code>getJson()</code> must escape the sequence that can break out of a script element:</p>
+
+        <pre><code class="language-php">public function getJson(): string
+{
+    $json = json_encode(
+        $this-&gt;graph-&gt;toArray(),
+        JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+    );
+
+    // A product description containing "&lt;/script&gt;" would otherwise terminate
+    // the block early. Escaping the "&lt;" as a unicode sequence keeps the JSON
+    // valid and the HTML intact.
+    return str_replace(
+        ['&lt;/', '&lt;!--'],
+        ['\u003C/', '\u003C!--'],
+        (string) $json
+    );
+}</code></pre>
+
+        <p>That replacement is not paranoia. I have seen a product description pasted from a supplier's site containing a tracking script, which terminated the JSON-LD block, dumped the rest of the graph as visible text on the page, and produced a support ticket about "weird code on the lamp page." The <code>JSON_UNESCAPED_SLASHES</code> flag makes it more likely, not less, which is why the two go together.</p>
+
+        <h3>Shopify</h3>
+
+        <p>Liquid has no request-scoped registry, so the equivalent is a single snippet included once from <code>theme.liquid</code>, which decides internally what to emit based on <code>template</code>.</p>
+
+        <pre><code class="language-liquid">{%- comment -%}
+  snippets/schema-graph.liquid — the ONLY place this theme emits JSON-LD.
+  Included once from theme.liquid, immediately before &lt;/body&gt;.
+{%- endcomment -%}
+&lt;script type="application/ld+json"&gt;
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": {{ shop.url | append: '/#organization' | json }},
+      "name": {{ shop.name | json }},
+      "url": {{ shop.url | append: '/' | json }}
+      {%- if settings.schema_logo %},
+      "logo": {
+        "@type": "ImageObject",
+        "url": {{ settings.schema_logo | image_url: width: 600 | prepend: "https:" | json }}
+      }
+      {%- endif -%}
+    },
+    {
+      "@type": "WebSite",
+      "@id": {{ shop.url | append: '/#website' | json }},
+      "url": {{ shop.url | append: '/' | json }},
+      "name": {{ shop.name | json }},
+      "publisher": { "@id": {{ shop.url | append: '/#organization' | json }} }
+    }
+    {%- if template contains 'product' -%},
+    {%- render 'schema-node-product', product: product -%}
+    {%- endif -%}
+    {%- if template contains 'collection' -%},
+    {%- render 'schema-node-collection', collection: collection -%}
+    {%- endif -%}
+    {%- if breadcrumbs_list != blank -%},
+    {%- render 'schema-node-breadcrumb', crumbs: breadcrumbs_list -%}
+    {%- endif -%}
+  ]
 }
+&lt;/script&gt;</code></pre>
 
-// Asynchronously fetch pristine product data from the headless backend
-async function getProductData(slug: string) {
-  const res = await fetch(`https://api.example.com/v1/products/${slug}`, {
-    next: { revalidate: 3600 } // Aggressively cache data for 1 full hour
-  });
-  if (!res.ok) return null;
-  return res.json();
-}
+        <p>The comma placement in that template is genuinely fiddly and it is where these break. My rule: every conditional node opens with its own leading comma inside the <code>if</code>, and the last unconditional node never has a trailing one. Get it wrong and you emit invalid JSON that no validator catches until you look, because Search Console reports it as "Parsing error: Missing ',' or '}'" three days later with no indication of which template.</p>
 
-// Generate highly dynamic metadata for the document &lt;head&gt;
-export async function generateMetadata({ params }: ProductProps): Promise&lt;Metadata&gt; {
-  const product = await getProductData(params.slug);
-  if (!product) return { title: 'Product Not Found - Acme Corp' };
-  
-  return {
-    title: `${product.name} | Acme Corp Official Store`,
-    description: product.shortDescription,
-  };
-}
+        <p>The harder Shopify problem is apps. A review app, a currency converter, and a "rich snippets" app will each inject their own JSON-LD via script tag, and you cannot stop them from the theme. What you can do is audit after every install and disable their schema output in their settings, which most of them offer and none of them default to off. Put "check for duplicate ld+json" in whatever passes for your app installation checklist.</p>
 
-export default async function ProductPage({ params }: ProductProps) {
-  const product = await getProductData(params.slug);
-  
-  if (!product) {
-    notFound();
+        <h3>Next.js and headless</h3>
+
+        <p>Server components make this clean. One function per node type, one assembler per route, rendered server-side into the document.</p>
+
+        <pre><code class="language-typescript">// lib/schema/graph.ts
+type Node = Record&lt;string, unknown&gt; &amp; { '@id'?: string };
+
+export function buildGraph(nodes: (Node | null | undefined)[]) {
+  const seen = new Map&lt;string, Node&gt;();
+  const anonymous: Node[] = [];
+
+  for (const node of nodes) {
+    if (!node) continue;
+    const id = node['@id'];
+    if (typeof id === 'string') {
+      // Last contribution wins, matching the server-rendered pattern.
+      seen.set(id, node);
+    } else {
+      anonymous.push(node);
+    }
   }
 
-  // Meticulously construct the precise JSON-LD @graph payload
-  const jsonLd = {
+  return {
     '@context': 'https://schema.org',
-    '@graph': [
-      {
-        '@type': 'Product',
-        '@id': `https://example.com/products/${product.slug}#product`,
-        name: product.name,
-        sku: product.sku,
-        description: product.description,
-        brand: {
-          '@type': 'Brand',
-          name: product.brand.name
-        },
-        offers: {
-          '@type': 'Offer',
-          url: `https://example.com/products/${product.slug}`,
-          priceCurrency: product.currency,
-          price: product.price,
-          availability: product.inStock 
-            ? 'https://schema.org/InStock' 
-            : 'https://schema.org/OutOfStock'
-        }
-      },
-      {
-        '@type': 'BreadcrumbList',
-        '@id': `https://example.com/products/${product.slug}#breadcrumb`,
-        itemListElement: product.breadcrumbs.map((crumb, index) => ({
-          '@type': 'ListItem',
-          position: index + 1,
-          name: crumb.name,
-          item: crumb.url
-        }))
-      }
-    ]
+    '@graph': [...seen.values(), ...anonymous],
   };
+}
+
+// The one and only serialiser. Escaping "&lt;/" prevents a description
+// containing a closing script tag from breaking out of the block.
+export function graphScript(graph: unknown): string {
+  return JSON.stringify(graph).replace(/&lt;\//g, '\\u003c/');
+}</code></pre>
+
+        <pre><code class="language-tsx">// app/products/[handle]/page.tsx
+import { buildGraph, graphScript } from '@/lib/schema/graph';
+import { organizationNode, websiteNode, breadcrumbNode, webPageNode } from '@/lib/schema/nodes';
+import { productSchema } from '@/lib/schema/product';
+
+export default async function ProductPage({ params }: { params: { handle: string } }) {
+  const product = await getProduct(params.handle);
+  const url = `https://alderwoodhome.co.uk/products/${params.handle}`;
+
+  const graph = buildGraph([
+    organizationNode(),
+    websiteNode(),
+    webPageNode({ url, name: product.title }),
+    breadcrumbNode(url, product.breadcrumbs),
+    productSchema(product),
+  ]);
 
   return (
-    &lt;main className="product-layout"&gt;
-      {/* Securely inject the Structured Data payload */}
+    &lt;&gt;
       &lt;script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        // Server-rendered, so it is present in the initial HTML rather than
+        // written after hydration — which is the difference between a crawler
+        // seeing it reliably and seeing it sometimes.
+        dangerouslySetInnerHTML={{ __html: graphScript(graph) }}
       /&gt;
-      
-      {/* Render the heavily optimized Product UI Components */}
-      &lt;h1&gt;{product.name}&lt;/h1&gt;
-      &lt;div className="price-container"&gt;${product.price}&lt;/div&gt;
-      &lt;article className="product-description" dangerouslySetInnerHTML={{ __html: product.descriptionHtml }} /&gt;
-    &lt;/main&gt;
+      &lt;ProductView product={product} /&gt;
+    &lt;/&gt;
   );
 }</code></pre>
 
-        <p>By leveraging Next.js Incremental Static Regeneration (ISR), the server caches the HTML with the structured data and periodically updates it in the background, ensuring sub-100ms response times.</p>
-        <hr />
+        <p>The <code>dangerouslySetInnerHTML</code> is unavoidable and is the reason the escaping in <code>graphScript</code> is not optional. React will not escape inside it, which is the point — JSON escaped as HTML is not valid JSON — so the <code>&lt;/</code> replacement is your only defence.</p>
 
-        <h2>7. Schema Validation, CI/CD Integration, and Crawl Error Handling</h2>
-        <p>Implementing structured data requires validation. Unintended changes can corrupt JSON-LD, invalidating payloads and causing snippet drops.</p>
-        <p>Teams must integrate validation into CI/CD. Playwright scripts can validate <code>application/ld+json</code> blocks against schema guidelines as regression tests.</p>
-        <p>This Python script uses Selenium to extract the JSON-LD and asserts required keys.</p>
+        <p>One thing I would warn about specifically on Next.js: if you generate structured data inside a client component, or inside a component below a Suspense boundary that streams late, you are betting on Google's renderer. It usually pays out. It pays out less reliably on a large catalogue with a constrained render budget, and when it fails it fails silently across thousands of URLs. Server-render the graph.</p>
 
-        <pre><code class="language-python">import json
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
+        <h2>10. Content Security Policy and the Ways a Block Gets Mangled</h2>
 
-def validate_product_schema(url):
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--disable-gpu")
-    driver = webdriver.Chrome(options=chrome_options)
-    
-    try:
-        driver.get(url)
-        # Accurately locate all JSON-LD script tags within the DOM
-        scripts = driver.find_elements(By.XPATH, "//script[@type='application/ld+json']")
-        
-        schema_found = False
-        for script in scripts:
-            try:
-                data = json.loads(script.get_attribute('innerHTML'))
-                
-                # Carefully handle the interconnected @graph architecture
-                entities = data.get('@graph', [data])
-                
-                for entity in entities:
-                    if entity.get('@type') == 'Product':
-                        schema_found = True
-                        assert 'name' in entity, "CRITICAL ERROR: Product name is conspicuously missing"
-                        assert 'sku' in entity, "CRITICAL ERROR: Product SKU is missing"
-                        assert 'offers' in entity, "CRITICAL ERROR: Product offers block is completely missing"
-                        
-                        offers = entity['offers']
-                        assert 'price' in offers, "ERROR: Offer price is missing"
-                        assert 'priceCurrency' in offers, "ERROR: Offer currency is missing"
-                        assert 'availability' in offers, "ERROR: Offer availability is missing"
-                        
-                        print(f"SUCCESS: Validation successfully passed for {url}")
-                        return True
-            except json.JSONDecodeError:
-                print("FATAL: Failed to parse the JSON-LD payload due to invalid syntax.")
-                return False
-                
-        assert schema_found, "FATAL: No valid Product schema was found anywhere on the page."
-        
-    finally:
-        driver.quit()
+        <p>A few environmental things break JSON-LD in ways that look like markup bugs.</p>
 
-# Execute strict validation against the primary staging environment
-validate_product_schema("https://staging.example.com/product/acme-widget-pro")</code></pre>
+        <p><strong>CSP.</strong> A <code>script-src</code> policy without <code>unsafe-inline</code> and without a nonce blocks inline scripts — but <code>application/ld+json</code> is a data block, not executable script, and browsers do not execute it. Chrome does not block it under <code>script-src</code>. Some scanners will still flag it and some over-eager implementations add a nonce anyway, which is harmless. What is not harmless is a CSP report-only rollout that causes someone to "fix" the JSON-LD by moving it to an external file. Google does fetch external JSON-LD referenced correctly, but the pattern is fragile and the original problem did not exist. If you are working through a policy rollout, the <a href="/blog/csp-implementation/">CSP implementation article</a> covers what actually needs a nonce.</p>
 
-        <p>Establish monitoring via Google Search Console (GSC). GSC flags warnings for "Product snippets," highlighting missing critical fields and invalid syntax. These are production bugs and must be rapidly resolved.</p>
+        <p><strong>HTML minifiers.</strong> Some strip whitespace inside <code>script</code> elements of unknown type, some do not, and a few older ones will remove what they think are comments. Test your minifier against a JSON-LD block containing a string with a double space in it.</p>
 
-        <hr />
+        <p><strong>CDN transforms.</strong> Cloudflare's automatic minification, Rocket Loader, and various "optimisation" features have all at some point interfered with inline scripts. Rocket Loader in particular has been observed adding <code>type="text/rocketscript"</code> to script tags, which changes the type and makes the block invisible to Google. Check the delivered HTML from the edge, not the origin.</p>
 
-        <h2>8. Frequently Asked Questions (FAQ)</h2>
+        <p><strong>Consent management.</strong> The worst one. A consent platform in "block until consent" mode that operates by rewriting all script tags will rewrite yours. Googlebot does not consent to anything, so it sees the blocked version. I have seen a full catalogue lose product markup this way, and the symptom in Search Console — everything valid one week, everything gone the next, no deploy — looks exactly like a Google-side change.</p>
 
-        <h3>1. Why is the @graph paradigm superior?</h3>
-        <p>The <code>@graph</code> array establishes explicit relationships via <code>@id</code>, preventing misparsing and disconnected schemas.</p>
-        <h3>2. How should variants be modeled?</h3>
-        <p>Use <code>ProductGroup</code> with <code>hasVariant</code>. This explicitly lists individual <code>Product</code> objects, specifying distinct SKUs and stock per permutation.</p>
-        <h3>3. Does dynamic JSON-LD injection impact SEO?</h3>
-        <p>No, if generated on the server (SSR or SSG) before transmitting HTML, ensuring the schema is in the initial source.</p>
+        <h2>11. Validation That Runs Without You</h2>
 
-        <hr />
+        <p>Manual validation catches the bug you already suspect. What you want is a check that catches the bug nobody is looking for, which means it runs on every build.</p>
+
+        <p>Three layers, cheapest first.</p>
+
+        <h3>Unit tests on the serialiser</h3>
+
+        <p>If the graph comes from one assembler, you can test it with fixtures and no network. This is by far the highest-value check per unit of effort.</p>
+
+        <pre><code class="language-typescript">import { describe, it, expect } from 'vitest';
+import { buildGraph } from '@/lib/schema/graph';
+import { breadcrumbNode } from '@/lib/schema/nodes';
+
+describe('graph assembly', () =&gt; {
+  it('never emits two nodes with the same @id', () =&gt; {
+    const url = 'https://example.com/p/x';
+    const graph = buildGraph([
+      breadcrumbNode(url, [{ name: 'Home', url: 'https://example.com/' }]),
+      breadcrumbNode(url, [{ name: 'Sale', url: 'https://example.com/sale/' }]),
+    ]);
+    const ids = graph['@graph'].map((n: any) =&gt; n['@id']);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('numbers breadcrumb positions from 1 with no gaps', () =&gt; {
+    const node: any = breadcrumbNode('https://example.com/p/x', [
+      { name: 'Home', url: 'https://example.com/' },
+      { name: 'Lighting', url: 'https://example.com/lighting/' },
+      { name: 'Classic Oak Table Lamp' },
+    ]);
+    const positions = node.itemListElement.map((i: any) =&gt; i.position);
+    expect(positions).toEqual([1, 2, 3]);
+  });
+
+  it('omits item on the final crumb', () =&gt; {
+    const node: any = breadcrumbNode('https://example.com/p/x', [
+      { name: 'Home', url: 'https://example.com/' },
+      { name: 'Classic Oak Table Lamp' },
+    ]);
+    expect(node.itemListElement.at(-1)).not.toHaveProperty('item');
+  });
+});</code></pre>
+
+        <h3>Extraction against rendered pages</h3>
+
+        <p>The unit tests prove the serialiser is right. They do not prove the output reached the page, survived the minifier, or is the only block present. That needs a fetch.</p>
+
+        <pre><code class="language-python">#!/usr/bin/env python3
+"""Fail the build if a page emits duplicate or malformed structured data."""
+import json
+import re
+import sys
+import urllib.request
+
+BLOCK = re.compile(
+    r'&lt;script[^&gt;]+type=["\']application/ld\+json["\'][^&gt;]*&gt;(.*?)&lt;/script&gt;',
+    re.S | re.I,
+)
+
+def nodes_for(url):
+    with urllib.request.urlopen(url, timeout=20) as r:
+        html = r.read().decode("utf-8", "replace")
+    out = []
+    for raw in BLOCK.findall(html):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"FAIL {url}: unparseable JSON-LD block: {e}")
+        # A block is either a node, a list of nodes, or a @graph wrapper.
+        if isinstance(data, dict) and "@graph" in data:
+            out.extend(data["@graph"])
+        elif isinstance(data, list):
+            out.extend(data)
+        else:
+            out.append(data)
+    return out
+
+def check(url, required):
+    nodes = nodes_for(url)
+    types = [n.get("@type") for n in nodes]
+    problems = []
+
+    for t in required:
+        count = types.count(t)
+        if count == 0:
+            problems.append(f"missing {t}")
+        elif count &gt; 1:
+            problems.append(f"{count}x {t} (should be 1)")
+
+    for n in nodes:
+        if n.get("@type") == "BreadcrumbList":
+            got = [i.get("position") for i in n.get("itemListElement", [])]
+            if got != list(range(1, len(got) + 1)):
+                problems.append(f"breadcrumb positions {got}")
+
+    if problems:
+        print(f"FAIL {url}: " + "; ".join(problems), file=sys.stderr)
+        return 1
+    print(f"ok   {url}: {', '.join(sorted(set(types)))}")
+    return 0
+
+BASE = sys.argv[1].rstrip("/")
+failures = 0
+failures += check(f"{BASE}/", ["Organization", "WebSite"])
+failures += check(f"{BASE}/lighting/table-lamps/", ["BreadcrumbList", "ItemList"])
+failures += check(f"{BASE}/products/oak-lamp-classic", ["BreadcrumbList", "Product"])
+sys.exit(1 if failures else 0)</code></pre>
+
+        <p>Run it against a preview deployment in CI and against production on a schedule. The scheduled run is the one that catches app installs, CDN setting changes, and consent-platform updates — none of which come through your pipeline.</p>
+
+        <h3>The Rich Results Test, deliberately</h3>
+
+        <p>Google's own tool is the only thing that tells you about eligibility rather than validity, and it is not automatable at any sensible volume. Use it as a gate on template changes rather than a continuous monitor: when the product template changes, test one product URL live before merging. That is enough.</p>
+
+        <h2>12. Monitoring In Search Console Without Drowning</h2>
+
+        <p>Search Console's enhancement reports are the only view you get of what Google actually extracted at scale, and reading them well is a skill.</p>
+
+        <p>Each feature is a separate report — Breadcrumbs, Merchant listings, Product snippets, Review snippets, Videos, Sitelinks searchbox for as long as it lingers. They fail independently. A site can have perfect breadcrumbs and zero valid merchant listings, and the summary page will not make that obvious.</p>
+
+        <p>What the reports are good at: the shape of a failure. Read the item count against the total. Thousands of items failing identically is one code change and one fix. Forty items failing is bad data in forty products, and the export button gives you the list. A slow climb over weeks is usually content drift — products being added without a required attribute — and the fix is validation at the point of entry, not markup.</p>
+
+        <p>What they are bad at: timing and precision. Data lags by two to four days, the reports sample, and "Valid" means "we extracted it," not "we showed it." I have watched people chase a 3% wobble in valid items that was entirely recrawl scheduling.</p>
+
+        <p>Two habits worth forming. First, record the valid and invalid counts weekly in a spreadsheet, because the in-tool history is limited and you will want a year of it during an argument. Second, set the comparison to the day of any template deploy so you can see whether the line moved. The API makes both trivial to automate:</p>
+
+        <pre><code class="language-bash"># Weekly snapshot of the breadcrumb enhancement report, appended to a CSV.
+# Requires an OAuth token with webmasters.readonly scope.
+curl -sS \
+  -H "Authorization: Bearer ${GSC_TOKEN}" \
+  -H "Content-Type: application/json" \
+  "https://searchconsole.googleapis.com/webmasters/v3/sites/${SITE}/searchAnalytics/query" \
+  -d '{
+    "startDate": "'"$(date -d '28 days ago' +%F)"'",
+    "endDate": "'"$(date -d 'yesterday' +%F)"'",
+    "dimensions": ["page"],
+    "rowLimit": 25000
+  }' &gt; gsc-pages.json
+
+python3 - &lt;&lt;'PY' &gt;&gt; schema-history.csv
+import json, datetime
+rows = json.load(open("gsc-pages.json")).get("rows", [])
+products = [r for r in rows if "/products/" in r["keys"][0]]
+clicks = sum(r["clicks"] for r in products)
+impressions = sum(r["impressions"] for r in products)
+ctr = clicks / impressions if impressions else 0
+print(f"{datetime.date.today()},{len(products)},{clicks},{impressions},{ctr:.4f}")
+PY</code></pre>
+
+        <p>The reason I track product-page CTR alongside enhancement validity is that validity is the input and CTR is the outcome. A week where valid items go up and CTR does not is a week where you built markup Google chose not to use, and knowing that early stops you building more of it.</p>
+
+        <h2>13. A Worked Consolidation, With Numbers</h2>
+
+        <p>The garden distributor. Magento 2.4.6, roughly 18,000 SKUs across 340 categories, about £6.8m annual revenue, a heavily customised theme and eleven third-party extensions.</p>
+
+        <p><strong>What we found.</strong> Nine distinct sources of JSON-LD across the site. Three breadcrumb emitters as described. Two <code>Organization</code> nodes with different names — one from the theme using the store name, one from an extension using a value someone had typed into a config field in 2021 and misspelled. A <code>WebSite</code> node with a <code>SearchAction</code> pointing at a search URL that had been changed during a replatform and 404'd. FAQ markup on 1,100 category pages, generated from a template that produced the same six questions with the category name substituted in. And, my favourite, a <code>LocalBusiness</code> node on every page marking their distribution warehouse as a shop with opening hours, added by an agency chasing a map pack listing for a business that did not sell to the public.</p>
+
+        <p><strong>Baseline.</strong> Breadcrumbs report: 16,200 valid, 1,800 invalid, and the valid ones were largely wrong in content rather than structure — which no report will ever tell you. Product-page CTR: 2.8%. Site name in results: showing as the bare domain rather than the brand.</p>
+
+        <p><strong>Week one — inventory.</strong> Not code. A spreadsheet of every extension and template that emitted <code>application/ld+json</code>, found by grepping the codebase and then fetching twenty representative URLs and diffing what actually appeared. The grep found seven sources; the fetch found nine. The two extra were injected by JavaScript from apps whose code lived in a CDN bundle.</p>
+
+        <p><strong>Weeks two and three — the assembler.</strong> Built the registry and emitter above, moved breadcrumb, organisation, website and webpage nodes into it, and disabled schema output in six extensions via their own configuration. Two extensions had no such setting and were patched with a plugin that returned an empty string from their block. That is uglier than I would like and it is what was available.</p>
+
+        <p><strong>Week four — the deletions.</strong> Removed the <code>LocalBusiness</code> node, the <code>SearchAction</code>, and the templated FAQ markup. The FAQ removal was an argument: it had been sold to them as a major win and there was a slide deck. What settled it was pulling up Google's August 2023 announcement and then checking the SERP for ten of their category terms, where no competitor showed FAQ results either. Removing markup nobody sees is not a loss, but you have to show people rather than tell them.</p>
+
+        <p><strong>What went wrong.</strong> Two things, and the first was mine. The emitter went into <code>head.additional</code> in the first deploy, which meant it rendered before the product block contributed its node, so for four days every product page emitted a graph containing organisation, website and breadcrumb but no product. Search Console's Merchant listings report dropped by 14,000 items and I got a very reasonable phone call. Moving it to <code>before.body.end</code> fixed it, and a smoke test that asserted a <code>Product</code> node on a product URL would have caught it before the deploy. That test exists now.</p>
+
+        <p>The second: we did not check the breadcrumb trail against merchandising expectations before shipping. The correct primary category for about 400 products was genuinely contested — a robotic mower is arguably in Mowers or in Robotic, and different people in the business had different views. We picked the deepest category in the URL path, which was defensible and which surfaced a disagreement that had been latent for years. It cost two meetings that should have happened in week one.</p>
+
+        <p><strong>Results at week ten.</strong> Breadcrumbs report: 17,850 valid, 150 invalid, and correct in content. Product-page CTR: 3.4%, from 2.8%, against roughly flat impressions — which on their volume was about 34,000 additional sessions a quarter. Site name resolved to the brand roughly three weeks after the <code>WebSite</code> node consolidated. Total JSON-LD payload per product page fell from 41KB to 6KB, which was not a goal but is not nothing on mobile.</p>
+
+        <p><strong>Effort.</strong> Eleven engineering days over six weeks. Four of those were the extension patching, which is the tax you pay for a codebase with eleven extensions.</p>
+
+        <h2>14. The Failures I See Most Often</h2>
+
+        <p><strong>More than one node of a type per page.</strong> Almost always from layering: theme plus extension plus bespoke. The assembler pattern is the structural fix; the diagnostic is fetching the URL and counting.</p>
+
+        <p><strong>Breadcrumb trails that do not match the URL.</strong> Usually a template reusing the wrong category source. Visible only if you read the JSON.</p>
+
+        <p><strong><code>@id</code> values that are not URLs.</strong> <code>"@id": "organization"</code> is valid JSON-LD and useless for resolution. Use absolute URLs with fragments.</p>
+
+        <p><strong>Organisation name disagreeing with itself.</strong> Between the <code>Organization</code> node, <code>og:site_name</code>, the <code>WebSite</code> name, and the title tag suffix. Pick one string and use it in all four.</p>
+
+        <p><strong>Client-side injection on a large catalogue.</strong> Works in the Rich Results Test, which renders patiently, and fails at scale where render budget is finite.</p>
+
+        <p><strong>Markup for content that is not on the page.</strong> A templated FAQ block that renders no visible questions. This is the one that attracts manual actions rather than merely being useless.</p>
+
+        <p><strong>Absolute URLs pointing at the wrong host.</strong> Staging URLs baked into <code>@id</code> values, or <code>http</code> where the site is <code>https</code>. Both survive validation and both break resolution.</p>
+
+        <h2>15. Questions I Get Asked</h2>
+
+        <p><strong>"Do we need <code>@graph</code>, or are separate blocks fine?"</strong> Separate blocks are fine for Google. The graph is better for you, because it forces a single assembly point and single assembly is what prevents duplicates. I choose it for the engineering property, not for a ranking one.</p>
+
+        <p><strong>"Should we remove our FAQ schema?"</strong> Not urgently. It produces no feature and costs nothing to leave, unless the FAQ content itself was written purely for the markup and is not visible on the page — in which case remove the content and the markup together, because that combination is a policy problem rather than a wasted opportunity.</p>
+
+        <p><strong>"Our extension adds schema. Is that good enough?"</strong> Sometimes, if it is the only source and you have checked what it emits. The problem is never the first extension; it is the third. Audit what is actually on the page rather than trusting the feature list.</p>
+
+        <p><strong>"Can structured data get us into AI overviews?"</strong> There is no documented mechanism and I would not sell it as one. What I will say is that the descriptive nodes — who publishes this, what is this page, what does it sell — are the ones that have survived every feature withdrawal, and they are cheap. Building them because they might help downstream is defensible. Building them because someone promised an AI overview is not.</p>
+
+        <p><strong>"How do we stop apps adding their own?"</strong> On Shopify, disable it in each app's settings and re-check after every install; there is no platform-level control. On Magento, the config setting if it exists, a plugin returning empty if it does not. On a headless build, you control everything, which is the strongest argument for headless I can make on this particular topic.</p>
+
+        <p><strong>"The Rich Results Test passes but Search Console shows errors."</strong> They test different things at different times. The test fetches now with a patient renderer; Search Console reports what was extracted at the last crawl, possibly weeks ago, possibly by a renderer under budget pressure. If the test passes today and the report is bad, wait for recrawl before changing anything.</p>
+
+        <p><strong>"Does more structured data mean better rankings?"</strong> No. It has never meant that, and the volume of markup on a page is not a quality signal. A page with a correct <code>Product</code> node and a correct breadcrumb beats a page with fourteen node types describing things nobody can see.</p>
+
+        <p><strong>"Should the JSON-LD be in the head or the body?"</strong> Google does not care. Put it wherever your architecture can guarantee it renders after everything that contributes to it, which in most server-rendered stacks means the end of the body.</p>
+
+        <h2>16. What I Would Do First</h2>
+
+        <p>Inheriting a site tomorrow, in this order:</p>
+
+        <p><strong>One.</strong> Fetch five representative URLs — homepage, category, product, blog post, contact page — and count the <code>application/ld+json</code> blocks in each. Not in the codebase. In the delivered HTML, from the edge, with JavaScript disabled and then with it enabled. The difference between those two numbers is itself a finding.</p>
+
+        <p><strong>Two.</strong> Read every node you find, by eye, once. It is tedious and it takes an hour and it is where the misspelled organisation name and the warehouse-as-a-shop live. No tool will flag either.</p>
+
+        <p><strong>Three.</strong> Check the breadcrumb trail on ten products against their URLs and their visible trail. Any mismatch is a bug with a real SERP consequence.</p>
+
+        <p><strong>Four.</strong> Consolidate to one emitter before improving anything. Adding a correct node to a page that already has two wrong ones does not help. Delete first, then build.</p>
+
+        <p><strong>Five.</strong> Get <code>Organization</code> right and identical everywhere: one name, one logo asset that meets the size rules, a short honest <code>sameAs</code> list, and identifiers if you have them.</p>
+
+        <p><strong>Six.</strong> Add breadcrumbs everywhere they are missing, sourced from the same data as the visible trail.</p>
+
+        <p><strong>Seven.</strong> Put the extraction check in CI and on a schedule, asserting node counts and breadcrumb positions on three URL types. This is the step that stops you doing all of the above again in eighteen months.</p>
+
+        <p><strong>Eight.</strong> Only then look at the product node itself — offers, availability, ratings, merchant listing extensions — which is a deep enough subject to have <a href="/blog/structured-data-ecommerce-seo/">its own article</a>. It is the highest-value markup on an ecommerce site and it is worth nothing if the page around it is emitting three contradictory descriptions of where that product sits.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce: The Architectural & Business Guide</a></strong>
+              <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce: The Architectural &amp; Business Guide</a></strong>
               <p>A deep dive into search crawler architecture and organic discovery strategies.</p>
             </li>
             <li>
@@ -655,12 +1005,11 @@ validate_product_schema("https://staging.example.com/product/acme-widget-pro")</
               <p>Implementing Python TF-IDF and NLP algorithms for search intent clustering.</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">E-Commerce Performance Optimization: Web Vitals & Edge Caching</a></strong>
+              <strong><a href="/blog/performance-optimization/">E-Commerce Performance Optimization: Web Vitals &amp; Edge Caching</a></strong>
               <p>Architecting sub-second delivery pipelines using Varnish and CDN edge logic.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -696,7 +1045,7 @@ validate_product_schema("https://staging.example.com/product/acme-widget-pro")</
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 
 </html>

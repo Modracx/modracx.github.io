@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Zero-Trust Security Architecture for E-Commerce Enterprise Infrastructure | MODRACX</title>
-  <meta name="description" content="Architectural guide on implementing Zero-Trust Security across Magento 2 and Cloud infrastructure. Covers identity-aware proxies, mTLS, micro-segmentation, and secret rotation." />
+  <meta name="description" content="Implementing zero trust on a real ecommerce estate: identity-aware proxies, short-lived credentials, mTLS where it earns its place, egress control, and what I would not bother building." />
   <meta property="og:title" content="Zero-Trust Security Architecture for E-Commerce Enterprise Infrastructure | MODRACX" />
   <meta property="og:description" content="Architectural guide on Zero-Trust Security by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Zero-Trust Security Architecture for E-Commerce Enterprise Infrastructure</h1>
-        <p class="lede">Never trust, always verify. Zero-Trust security enforces strict Identity-Aware Proxy (IAP) access and mutual TLS (mTLS) microservice authentication.</p>
+        <p class="lede">A front-end contractor's VPN certificate was still valid two and a half years after his last invoice, and it reached the payment database. Perimeter security makes one access decision and never revisits it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,28 +205,666 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Mutual TLS (mTLS) Microservice Verification</h2>
+        <h2>1. The Contractor Who Left In 2021</h2>
 
-        <pre><code class="language-yaml"># Istio Service Mesh mTLS Enforcement Policy
-apiVersion: security.istio.io/v1beta1
-kind: PeerAuthentication
+        <p>In February 2024 I ran an access review for a multi-brand retailer — about £40m turnover, Magento 2 on AWS, roughly ninety staff. Routine work, the kind of thing you do before a PCI assessment so the assessor does not find it first.</p>
+
+        <p>The VPN had forty-one active certificates. The company had ninety staff, but only about thirty ever needed infrastructure access. I went through them one by one. Eleven belonged to people who had left. One belonged to a front-end contractor whose last invoice was dated August 2021 — two and a half years earlier. His certificate was valid, his key was presumably still on whatever laptop he had at the time, and it would let him onto a flat internal network from which he could reach the Magento admin, the MySQL primary, the Redis instances, the build server, and a NAS with a directory called <code>finance-archive</code>.</p>
+
+        <p>Nobody had done anything wrong, exactly. Offboarding disabled his Google account and his Slack. The VPN was a separate system, managed by a different person, with its own certificate authority and no connection to the identity provider. There was no list. There had never been a list.</p>
+
+        <p>That is the failure zero trust is actually about, and it is worth saying plainly because the vendor pitch obscures it. The problem is not that the network perimeter is porous. The problem is that <strong>a perimeter model concentrates all of your access decisions into one event — getting onto the network — and then never revisits it.</strong> Once he was in, nothing else in that estate asked who he was.</p>
+
+        <p>This article is about dismantling that, on a real ecommerce stack, incrementally, without a two-year programme and a seven-figure budget. I have done this twice. Both times it took longer than I said it would, and both times the highest-value work was in the first six weeks.</p>
+
+        <h2>2. What Zero Trust Actually Claims</h2>
+
+        <p>Strip the marketing and there is a single assertion: <strong>every request is authenticated and authorised on its own merits, using current information, regardless of where it came from.</strong> Network location grants nothing. Being inside the office, on the VPN, or in the VPC is not evidence of anything.</p>
+
+        <p>NIST SP 800-207 formalises this and is worth reading — it is about fifty pages and unusually free of vendor influence. Its core structure is a policy decision point that evaluates each request against identity, device state, and context, and a policy enforcement point that sits in the data path and does what the decision point says.</p>
+
+        <p>Three consequences follow, and they are what make this hard.</p>
+
+        <p><strong>Authorisation must be continuous, not once per session.</strong> A session that was legitimate at 9am and belongs to someone terminated at 11am must stop working at 11am, not when the token expires at 5pm. This is why token lifetimes matter so much, and why "we use SSO" is not by itself an answer.</p>
+
+        <p><strong>Identity must extend to machines.</strong> Most of the requests in your estate are not made by humans. The checkout service talking to the inventory service needs an identity that can be verified, revoked and audited, and "it is inside the VPC" is not one.</p>
+
+        <p><strong>Every enforcement point needs to be in the data path.</strong> A policy that is not enforced by something requests physically pass through is a document, not a control. This is where most zero-trust programmes quietly fail: the policy engine exists, and half the traffic does not go through it.</p>
+
+        <p>What zero trust does not mean, despite the branding: buying a product. There is no zero-trust appliance, because the property is architectural. There is also no finish line — you get to a point where the assertions above are true for the things that matter, and the long tail stays untidy.</p>
+
+        <h2>3. The Five Control Planes, And Where Ecommerce Hurts</h2>
+
+        <p>It helps to divide the problem, because "implement zero trust" is not a task and the five pieces have wildly different costs.</p>
+
+        <p><strong>Human identity.</strong> Who is this person, are they still employed, and did they prove it recently and strongly? This is your identity provider plus MFA, and it is the cheapest and highest-value plane.</p>
+
+        <p><strong>Device.</strong> Is this a managed machine, patched, encrypted, not jailbroken? Meaningful for staff laptops. Largely irrelevant for customer traffic and often skipped entirely for contractors, which is where the risk concentrates.</p>
+
+        <p><strong>Network.</strong> What can talk to what. Security groups, network policies, service mesh. This is the plane people start with and it is usually the wrong place to start, because it is the most disruptive and the least immediately valuable.</p>
+
+        <p><strong>Workload identity.</strong> Which service is this, cryptographically. mTLS, SPIFFE, IAM roles for tasks. Necessary once you have more than a handful of services and irrelevant before that.</p>
+
+        <p><strong>Data.</strong> What can this identity actually see, at row and column level. The hardest plane, the one most often left as future work, and the one that turns a compromise into a breach or not.</p>
+
+        <p>The ecommerce-specific complication: your estate has three completely different populations of requests. Anonymous customers, who must not be inconvenienced by any of this. Staff and contractors, who are the population the controls are for. And machine-to-machine traffic — the ERP sync, the payment gateway callbacks, the warehouse system, the marketplace integrations — which is usually the least governed and most privileged traffic in the whole estate.</p>
+
+        <p>That third category is where I find the worst findings. An ERP integration authenticating with a static API key generated in 2019, with admin scope, hard-coded in a config file that is in git. Every single time.</p>
+
+        <h2>4. Killing The VPN First</h2>
+
+        <p>If you do one thing, do this. Replacing VPN access to internal applications with an identity-aware proxy is the single largest reduction in blast radius available, and it takes days rather than months.</p>
+
+        <p>The difference is worth stating precisely, because "we have a VPN with MFA" gets offered as though it were equivalent.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th></th><th>VPN</th><th>Identity-aware proxy</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>What authentication grants</td><td>Network reachability</td><td>One application, one session</td></tr>
+            <tr><td>Re-evaluated</td><td>At connect</td><td>Every request</td></tr>
+            <tr><td>Lateral movement after compromise</td><td>Whole subnet</td><td>Nothing beyond that app</td></tr>
+            <tr><td>Revocation latency</td><td>Next reconnect, or never</td><td>Seconds, from the IdP</td></tr>
+            <tr><td>Device posture in the decision</td><td>Rarely</td><td>Per request, if you want it</td></tr>
+            <tr><td>Audit granularity</td><td>Connections</td><td>Requests, with identity attached</td></tr>
+            <tr><td>Works for non-HTTP (SSH, MySQL)</td><td>Yes, natively</td><td>Needs a separate connector</td></tr>
+          </tbody>
+        </table>
+
+        <p>That last row is the honest caveat and it is why the VPN rarely disappears entirely on the first pass. HTTP applications — the Magento admin, Kibana, RabbitMQ management, internal dashboards, the staging site — move easily. SSH and database access need a different mechanism, covered below.</p>
+
+        <p>Cloudflare Access, Google's IAP, Teleport and Pomerium all do this. I have used Cloudflare Access most, mostly because if the site is already behind Cloudflare it is a configuration change rather than an architecture change. A policy looks like this:</p>
+
+        <pre><code class="language-hcl"># Terraform: the Magento admin, reachable only through the proxy.
+resource "cloudflare_access_application" "magento_admin" {
+  zone_id                   = var.zone_id
+  name                      = "Magento Admin"
+  domain                    = "shop.example.com/admin_k9x2p/"
+  type                      = "self_hosted"
+  # Short. An admin session that survives a laptop theft for 24 hours is
+  # most of the value of this control thrown away.
+  session_duration          = "2h"
+  auto_redirect_to_identity = true
+  http_only_cookie_attribute = true
+}
+
+resource "cloudflare_access_policy" "magento_admin_staff" {
+  application_id = cloudflare_access_application.magento_admin.id
+  zone_id        = var.zone_id
+  name           = "Staff with hardware MFA on a managed device"
+  precedence     = 1
+  decision       = "allow"
+
+  include {
+    # Group membership comes from the IdP. Offboarding in Okta revokes
+    # this within seconds, with no second system to remember.
+    okta { name = ["ecommerce-admins"], identity_provider_id = var.okta_idp }
+  }
+
+  require {
+    # Hardware key, not SMS and not TOTP. This is the control that stops
+    # the phishing kit that got everyone else.
+    auth_method = ["swk"]
+  }
+
+  require {
+    device_posture = [cloudflare_device_posture_rule.disk_encrypted.id]
+  }
+}</code></pre>
+
+        <p>Two details that matter more than they look.</p>
+
+        <p>The session duration. Two hours is not arbitrary — it is short enough that a stolen session cookie is usually worthless and long enough that admins do not riot. I have tried thirty minutes and it was rejected within a fortnight, which taught me something about controls that get turned off.</p>
+
+        <p>Requiring hardware keys (<code>swk</code> — security key) rather than any MFA. Adversary-in-the-middle phishing kits defeat TOTP and push notifications routinely; they cannot defeat WebAuthn because the origin is bound into the assertion. If you are going to make one MFA decision, make it this one. It costs about £25 per person for a pair of keys.</p>
+
+        <p>Behind the proxy, the origin must refuse anything that did not come through it. Otherwise you have added a front door beside an open window:</p>
+
+        <pre><code class="language-nginx"># The origin verifies the proxy's signed JWT. Without this, the whole
+# control is bypassed by anyone who learns the origin IP — and origin IPs
+# leak constantly through DNS history, mail headers and certificate logs.
+location /admin_k9x2p/ {
+    auth_request /_access_check;
+    error_page 401 = @denied;
+
+    # Belt and braces: only the proxy's address ranges reach the origin at
+    # all. This is enforced at the security group as well; defence in depth
+    # means the same rule expressed at two layers, not one rule twice.
+    allow 173.245.48.0/20;
+    allow 103.21.244.0/22;
+    deny  all;
+
+    fastcgi_pass php-fpm;
+    include fastcgi_params;
+}
+
+location = /_access_check {
+    internal;
+    proxy_pass http://127.0.0.1:9010/verify;   # validates Cf-Access-Jwt-Assertion
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+}</code></pre>
+
+        <p>The JWT verification service is thirty lines and validates the signature against the proxy's public keys, checks the audience matches this application, and checks expiry. Skipping it and relying on IP allowlisting alone is common and wrong: the proxy's IP ranges are shared across every customer of that proxy, so "came from Cloudflare" proves nothing about which Cloudflare account sent it.</p>
+
+        <h2>5. SSH And Database Access Without A Flat Network</h2>
+
+        <p>This is the half the proxy does not cover, and it is where the interesting access lives anyway. Nobody exfiltrates a customer database through Kibana.</p>
+
+        <p>The pattern that works: short-lived certificates issued by a broker that authenticates against your IdP, replacing long-lived SSH keys entirely.</p>
+
+        <pre><code class="language-bash"># Teleport. The login is an OIDC flow against the IdP; what comes back is
+# an SSH certificate valid for 8 hours, not a key valid forever.
+tsh login --proxy=access.example.com --auth=okta
+
+# The certificate encodes the roles the IdP said this person has. There is
+# no ~/.ssh/authorized_keys on the target host to drift out of date.
+tsh ssh app-01.shop.internal
+
+# Database access goes through the same broker, which means the session is
+# recorded at the query level and the credentials are per-session.
+tsh db connect shop-primary --db-user=readonly --db-name=magento
+
+# What an auditor asks for, answered in one command rather than a week of
+# grepping through wtmp on nineteen hosts.
+tsh recordings ls --last=30d --user=jsmith</code></pre>
+
+        <p>The property that matters is not convenience, it is that <strong>there is no standing credential to steal</strong>. There is no key on a laptop that works next year. Offboarding is a change in the IdP and it is effective immediately, because the next certificate request fails.</p>
+
+        <p>Query-level session recording is the part that surprises people in a good way. When someone asks "who ran that UPDATE against the price table on the 14th", you have an answer with a name attached rather than a shrug and a shared <code>deploy</code> account.</p>
+
+        <p>If Teleport is too much — it is a real system with real operational cost — AWS SSM Session Manager gets you most of the SSH property for free if you are on AWS. No bastion, no inbound port 22, no keys, IAM-based authorisation, and session logs to S3.</p>
+
+        <pre><code class="language-bash"># No public IP, no security group ingress, no key material.
+aws ssm start-session --target i-0a1b2c3d4e5f6a7b8
+
+# Port-forward to the database through the same channel, so DBAs get a
+# local port and the RDS instance never becomes reachable.
+aws ssm start-session --target i-0a1b2c3d4e5f6a7b8 \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["shop-primary.abc.eu-west-2.rds.amazonaws.com"],
+                 "portNumber":["3306"],"localPortNumber":["13306"]}'</code></pre>
+
+        <p>I would take SSM over a bastion host every time. A bastion is a permanently internet-facing box with SSH open that everyone has an account on, which is a description of a target.</p>
+
+        <h2>6. Workload Identity: mTLS Where It Earns Its Place</h2>
+
+        <p>Service-to-service authentication is where zero trust gets genuinely expensive, and where I most often advise people to do less than the reference architecture suggests.</p>
+
+        <p>The principle is right: the inventory service should verify that the caller is the checkout service, cryptographically, rather than trusting that a request arriving on the internal network is legitimate. The question is what that costs you.</p>
+
+        <p>A service mesh — Istio, Linkerd — gives you mTLS between every pod with no application changes. That is a genuinely good deal if you are already on Kubernetes with a platform team. It is a terrible deal if you have six services on ECS and no one who has operated a mesh, because you have added a distributed system whose failure modes you do not understand to a stack whose problems were elsewhere.</p>
+
+        <p>Linkerd's config is about as light as a mesh gets:</p>
+
+        <pre><code class="language-yaml"># Deny by default in this namespace, then allow named callers explicitly.
+apiVersion: policy.linkerd.io/v1beta1
+kind: Server
 metadata:
-  name: default
-  namespace: ecommerce-prod
+  name: inventory-grpc
+  namespace: commerce
 spec:
-  mtls:
-    mode: STRICT</code></pre>
+  podSelector:
+    matchLabels: { app: inventory }
+  port: 8080
+  proxyProtocol: gRPC
+---
+apiVersion: policy.linkerd.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: inventory-callers
+  namespace: commerce
+spec:
+  targetRef:
+    group: policy.linkerd.io
+    kind: Server
+    name: inventory-grpc
+  requiredAuthenticationRefs:
+    - name: checkout-and-oms
+      kind: MeshTLSAuthentication
+      group: policy.linkerd.io
+---
+apiVersion: policy.linkerd.io/v1beta1
+kind: MeshTLSAuthentication
+metadata:
+  name: checkout-and-oms
+  namespace: commerce
+spec:
+  # Identity is the workload's SPIFFE ID, derived from its service account.
+  # It cannot be forged by anything that merely has network access.
+  identities:
+    - "checkout.commerce.serviceaccount.identity.linkerd.cluster.local"
+    - "oms.commerce.serviceaccount.identity.linkerd.cluster.local"</code></pre>
 
-        <hr />
+        <p>If you are not on Kubernetes, you can do the same thing with far less machinery. Terminating mTLS at nginx with a private CA covers most of the value:</p>
+
+        <pre><code class="language-nginx">server {
+    listen 8443 ssl;
+    server_name inventory.internal;
+
+    ssl_certificate     /etc/pki/inventory.crt;
+    ssl_certificate_key /etc/pki/inventory.key;
+
+    # Require a client certificate signed by our internal CA.
+    ssl_client_certificate /etc/pki/internal-ca.crt;
+    ssl_verify_client on;
+    ssl_verify_depth 2;
+
+    # Revocation actually checked. A CRL you never load is decoration, and
+    # nginx will happily start without telling you the file is stale.
+    ssl_crl /etc/pki/internal-crl.pem;
+
+    location / {
+        # Authorisation, not just authentication: which cert is allowed here.
+        if ($ssl_client_s_dn !~ "CN=(checkout|oms)\.svc\.internal") {
+            return 403;
+        }
+        proxy_set_header X-Client-Identity $ssl_client_s_dn;
+        proxy_pass http://127.0.0.1:8080;
+    }
+}</code></pre>
+
+        <p>Note that <code>ssl_verify_client on</code> proves the caller holds a certificate from your CA. It does not prove the caller is allowed to call <em>this</em> service — every service with a cert from the same CA passes. The DN check is what turns authentication into authorisation, and leaving it out is the single most common mTLS mistake I find. People deploy mTLS, feel secure, and have built a system where any compromised service can call any other.</p>
+
+        <p>The operational cost nobody prices in is certificate rotation. Short-lived certificates mean an issuance pipeline, and an issuance pipeline that fails at 3am takes your whole estate down. Whatever you build, build the rotation first and the enforcement second, and run the rotation in monitoring mode for a fortnight before anything depends on it.</p>
+
+        <h2>7. Micro-segmentation Without A Year Of Work</h2>
+
+        <p>Segmentation is the plane people imagine when they hear zero trust, and it is where programmes go to die. The mistake is trying to define the correct policy up front.</p>
+
+        <p>You cannot. Nobody knows what talks to what in a system that has been running for eight years. Any policy you write from an architecture diagram will be wrong, and the wrongness will surface as a checkout outage.</p>
+
+        <p>The approach that works is observe, then enforce.</p>
+
+        <p><strong>Phase one, observe.</strong> Turn on flow logs. Do nothing else for two to four weeks. Build the actual graph from the data.</p>
+
+        <pre><code class="language-sql">-- Athena over VPC flow logs. This is the query that produces the real
+-- architecture diagram, which never matches the one on the wiki.
+SELECT
+  s.tag             AS source_service,
+  d.tag             AS dest_service,
+  f.dstport,
+  COUNT(*)          AS flows,
+  SUM(f.bytes)      AS bytes,
+  MIN(from_unixtime(f.start)) AS first_seen,
+  MAX(from_unixtime(f.start)) AS last_seen
+FROM vpc_flow_logs f
+JOIN eni_tags s ON f.interface_id = s.interface_id
+JOIN eni_tags d ON f."dstaddr"     = d.private_ip
+WHERE f.action = 'ACCEPT'
+  AND f.day &gt;= '2026/01/01'
+GROUP BY 1, 2, 3
+HAVING COUNT(*) &gt; 10        -- drop one-off noise and scanner traffic
+ORDER BY bytes DESC;</code></pre>
+
+        <p>Every time I have run this, it has found at least one flow nobody could explain. On the retailer above it found the reporting server connecting directly to the payment reconciliation database, over a route that had been provisioned for a project cancelled in 2019 and never removed.</p>
+
+        <p><strong>Phase two, enforce in one direction.</strong> Do not start with deny-all. Start by blocking the flows you are certain are wrong — the ones from phase one that nobody could justify. Low risk, immediate value, and it builds the confidence you need for the next step.</p>
+
+        <p><strong>Phase three, deny-by-default, one segment at a time.</strong> Pick the segment where a breach hurts most — for ecommerce that is cardholder data environment, then the order database — and close it. Not the whole estate. One segment, with an owner, with a rollback.</p>
+
+        <pre><code class="language-hcl"># The database tier accepts MySQL from the app tier and nothing else.
+# No SSH ingress at all: SSM handles that without a network path.
+resource "aws_security_group" "db_tier" {
+  name        = "shop-db-tier"
+  description = "MySQL from app tier only"
+  vpc_id      = var.vpc_id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "db_from_app" {
+  security_group_id            = aws_security_group.db_tier.id
+  referenced_security_group_id = aws_security_group.app_tier.id
+  from_port                    = 3306
+  to_port                      = 3306
+  ip_protocol                  = "tcp"
+  description                  = "Magento app tier"
+}
+
+# Egress is the rule people forget. A database that can reach the internet
+# is a database that can be exfiltrated from in one step.
+resource "aws_vpc_security_group_egress_rule" "db_to_s3_only" {
+  security_group_id = aws_security_group.db_tier.id
+  prefix_list_id    = data.aws_prefix_list.s3.id   # backups, via VPC endpoint
+  ip_protocol       = "-1"
+}</code></pre>
+
+        <p>Egress control is the highest-value and least-implemented piece of segmentation. Almost every estate I look at has default-allow outbound from every tier. That means a compromised application server can reach any address on the internet, which is how data leaves and how second-stage payloads arrive. Restricting egress to an explicit allowlist is disruptive — it will break something on the first day, usually a package manager or a monitoring agent — and it is worth it.</p>
+
+        <h2>8. Secrets, And Why Your Rotation Does Not Work</h2>
+
+        <p>Every organisation I audit says they rotate secrets. Almost none of them do, and the reason is consistent: rotation was designed as a procedure rather than as a property of the system.</p>
+
+        <p>A rotation procedure has steps, an owner and a calendar reminder. It survives about two cycles. The owner changes role, the reminder gets snoozed, and eighteen months later the credential in production is the one from the original deployment.</p>
+
+        <p>What works is making the secret so short-lived that rotation is not an event. If credentials last an hour, the rotation machinery is exercised constantly and its failures surface immediately rather than at the worst moment.</p>
+
+        <pre><code class="language-python">"""Dynamic database credentials from Vault. The application asks for a
+credential at startup and renews it; there is no password in any config
+file, environment variable, or CI secret store."""
+import hvac, os, logging, threading, time
+
+def db_credentials():
+    client = hvac.Client(url=os.environ["VAULT_ADDR"])
+
+    # Authenticate as the workload, not as a human. The JWT is projected
+    # into the pod by Kubernetes and is itself short-lived and audience-bound.
+    with open("/var/run/secrets/tokens/vault-token") as f:
+        client.auth.kubernetes.login(role="magento-app", jwt=f.read())
+
+    # Vault creates a brand-new MySQL user for this process. It exists for
+    # one hour. If the container is compromised, the attacker gets a
+    # credential that dies before most exfiltration finishes.
+    lease = client.secrets.database.generate_credentials(name="magento-readwrite")
+    return lease["data"]["username"], lease["data"]["password"], lease["lease_id"]
+
+
+def keep_alive(client, lease_id, ttl=3600):
+    """Renew at half-life. Renewing at 90% leaves no room to recover from a
+    transient Vault failure, and that is exactly when you find out."""
+    while True:
+        time.sleep(ttl / 2)
+        try:
+            client.sys.renew_lease(lease_id=lease_id, increment=ttl)
+        except Exception:
+            logging.exception("lease renewal failed; will re-issue")
+            return   # supervisor restarts us and we get a fresh credential</code></pre>
+
+        <p>The equivalent on AWS without Vault is IAM database authentication, which is less flexible and considerably less work to run:</p>
+
+        <pre><code class="language-python">import boto3, pymysql, ssl
+
+def connect():
+    rds = boto3.client("rds", region_name="eu-west-2")
+    # A token valid for 15 minutes, derived from the task's IAM role.
+    # No password exists anywhere to be leaked, committed or reused.
+    token = rds.generate_db_auth_token(
+        DBHostname="shop-primary.abc.eu-west-2.rds.amazonaws.com",
+        Port=3306,
+        DBUsername="magento_app",
+    )
+    return pymysql.connect(
+        host="shop-primary.abc.eu-west-2.rds.amazonaws.com",
+        user="magento_app",
+        password=token,
+        ssl={"ca": "/etc/pki/rds-combined-ca-bundle.pem"},   # required, not optional
+        db="magento",
+    )</code></pre>
+
+        <p>For the credentials that genuinely cannot be dynamic — third-party API keys, payment gateway secrets, the ERP's shared token — you are stuck with rotation as an event. Two things make it survivable. Support two active credentials at once, so rotation is add-new, cut-over, remove-old rather than a synchronised swap that requires downtime. And alert on credential age, loudly, as a monitored metric rather than a report nobody opens.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# Emit the age of every secret as a metric. Alerting on this is what turns
+# "we rotate quarterly" from an aspiration into something observable.
+set -euo pipefail
+now=$(date +%s)
+
+aws secretsmanager list-secrets --query 'SecretList[].[Name,LastChangedDate]' \
+  --output text | while read -r name changed; do
+    age_days=$(( (now - $(date -d "$changed" +%s)) / 86400 ))
+    aws cloudwatch put-metric-data \
+      --namespace Security/Secrets --metric-name AgeDays \
+      --dimensions "Secret=${name}" --value "$age_days" --unit Count
+    [ "$age_days" -gt 90 ] &amp;&amp; echo "STALE ${age_days}d ${name}"
+done</code></pre>
+
+        <p>One more thing on secrets, because it comes up in every engagement: a secret that has ever been committed to git is compromised, permanently, even if the commit was amended away. Rotate it. Do not argue about whether the repository was private. Scan history with <code>gitleaks</code> or <code>trufflehog</code>, treat every hit as live, and rotate the lot. On the retailer's estate that scan found nineteen credentials, six of which still worked.</p>
+
+        <h2>9. The Admin Panel Is Your Real Attack Surface</h2>
+
+        <p>For a Magento or WooCommerce store, the admin panel is where an attacker wants to be. It can change payment configuration, inject JavaScript into every page through CMS blocks, export customer data, and create further admin users.</p>
+
+        <p>The controls, in order of how much they matter.</p>
+
+        <p><strong>Put it behind the identity-aware proxy.</strong> The admin path should not be reachable from the internet at all. This is worth more than everything else on this list combined, because it removes the entire category of credential-stuffing, brute-force and known-CVE-on-the-admin-route attacks in one move.</p>
+
+        <p><strong>Disable Magento's own account management where the IdP can do it.</strong> Two authentication systems means two offboarding processes, and the second one is always the one that gets forgotten. That is exactly how the contractor's VPN certificate survived.</p>
+
+        <p><strong>Hardware MFA, enforced, no exceptions for the founder.</strong> Magento's built-in 2FA module supports TOTP and U2F. Where the proxy already enforces WebAuthn, the in-application 2FA becomes a second factor on a second system, which is defensible but adds friction; I usually keep it enabled and set a long remember-device window, because the proxy is doing the real work.</p>
+
+        <p><strong>Alert on privilege change, not just on login.</strong> Someone logging in at 3am is weak signal. A new admin user being created, a role gaining <code>Magento_Backend::all</code>, or the payment configuration being edited is strong signal, and those events are what you actually want a page for.</p>
+
+        <pre><code class="language-php">&lt;?php
+// A plugin on the admin user resource. Every new admin account and every
+// role change goes to the security channel immediately, with attribution.
+namespace Vendor\Security\Plugin;
+
+class AuditAdminUser
+{
+    public function __construct(
+        private \Vendor\Security\Api\AlerterInterface $alerter,
+        private \Magento\Backend\Model\Auth\Session $session
+    ) {}
+
+    public function afterSave(
+        \Magento\User\Model\ResourceModel\User $subject,
+        $result,
+        \Magento\Framework\Model\AbstractModel $user
+    ) {
+        if ($user-&gt;isObjectNew()) {
+            $this-&gt;alerter-&gt;critical('admin.user.created', [
+                'new_user'  =&gt; $user-&gt;getUserName(),
+                'email'     =&gt; $user-&gt;getEmail(),
+                // Attribution is the whole point. "An admin was created" is
+                // an alert; "X created an admin for Y" is an investigation.
+                'actor'     =&gt; $this-&gt;session-&gt;getUser()?-&gt;getUserName() ?? 'system',
+                'actor_ip'  =&gt; $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['REMOTE_ADDR'],
+            ]);
+        }
+        return $result;
+    }
+}</code></pre>
+
+        <p>There is a broader hardening checklist for the Magento application layer in the <a href="/blog/security-hardening-checklist/">security hardening piece</a>; what I am describing here is specifically the access-control layer around it, which is the part a checklist tends to under-weight.</p>
+
+        <h2>10. Third-Party Access, Which Is How It Actually Happens</h2>
+
+        <p>Look at the notable retail breaches of the last decade and the entry point is repeatedly a supplier: an HVAC contractor, a chat widget vendor, a marketing agency with an admin login, a payment integration with more scope than it needed.</p>
+
+        <p>Zero trust applied to vendors means four things, and none of them are technical work so much as organisational discipline.</p>
+
+        <p><strong>Every integration gets its own identity.</strong> Not a shared "API" account. One per integration, named for the integration, so that revoking one does not break the others and so that the audit log tells you which system did what.</p>
+
+        <p><strong>Scoped to what it actually needs.</strong> Magento's integration tokens can be scoped per resource, and almost nobody does it — the default in every vendor's setup guide is "grant all". A stock sync needs read on products and write on <code>catalogInventory</code>. It does not need customer data, and the day the vendor is compromised, the difference between those two scopes is whether you have a notifiable breach.</p>
+
+        <pre><code class="language-xml">&lt;!-- etc/acl.xml equivalents for an integration. Explicit, minimal, and
+     reviewed when the vendor asks for more. --&gt;
+&lt;integrations&gt;
+    &lt;integration name="warehouse_stock_sync"&gt;
+        &lt;resources&gt;
+            &lt;resource name="Magento_Catalog::products" /&gt;
+            &lt;resource name="Magento_CatalogInventory::cataloginventory" /&gt;
+            &lt;!-- Deliberately absent: Magento_Customer::manage,
+                 Magento_Sales::sales, Magento_Config::config --&gt;
+        &lt;/resources&gt;
+    &lt;/integration&gt;
+&lt;/integrations&gt;</code></pre>
+
+        <p><strong>Rate-limited and anomaly-monitored.</strong> A stock sync that normally makes 400 calls an hour and suddenly makes 40,000 is either broken or being used for bulk extraction, and both are worth waking someone for.</p>
+
+        <p><strong>Time-boxed.</strong> Agency access should expire. Give the agency working on your theme a ninety-day credential and make renewal a deliberate act. Most agency engagements outlive their credentials by years otherwise.</p>
+
+        <p>The conversation to have with a vendor is short: what is the minimum scope this needs, what is your notification commitment if you are compromised, and can we scope this to specific IP ranges. The answers tell you a great deal about how they operate. A vendor who cannot tell you what scopes their integration requires has never thought about it, and that is information.</p>
+
+        <h2>11. Without Telemetry This Is All Theatre</h2>
+
+        <p>Continuous verification implies continuous observation. An estate with perfect policy and no logging cannot tell you whether the policy is working, and cannot answer any question after an incident.</p>
+
+        <p>The minimum set I insist on, and the retention I argue for:</p>
+
+        <p>Authentication events from the IdP, every one, success and failure, with device and location, kept twelve months. Proxy access decisions with the identity attached, twelve months. VPC flow logs, ninety days at least — this is the one people cut for cost and the one you want most during an investigation. Database query logs for anything touching customer or payment tables, twelve months. Admin actions in the application, indefinitely; they are small. And CloudTrail with management events in every region, not just the ones you use, because the regions you do not use are where things get created quietly.</p>
+
+        <p>What you do with it matters more than having it. Detections worth writing, in roughly the order I would add them:</p>
+
+        <pre><code class="language-yaml"># Sigma-style rules. Each of these has caught something real for a client.
+- title: Access token used from a new ASN within an hour of issue
+  logsource: { product: cloudflare, service: access }
+  detection:
+    selection:
+      event: token_use
+    filter:
+      asn_seen_before: true
+    condition: selection and not filter
+  level: high
+  # Rationale: session cookie theft shows up as the same token appearing
+  # from a network the user has never used. Geo-velocity misses this when
+  # the attacker uses a proxy in the same country; ASN does not.
+
+- title: Integration token used outside its normal hours
+  logsource: { product: magento, service: webapi }
+  detection:
+    selection:
+      auth_type: integration
+      hour: [0,1,2,3,4,5]
+    condition: selection
+  level: medium
+  # Machine integrations have boringly predictable schedules. That
+  # predictability is the detection.
+
+- title: Database read volume anomaly on customer tables
+  logsource: { product: mysql, service: general }
+  detection:
+    selection:
+      table: ['customer_entity', 'customer_address_entity', 'sales_order']
+      rows_examined: '&gt;100000'
+    condition: selection
+  level: high
+  # Bulk extraction looks like a large SELECT before it looks like
+  # anything else. This is the last line before the data is gone.</code></pre>
+
+        <p>Be honest with yourself about the alerts you will actually action. A rule that fires eleven times a day gets muted within a week, and a muted rule is worse than no rule because it appears on the compliance evidence list. I would rather have four detections that page and get investigated than forty that go to a dashboard nobody opens.</p>
+
+        <h2>12. Where This Meets PCI DSS 4.0</h2>
+
+        <p>If you take card payments, a lot of this work is already required, and framing it as compliance rather than as security is often what gets it funded. That is a slightly cynical observation and it is also true.</p>
+
+        <p>The overlaps that matter. Requirement 8.4.2 mandates MFA for all access into the cardholder data environment, not just administrative access — which as of 31 March 2025 is not future-dated any more. Requirement 8.3.6 sets minimum password strength. Requirement 7 requires least privilege with documented business justification per role, which is exactly the scoping exercise described above. Requirement 1 requires network segmentation controls to be documented and reviewed every six months. And requirement 10 requires the audit logging that the detection work above depends on.</p>
+
+        <p>An identity-aware proxy in front of the admin, hardware MFA, scoped integration tokens and flow-log-derived segmentation documentation cover a meaningful share of those. The evidence pack largely writes itself if you build it this way, because the policy is declarative and lives in Terraform. Screenshots of a firewall GUI, which is the alternative, age badly and prove nothing about the state on the day the assessor asks.</p>
+
+        <p>What zero trust does <em>not</em> do is reduce your scope. Scope is determined by where cardholder data flows, and the only real scope reduction available to most merchants is not touching card data at all — hosted fields or a redirect, so the PAN never reaches your servers. If you are still self-hosting a payment form because a designer wanted control of the styling, no amount of segmentation will be as valuable as changing that decision. The <a href="/blog/pci-dss-compliance/">PCI compliance article</a> goes into the scoping question properly.</p>
+
+        <h2>13. What It Costs, And Where I Would Not Bother</h2>
+
+        <p>Every zero-trust article I have read presents the full architecture as though cost were not a variable. It is the main variable. Here is my honest assessment of value against effort for a mid-size merchant.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Control</th><th>Effort</th><th>Risk reduction</th><th>Verdict</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Hardware MFA on the IdP</td><td>1 week</td><td>Very high</td><td>Do it this month</td></tr>
+            <tr><td>IAP in front of admin and internal apps</td><td>2 weeks</td><td>Very high</td><td>Do it this quarter</td></tr>
+            <tr><td>SSM or Teleport replacing SSH keys</td><td>2-3 weeks</td><td>High</td><td>Do it this quarter</td></tr>
+            <tr><td>Scoping integration tokens</td><td>1 week</td><td>High</td><td>Do it, it is nearly free</td></tr>
+            <tr><td>Egress restriction on the data tier</td><td>2 weeks + breakage</td><td>High</td><td>Worth the disruption</td></tr>
+            <tr><td>Dynamic database credentials</td><td>4-6 weeks</td><td>Medium</td><td>Yes if you run Vault already</td></tr>
+            <tr><td>Full service mesh with mTLS</td><td>3-6 months</td><td>Medium</td><td>Only with a platform team</td></tr>
+            <tr><td>Per-request device posture for staff</td><td>4 weeks</td><td>Medium</td><td>Yes if the fleet is managed</td></tr>
+            <tr><td>Row-level data authorisation</td><td>6+ months</td><td>High where it applies</td><td>Rarely justified below enterprise</td></tr>
+            <tr><td>Continuous behavioural risk scoring</td><td>Ongoing, large</td><td>Low in practice</td><td>I would not, at this size</td></tr>
+          </tbody>
+        </table>
+
+        <p>The bottom two rows are where I differ from most vendor guidance, so let me defend them. Behavioural risk scoring — adaptive authentication that raises friction based on a computed risk score — sounds excellent and in a ninety-person company produces a stream of false positives against a population small enough that you could simply ask them. The models need volume you do not have. Spend the money on hardware keys instead.</p>
+
+        <p>And a full service mesh for six services is, in my experience, a net negative for security. You add sidecar proxies, a control plane, certificate rotation machinery and a new class of outage, in exchange for mTLS between services that already sit in a private subnet. If you have thirty services and a platform team, different answer entirely. The threshold is roughly where you stop being able to hold the service graph in your head.</p>
+
+        <h2>14. Fourteen Months At The Retailer</h2>
+
+        <p>Back to the estate from the opening. Here is what actually happened, including the parts that did not work.</p>
+
+        <p>Starting position, February 2024: flat VPN with forty-one certificates and no IdP integration, shared root SSH key across nineteen hosts, Magento admin on <code>/admin</code> reachable from the internet, eleven integration tokens all with full API scope, database passwords in <code>env.php</code> unchanged since the 2019 build, default-allow egress everywhere, and CloudTrail enabled in one region.</p>
+
+        <p><strong>Months 1-2: identity.</strong> Okta as the single IdP, YubiKeys for the thirty people with infrastructure access, WebAuthn enforced. The Magento admin moved behind Cloudflare Access with a two-hour session. Cost: about £1,400 in hardware, three weeks of one engineer. This was 70% of the total risk reduction of the whole programme, achieved in the first eight weeks, and if the budget had run out there I would have called it a success.</p>
+
+        <p><strong>Month 3: SSH.</strong> SSM Session Manager, all inbound port 22 removed, the shared root key destroyed. Two days of complaints about tooling that assumed <code>ssh</code>, resolved by an SSM proxy wrapper in <code>~/.ssh/config</code>. The bastion host was terminated, which felt disproportionately good.</p>
+
+        <p><strong>Months 4-5: observation.</strong> Flow logs on, Athena queries built, four weeks of watching. Found the reporting-to-reconciliation-database route mentioned earlier, plus a staging environment with a live copy of the production customer table that had been refreshed nightly since 2020 and was reachable from the office network with no authentication.</p>
+
+        <p>That staging finding was the worst thing in the engagement and it had nothing to do with the zero-trust architecture. It was a copy of 340,000 customer records sitting on a box nobody thought about. The exercise found it. That is an argument for doing the observation phase properly, and an argument for not assuming your risk lives where your architecture diagram says it does.</p>
+
+        <p><strong>Months 6-8: segmentation.</strong> Deny-by-default on the database tier, then egress restriction. This is where it went wrong.</p>
+
+        <p>The egress lockdown broke the nightly ERP export at 2am on a Sunday, silently, because the export wrote to an SFTP host whose IP had not been in the discovery window — it only ran on the last Sunday of the month. Nobody noticed for six days. The finance team's month-end reconciliation was late and I got a deservedly cold email. The lesson: a four-week observation window does not capture monthly and quarterly jobs, and I now explicitly ask "what runs monthly, quarterly and annually" before enforcing anything, because those flows will not be in the data. Obvious once you have been burned by it.</p>
+
+        <p><strong>Months 9-11: integrations.</strong> Eleven tokens re-issued with minimal scope, one per integration, ninety-day expiry on the two agency credentials. Three integrations broke on scoping because the vendors' documentation understated what they called. Each took a day of packet-capture to work out, because in every case the vendor could not tell us.</p>
+
+        <p><strong>Months 12-14: secrets and detection.</strong> Vault for dynamic MySQL credentials on the application tier, secret-age metrics with alerting, the four detection rules above. The Vault work was the most expensive part of the programme and I would rank it fifth in value. If I ran this again I would do IAM database authentication and skip Vault entirely, because the estate did not have the other Vault use cases that justify running it.</p>
+
+        <p>Where it landed:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Feb 2024</th><th>Apr 2025</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Standing credentials with production access</td><td>41 VPN certs + 1 shared root key</td><td>0</td></tr>
+            <tr><td>Median credential lifetime</td><td>Unbounded</td><td>8 hours</td></tr>
+            <tr><td>Time to revoke all access for one person</td><td>~2 days, 4 systems</td><td>Under 60 seconds, 1 system</td></tr>
+            <tr><td>Internet-reachable admin interfaces</td><td>4</td><td>0</td></tr>
+            <tr><td>Integration tokens with full API scope</td><td>11</td><td>0</td></tr>
+            <tr><td>Hosts reachable after one compromised laptop</td><td>19</td><td>1, for 2 hours</td></tr>
+            <tr><td>PCI findings at the following assessment</td><td>9</td><td>1 (documentation)</td></tr>
+            <tr><td>Support tickets about access, monthly</td><td>~24</td><td>~6</td></tr>
+          </tbody>
+        </table>
+
+        <p>The last row is the one I did not expect. Access got easier, not harder. No VPN client to configure, no keys to distribute, no waiting for someone to add you to a group in a system they had to remember existed. That was worth more politically than any of the security outcomes, because it is the answer to the objection you will actually face.</p>
+
+        <h2>15. Questions I Get Asked</h2>
+
+        <p><strong>"Can we do zero trust on Shopify Plus, where we do not control the infrastructure?"</strong></p>
+
+        <p>Differently, but yes, and the surface is smaller. Your controls are: enforce SSO with hardware MFA on staff accounts, use granular staff permissions rather than giving everyone full access, audit the installed app list quarterly and remove what nobody can justify, scope custom app tokens to the minimum, and put your own admin tooling behind a proxy. The apps are the risk — every one has API access to your store data and you are trusting their security posture entirely. Treat the app list the way you would treat a list of people with admin logins, because functionally that is what it is.</p>
+
+        <p><strong>"Does zero trust mean we can drop the WAF and the firewall?"</strong></p>
+
+        <p>No, and this framing worries me whenever I hear it. Zero trust is about authenticating and authorising every request. It says nothing about a request that is authenticated and malicious — SQL injection from a legitimately logged-in user, a bot with valid credentials, a volumetric attack on a public endpoint. Those need <a href="/blog/waf-implementation/">a WAF and rate limiting</a>. The controls are complementary and the marketing that implies otherwise is selling a replacement for something that solves a different problem.</p>
+
+        <p><strong>"What about customer accounts? Should shoppers get MFA?"</strong></p>
+
+        <p>Offer it, do not enforce it, and make the offer good. Enforcing MFA on shoppers costs conversion in ways that are easy to measure and hard to justify against the risk to a store account. Where I would push harder: enforce it for accounts with stored payment methods or with order values above some threshold, and make the account-takeover path — email change, address change, password reset — require re-authentication regardless. Most customer account fraud goes through those three actions and they are worth protecting individually rather than protecting the whole session.</p>
+
+        <p><strong>"How do we handle emergency break-glass access?"</strong></p>
+
+        <p>You need it, because a broken IdP with no bypass is an outage you cannot fix. What makes it safe: two credentials, each held by a different person, both required; stored offline in a safe, not in a password manager that depends on the same IdP; use triggers an immediate page to the whole security channel; and a mandatory written post-hoc justification. The controls are procedural because the technical controls are precisely what you are bypassing. Test it twice a year — an untested break-glass procedure is the same as not having one.</p>
+
+        <p><strong>"Is this achievable without a dedicated security team?"</strong></p>
+
+        <p>The first four rows of that cost table are, absolutely, by a competent infrastructure engineer with a quarter of their time. The bottom half is not, and pretending otherwise is how organisations end up with half-finished programmes that provide compliance evidence and no protection. Be realistic about what you can operate. A control you cannot maintain degrades into a control you believe you have, and that is worse than a gap you know about.</p>
+
+        <p><strong>"Our developers need production database access to debug. How does that fit?"</strong></p>
+
+        <p>It fits badly, and that is the correct answer rather than a failure of the model. Direct production database access for debugging is a symptom of insufficient observability. The right fix is better logging, better tracing and a realistic anonymised dataset in staging. Where access is genuinely necessary, make it brokered, time-boxed, recorded at query level, and read-only by default with write access requiring a second approval. If your team needs production access weekly, the problem to solve is why.</p>
+
+        <h2>16. What I'd Do First</h2>
+
+        <p>Ordered by value per unit of effort, which is not the order any vendor will give you.</p>
+
+        <p><strong>One.</strong> List every credential that grants production access. Every VPN certificate, SSH key, API token, admin account, database user, service account. Just the list, no changes. It will take a day and it will be longer than anyone expects, and about a quarter of the entries will belong to people or systems that no longer exist. This finding is what funds the rest of the work.</p>
+
+        <p><strong>Two.</strong> Hardware MFA on the identity provider for everyone with infrastructure access. Not TOTP, not push. Buy the keys, spend the week. This is the highest-value control available to you and it is the one that would have stopped most of the incidents I have been called in for.</p>
+
+        <p><strong>Three.</strong> Put the admin panel behind an identity-aware proxy and make the origin refuse anything that did not come through it. Verify the JWT; do not rely on IP allowlisting alone.</p>
+
+        <p><strong>Four.</strong> Delete standing SSH keys. SSM if you are on AWS, Teleport if you need session recording and multi-cloud. Terminate the bastion.</p>
+
+        <p><strong>Five.</strong> Turn on flow logs and leave them alone for a month. Do not enforce anything yet. Then ask what runs monthly and quarterly, because those flows will not be in your data and enforcing without them is how you break month-end.</p>
+
+        <p><strong>Six.</strong> Scope your integration tokens. It is a week and it is the difference between one compromised vendor being an incident and being a notifiable breach.</p>
+
+        <p>Then stop and reassess. That list is roughly two months of one engineer's time and it captures most of the available risk reduction. Everything after it — meshes, dynamic secrets, per-request device posture — is real work with real value and a much worse ratio, and it should be chosen deliberately rather than because it was on a diagram.</p>
+
+        <p>The thing I would most want you to take away is not architectural. It is that the contractor's certificate from 2021 existed because access was granted by one system and revoked by another, and nobody owned the gap between them. Every technique in this article is, at bottom, a way of collapsing that gap to zero. Start there and the rest follows.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
               <strong><a href="/blog/waf-implementation/">Implementing a Web Application Firewall (WAF)</a></strong>
-              <p>Cloudflare & AWS WAF expression rules.</p>
+              <p>Cloudflare &amp; AWS WAF expression rules.</p>
             </li>
             <li>
               <strong><a href="/blog/security-hardening-checklist/">Comprehensive Security Hardening Checklist for Magento 2</a></strong>
@@ -232,7 +872,6 @@ spec:
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -266,6 +905,6 @@ spec:
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

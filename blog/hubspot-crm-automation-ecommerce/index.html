@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>HubSpot CRM Automation & Marketing Integration | MODRACX</title>
-  <meta name="description" content="Technical guide on integrating HubSpot Ecommerce Bridge API v3 with Magento 2 and Shopify Plus for abandoned cart workflows and customer segmentation." />
+  <meta name="description" content="HubSpot and ecommerce integration: contact deduplication, unique-value properties, lifecycle stage rules, order associations, and keeping attribution intact." />
   <meta property="og:title" content="HubSpot CRM Automation & Marketing Integration | MODRACX" />
   <meta property="og:description" content="Technical guide on HubSpot CRM integration by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>HubSpot CRM Automation & Marketing Integration</h1>
-        <p class="lede">Syncing e-commerce deal pipelines and contact lists with HubSpot CRM powers automated email sequences for cart recovery and post-purchase follow-ups.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>HubSpot CRM Automation &amp; Marketing Integration</h1>
+        <p class="lede">A customer existed four times in one HubSpot portal, and every workflow built on top of that quietly did the wrong thing. Identity, lifecycle stages and attribution at the commerce-CRM seam.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 28 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,40 +205,481 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>HubSpot Contacts Client API v3 Code</h2>
+        <h2>1. The Customer Who Existed Four Times</h2>
 
-        <pre><code class="language-javascript">// Node.js HubSpot Client SDK for E-Commerce Contact Sync
-const hubspot = require('@hubspot/api-client');
-const hubspotClient = new hubspot.Client({ accessToken: process.env.HUBSPOT_ACCESS_TOKEN });
+        <p>A beekeeping supplies retailer forwarded me a screenshot in March. It was a HubSpot contact record for a woman called Rachael, and above it, in the search results, were three other Rachaels with the same surname and three different email addresses. One was her Gmail. One was a work address she had used once, in 2023, to order a gift for a colleague. One was the <code>@privaterelay.appleid.com</code> alias Sign in with Apple had generated for her when she checked out on her phone.</p>
 
-async function createHubSpotContact(customer) {
-  const properties = {
-    email: customer.email,
-    firstname: customer.firstname,
-    lastname: customer.lastname,
-    lifecyclestage: 'customer'
-  };
-  return await hubspotClient.crm.contacts.basicApi.create({ properties });
+        <p>The fourth had no email at all. It had a phone number, a first name, a last name, and a lifecycle stage of <em>Customer</em>, because a nightly job had been pushing Magento orders into HubSpot for eight months and creating a contact whenever it could not match one.</p>
+
+        <p>The immediate complaint was that Rachael had received the same "we miss you" re-engagement email three times in one week and had replied to all three, increasingly annoyed. The actual damage was quieter and larger. Their marketing contact count had inflated by about 19% over the year, which they were paying for monthly. Their customer lifetime value reporting was wrong in a direction that made repeat purchase rate look worse than it was. And a workflow that was supposed to suppress promotional email to anyone who had bought in the last fourteen days had been failing silently, because the contact that bought and the contact that got the email were different records.</p>
+
+        <p>None of that is a HubSpot bug. All of it comes from one decision nobody made deliberately: what counts as the same person. Commerce platforms and CRMs disagree about that question in ways that are invisible until you connect them, and every downstream automation inherits the disagreement.</p>
+
+        <p>This article is about that seam. Lifecycle stages, identity and deduplication, associating orders with contacts and companies, what happens to attribution when a record is created by an API instead of a browser, and the specific workflows that go wrong when one human being is two rows. The mechanics that any queue-based integration needs — idempotency keys, retry with backoff, dead-letter handling, scheduled reconciliation — I have written up in detail in the piece on <a href="/blog/sap-commerce-cloud-erp-sync/">SAP Commerce Cloud and S/4HANA synchronisation</a>, and they apply here unchanged. I am not going to restate them. What follows is the part that is specific to a CRM.</p>
+
+        <h2>2. A CRM Is Not A Downstream Copy Of Your Database</h2>
+
+        <p>The mental model that causes most of the damage is treating HubSpot as a reporting mirror. Orders happen in Magento or Shopify, so you push them to HubSpot so that marketing can see them. Under that model the integration is one-directional, contacts are created as a side effect of orders, and nobody thinks very hard about what a contact is.</p>
+
+        <p>But HubSpot is not passive. Contacts get created by form submissions, by chat conversations, by imported lists from a trade show, by the sales team typing them in, by Gmail integration scraping a reply, and by your integration. Each of those creation paths has different data quality and different fields populated. Marketing then builds workflows that act on those records, and those workflows send email to actual human beings and change values that your integration reads back.</p>
+
+        <p>So the correct model is two systems that both write, both read, and disagree. Which means the same discipline you would apply to an ERP link applies here: decide field by field who is allowed to be right, and enforce it in code rather than in a document.</p>
+
+        <p>Here is the split I use as a starting point for a direct-to-consumer retailer. It is not universal, but every deviation from it should be argued for.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Property</th><th>Owner</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Email (primary)</td><td>Commerce</td><td>The account email is the identity anchor</td></tr>
+            <tr><td>First / last name</td><td>Whoever last confirmed it</td><td>Never overwrite a non-empty value with an empty one</td></tr>
+            <tr><td>Phone</td><td>Commerce</td><td>Normalise to E.164 on write</td></tr>
+            <tr><td>Billing / shipping address</td><td>Commerce</td><td>Read-only in HubSpot</td></tr>
+            <tr><td>Lifecycle stage</td><td>Shared, with rules</td><td>Discussed below — this is the contested one</td></tr>
+            <tr><td>Lead status</td><td>HubSpot</td><td>Sales owns it; commerce must not touch it</td></tr>
+            <tr><td>Marketing consent / subscriptions</td><td>HubSpot</td><td>Legal record of consent lives in one place</td></tr>
+            <tr><td>Total revenue, order count, AOV</td><td>Commerce, calculated</td><td>Push as derived properties, never edit by hand</td></tr>
+            <tr><td>Original source, first touch</td><td>HubSpot</td><td>Set once at creation, then immutable</td></tr>
+            <tr><td>Owner (sales rep)</td><td>HubSpot</td><td>Commerce has no opinion</td></tr>
+          </tbody>
+        </table>
+
+        <p>The row that starts arguments is the address block. Merchandising and sales both want editable addresses in HubSpot because it is where they work. Give them that and you will get a shipping address corrected in the CRM, never propagated back, and a parcel sent to the old one. Read-only, with a link through to the order in the storefront admin, ends the conversation.</p>
+
+        <h2>3. What HubSpot Actually Considers The Same Person</h2>
+
+        <p>HubSpot's default deduplication key for contacts is email address, full stop. Create a contact through <code>POST /crm/v3/objects/contacts</code> with an email that already exists and you get a <code>409 Conflict</code> with the existing object ID in the error body. That behaviour is genuinely useful and most integrations never notice it because they use it accidentally.</p>
+
+        <p>There are two other keys. <code>hs_object_id</code> is the internal record ID, which is stable and is what you should store on your side. And on Enterprise you can designate up to ten properties as unique-value properties, which then behave like alternate keys for the upsert endpoint. That second one is the feature most integrations should be using and almost none are.</p>
+
+        <p>The pattern I now build by default: create a unique-value property called something like <code>commerce_customer_id</code>, write your storefront's customer entity ID into it, and upsert against that rather than against email. Email is a thing people change. The customer ID is not.</p>
+
+        <pre><code class="language-http">POST /crm/v3/objects/contacts/batch/upsert
+Authorization: Bearer pat-eu1-xxxxxxxx
+Content-Type: application/json
+
+{
+  "inputs": [
+    {
+      "idProperty": "commerce_customer_id",
+      "id": "MAG-1194832",
+      "properties": {
+        "email": "rachael@example.com",
+        "firstname": "Rachael",
+        "commerce_customer_id": "MAG-1194832",
+        "commerce_total_orders": "7",
+        "commerce_lifetime_value": "482.10"
+      }
+    }
+  ]
 }</code></pre>
 
-        <hr />
+        <p>Two things about that call are worth saying out loud. The <code>idProperty</code> must also appear inside <code>properties</code> on a create, or the created record will match nothing on the next run — the identifier in the envelope is used for lookup, not for writing. And batch upsert takes up to 100 inputs per request, which matters enormously for rate limits and which I come back to below.</p>
+
+        <p>The catch: batch upsert does not fail gracefully on a partial conflict. If one of your hundred inputs has an email belonging to a different record, you get a <code>207</code> style multi-status response and you have to read the per-input errors rather than checking the HTTP code. Integrations that check only the status code report success while dropping records, and that class of bug is invisible for months.</p>
+
+        <h2>4. Where The Duplicates Actually Come From</h2>
+
+        <p>In roughly a dozen of these projects, the duplicate sources have been the same five, in the same rough order of volume.</p>
+
+        <p><strong>Guest checkout.</strong> The single biggest source. A customer buys as a guest with <code>rach.h@gmail.com</code>, then later registers an account with <code>rachael.h@gmail.com</code>, and your integration has no way to know these are the same person because they genuinely are different strings. Magento will happily hold both as separate order records with no customer entity. Shopify will create a customer object for a guest order, which helps, but it keys on email too.</p>
+
+        <p><strong>Case and whitespace.</strong> HubSpot lowercases email on storage, which saves you from one variant. It does not trim a trailing space in every path, and it does not know that Gmail ignores dots and everything after a plus sign. Whether you should canonicalise Gmail addresses is a real question with a real answer, and the answer is no — normalise case and trim, and stop there, because stripping dots will eventually merge two colleagues at a small company who deliberately use plus-addressing.</p>
+
+        <p><strong>Apple private relay.</strong> Sign in with Apple hands you a relay address that forwards to the real inbox. It is a valid, deliverable address. It is also a different address from the one the same person used last year, and if they revoke the relay it stops working entirely. Treat relay addresses as second-class: store them, mail them if you must, but never use one as your identity anchor if another address exists on the account.</p>
+
+        <p><strong>Your own retries.</strong> A create call times out after HubSpot has created the record. Your job retries. Because you were creating by email and the email was set, HubSpot deduplicates for you and you got lucky. Change the code to create-by-nothing, or to write a contact without an email because the order was a phone order, and the same retry now makes a second record. Idempotency matters here for exactly the reasons it matters on an ERP link.</p>
+
+        <p><strong>Imports.</strong> Somebody uploads a CSV from an event. HubSpot's import tool deduplicates on email if the column is mapped, and creates freely if it is not. A quarterly import with a mistyped header mapping can add several thousand duplicates in an afternoon. Lock down who can run imports, and require that any import include the email column mapped explicitly.</p>
+
+        <h2>5. Lifecycle Stages, And Why They Go Backwards Badly</h2>
+
+        <p>HubSpot's lifecycle stage is a single-select property with a defined default set: <em>Subscriber</em>, <em>Lead</em>, <em>Marketing Qualified Lead</em>, <em>Sales Qualified Lead</em>, <em>Opportunity</em>, <em>Customer</em>, <em>Evangelist</em>, <em>Other</em>. It looks like an ordinary dropdown. It is not.</p>
+
+        <p>HubSpot enforces forward-only movement. Setting the property to an earlier stage than the current one is ignored — the write returns success and the value does not change. To move a contact backwards you must first set the property to an empty string, then set it to the target value, which is two API calls and a race condition if anything else is writing at the same time.</p>
+
+        <pre><code class="language-python"># Moving a lifecycle stage backwards requires clearing it first.
+# A single PATCH to an earlier stage returns 200 and does nothing,
+# which is the most confusing failure mode in the whole API.
+def set_lifecycle(client, contact_id, target):
+    current = client.get(f"/crm/v3/objects/contacts/{contact_id}",
+                         params={"properties": "lifecyclestage"})
+    now = current["properties"]["lifecyclestage"]
+    if now == target:
+        return
+    if STAGE_ORDER.index(target) &lt; STAGE_ORDER.index(now):
+        client.patch(f"/crm/v3/objects/contacts/{contact_id}",
+                     json={"properties": {"lifecyclestage": ""}})
+    client.patch(f"/crm/v3/objects/contacts/{contact_id}",
+                 json={"properties": {"lifecyclestage": target}})</code></pre>
+
+        <p>Now the design question. Where does commerce get to write lifecycle stage at all?</p>
+
+        <p>My answer, arrived at after getting it wrong twice: commerce writes exactly one transition, <em>to Customer, on first paid order, and never again</em>. Everything else belongs to HubSpot's own workflows. The reason is that lifecycle stage is a marketing and sales concept about relationship state, and an order is an event. If you let the integration drive the whole ladder you end up encoding a sales process in an ETL job, and the sales process changes every quarter while the ETL job does not.</p>
+
+        <p>The failure I created by ignoring this: on one project we wrote <em>Customer</em> on order placed and <em>Lead</em> on cart abandoned, thinking that was symmetrical. Because backwards moves are silently ignored, the abandonment write did nothing for existing customers — fine — but for new visitors it did work, and then a second abandoned cart wrote <em>Lead</em> again over the top of an <em>MQL</em> the marketing team's own scoring workflow had set. Cue three weeks of the sales team asking why qualified leads kept demoting themselves overnight.</p>
+
+        <h3>A stage model that survives contact with a sales team</h3>
+
+        <p>What I use now, with the writer named for each transition:</p>
+
+        <p><em>Subscriber</em> is set by HubSpot when someone opts into email and has done nothing else. <em>Lead</em> is set by HubSpot when a form is submitted or an account is registered without purchase — the registration event comes from commerce as a custom event, but the stage change is a HubSpot workflow reacting to it. <em>Customer</em> is written by the integration, once, on the first order reaching a paid state. <em>Evangelist</em>, if used at all, is a manual sales action. <em>Marketing Qualified Lead</em> and <em>Sales Qualified Lead</em> only exist on B2B accounts and only HubSpot touches them.</p>
+
+        <p>Notice that commerce sends events and HubSpot decides what they mean, everywhere except the one transition that is objectively factual. That division holds up when the marketing team reorganises their funnel, which they will.</p>
+
+        <h2>6. Deals, Or Whether Orders Should Be Deals At All</h2>
+
+        <p>HubSpot's Ecommerce Bridge modelled orders as deals in a dedicated pipeline with stages like <em>Checkout Abandoned</em>, <em>Checkout Pending</em>, <em>Processed</em>, <em>Shipped</em> and <em>Cancelled</em>. That model is fine for a store doing a few thousand orders a year and actively harmful above that.</p>
+
+        <p>The problem is volume. Deals are a sales object. They appear in forecasts, in deal-based reports, in the sales team's board view, and in the association counts on every contact record. A retailer doing 4,000 orders a month adds 48,000 deals a year to a portal, and a sales rep opening a contact record sees a wall of them. Deal-based revenue reporting becomes meaningless because it mixes real pipeline with completed retail transactions.</p>
+
+        <p>For direct-to-consumer, I do not create deals. Orders go into a custom object — HubSpot Enterprise supports these — or, on lower tiers, into rolled-up contact properties plus a link out to the order in the storefront admin. The contact carries <code>commerce_total_orders</code>, <code>commerce_lifetime_value</code>, <code>commerce_last_order_date</code>, <code>commerce_first_order_date</code>, <code>commerce_last_order_value</code> and a couple of category flags, and that is enough for every segmentation marketing has ever actually asked me for.</p>
+
+        <p>For B2B, deals earn their place, because a purchase order genuinely is a sales event with a rep attached and a forecast implication. There the pipeline is real and the association to a company matters.</p>
+
+        <pre><code class="language-json">// Custom object definition for orders — created once, then written by the integration.
+// requiredProperties keeps garbage out; the unique property is what makes upsert safe.
+{
+  "name": "commerce_order",
+  "labels": { "singular": "Order", "plural": "Orders" },
+  "primaryDisplayProperty": "order_number",
+  "requiredProperties": ["order_number", "order_total", "order_placed_at"],
+  "properties": [
+    { "name": "order_number", "label": "Order number", "type": "string",
+      "fieldType": "text", "hasUniqueValue": true },
+    { "name": "order_total", "label": "Order total", "type": "number",
+      "fieldType": "number" },
+    { "name": "order_placed_at", "label": "Placed at", "type": "date",
+      "fieldType": "date" },
+    { "name": "order_status", "label": "Status", "type": "enumeration",
+      "fieldType": "select" },
+    { "name": "storefront", "label": "Storefront", "type": "enumeration",
+      "fieldType": "select" }
+  ],
+  "associatedObjects": ["CONTACT", "COMPANY"]
+}</code></pre>
+
+        <p>One caveat on custom objects: they are Enterprise-only, and portals get a limited number of them. If a client is on Professional and will not upgrade, rolled-up properties on the contact are the honest answer, and you should say so rather than building a shadow object out of engagements.</p>
+
+        <h2>7. Associations, And The v4 API You Should Be Using</h2>
+
+        <p>Associating an order with a contact is a separate call from creating it. This trips people up constantly, because the object creation succeeds and the record appears, orphaned, associated with nothing, and only shows up when somebody notices that a contact's order list is empty.</p>
+
+        <p>The v4 association API is a real improvement over v3 because it exposes association labels, which let you distinguish <em>Billing contact</em> from <em>Ordering contact</em> from <em>Delivery recipient</em> on the same company. In B2B that distinction is the difference between a useful CRM and a list of names.</p>
+
+        <pre><code class="language-http">PUT /crm/v4/objects/commerce_order/{orderId}/associations/contact/{contactId}
+Authorization: Bearer pat-eu1-xxxxxxxx
+Content-Type: application/json
+
+[
+  {
+    "associationCategory": "USER_DEFINED",
+    "associationTypeId": 47
+  }
+]</code></pre>
+
+        <p>The <code>associationTypeId</code> is portal-specific for user-defined labels. Hard-coding the integer is how a working integration breaks after somebody edits the labels in the UI. Look it up once at start-up from <code>GET /crm/v4/associations/{fromType}/{toType}/labels</code>, cache it for the process lifetime, and fail loudly if the label you need has vanished.</p>
+
+        <p>The association batch endpoint takes up to 100 pairs per call, and you want it. Creating a thousand orders one association at a time is a thousand extra requests against a rate limit you are already close to.</p>
+
+        <h2>8. Companies, And The Domain Guessing Problem</h2>
+
+        <p>HubSpot associates contacts with companies automatically based on email domain, if that setting is enabled. On a B2B portal this is mostly a gift. On a consumer retailer it is a slow-motion disaster, because it groups every Gmail user into a company called Gmail — HubSpot does exclude free email domains from the automatic matching, but the moment a customer uses a work address you have created a company record for their employer, associated them with it, and put a business relationship into your CRM that does not exist.</p>
+
+        <p>Decide deliberately. For a consumer retailer, turn automatic company creation off and never write company objects from the integration. For a B2B storefront, turn it on and then override it, because domain matching cannot tell you that <code>procurement@holdingsgroup.com</code> and <code>site4buyer@holdingsgroup.com</code> belong to different trading entities within the same group.</p>
+
+        <p>The pattern that works for B2B storefronts is the same shape I described for ERP account hierarchies in the <a href="/blog/sap-commerce-cloud-erp-sync/">SAP piece</a>: the trading account in the commerce platform is the company in HubSpot, matched on an account number written into a unique-value property, and contacts are associated to it explicitly by the integration rather than by domain. Domain matching becomes a fallback for contacts your integration has never seen.</p>
+
+        <p>Then there is the parent-child company structure. HubSpot supports it, it is one association type, and it is worth populating if your commerce platform models buying groups. What it will not do is roll revenue up the hierarchy automatically in standard reports, so if the client's question is "what did the whole group spend", plan on a calculated property or an external report rather than promising it out of the box.</p>
+
+        <h2>9. Attribution, Which The Integration Quietly Destroys</h2>
+
+        <p>This is the section I would put first if the article were ordered by how much money the mistake costs.</p>
+
+        <p>HubSpot's analytics attribution depends on a first-party cookie, <code>hubspotutk</code>, set by the tracking script. That cookie identifies an anonymous browser session and accumulates page views, sources and referrers. When that browser submits a HubSpot form, the form carries the cookie value in a field called <code>hutk</code>, and HubSpot stitches the whole anonymous history onto the contact record. That is how <code>hs_analytics_source</code>, <code>hs_analytics_first_url</code>, first-touch and last-touch attribution get populated.</p>
+
+        <p>Create the contact through the CRM API instead, and none of that happens. The contact appears with <code>hs_analytics_source</code> set to <em>Offline Sources</em>, no page view history, and no attribution. Which means every customer who checked out on your own storefront checkout — not a HubSpot form — arrives in the CRM as if they materialised from nowhere. Then marketing runs a source report, sees that 71% of customers came from "Offline Sources", and concludes that their paid search is not working.</p>
+
+        <p>I have watched a client cut a channel budget on the strength of that report. The channel was fine. The integration was eating the attribution.</p>
+
+        <h3>Two ways to keep the attribution</h3>
+
+        <p>The first and better one: capture the <code>hubspotutk</code> cookie in the browser at checkout, carry it through to your order record, and submit the order through the Forms API rather than the CRM API, passing the token in the context.</p>
+
+        <pre><code class="language-javascript">// Storefront checkout: grab the tracking cookie and attach it to the order
+// payload so the server can pass it to HubSpot's Forms API. Without this,
+// the contact is created with no attribution history at all.
+function hubspotToken() {
+  const m = document.cookie.match(/(^|;)\s*hubspotutk=([^;]+)/);
+  return m ? m[2] : null;
+}
+
+window.addEventListener('checkout:submit', (e) =&gt; {
+  e.detail.order.hubspot_utk = hubspotToken();
+  e.detail.order.page_uri = window.location.href;
+});</code></pre>
+
+        <pre><code class="language-http">POST /submissions/v3/integration/submit/{portalId}/{formGuid}
+Content-Type: application/json
+
+{
+  "fields": [
+    { "name": "email",     "value": "rachael@example.com" },
+    { "name": "firstname", "value": "Rachael" }
+  ],
+  "context": {
+    "hutk": "b3f2c9a17d4e4a2f9b1e0c8a6d5f3e21",
+    "pageUri": "https://example.com/checkout/success",
+    "pageName": "Order confirmation"
+  },
+  "legalConsentOptions": {
+    "consent": {
+      "consentToProcess": true,
+      "text": "I agree to the processing of my data for order fulfilment.",
+      "communications": [
+        { "value": false, "subscriptionTypeId": 7,
+          "text": "Marketing emails about new products" }
+      ]
+    }
+  }
+}</code></pre>
+
+        <p>The second way, for when you cannot change checkout: call the JavaScript tracking API's <code>identify</code> before the confirmation page's tracked view.</p>
+
+        <pre><code class="language-javascript">// _hsq identify must be followed by a tracked event for HubSpot to
+// associate the anonymous session with the email. identify alone does nothing.
+var _hsq = window._hsq = window._hsq || [];
+_hsq.push(['identify', { email: order.customerEmail, id: order.customerId }]);
+_hsq.push(['setPath', '/checkout/success']);
+_hsq.push(['trackPageView']);</code></pre>
+
+        <p>That second approach is weaker — it only works for a browser session that actually loaded the confirmation page, so it misses phone orders, subscription renewals and anything asynchronous. But it recovers most of the volume and takes twenty minutes.</p>
+
+        <p>Either way, treat <code>hs_analytics_source</code> and the first-touch properties as immutable after creation. Your integration should never write them. If a nightly sync overwrites first-touch source with a current value, you have converted an attribution model into a last-touch model without telling anyone.</p>
+
+        <h2>10. The Rate Limits You Will Meet</h2>
+
+        <p>HubSpot's limits are generous enough that you will not notice them during development and tight enough that a backfill will hit every one of them.</p>
+
+        <p>A private app on Professional or Enterprise gets 190 requests per rolling ten seconds, with a daily ceiling that depends on tier and whether the API add-on is purchased. The Search API is separately limited to roughly four requests per second per token, and it caps at 10,000 results per query regardless of paging — page past that and you get an error, not a truncated list.</p>
+
+        <p>The consequences for design are concrete. Do not search for a contact before upserting it; upsert on a unique property and let HubSpot resolve it. Do not fetch a contact to check whether a property changed; write it and let HubSpot ignore a no-op. Batch everything that has a batch endpoint, in hundreds.</p>
+
+        <pre><code class="language-python">import time, random, requests
+
+# HubSpot returns 429 with a Retry-After header. Honour it; do not
+# invent your own backoff on top, and do not retry 4xx other than 429.
+def call(session, method, url, **kw):
+    for attempt in range(6):
+        r = session.request(method, url, timeout=15, **kw)
+        if r.status_code == 429:
+            wait = float(r.headers.get("Retry-After", 10))
+            time.sleep(wait + random.uniform(0, 0.5))   # jitter: parallel workers
+            continue                                     # must not wake together
+        if r.status_code &gt;= 500:
+            time.sleep(min(2 ** attempt, 30) + random.uniform(0, 1))
+            continue
+        return r
+    raise RuntimeError(f"gave up after 6 attempts: {method} {url}")</code></pre>
+
+        <p>For an initial backfill of any size, do not use the CRM API at all. Use the imports endpoint, <code>POST /crm/v3/imports</code>, which takes a CSV and a column mapping and runs asynchronously outside the normal rate limit. A 400,000-contact backfill through batch upsert is a day of babysitting a script; the same load through imports is one file and a polling loop.</p>
+
+        <p>The imports endpoint has a real trap, though. Import-created records do not fire the same workflow enrolment triggers as API-created ones in every case, and a large import can enrol tens of thousands of contacts into an active workflow at once if the trigger is property-based. Before any backfill, turn off every workflow that could enrol on the properties you are writing. I have sent 31,000 unintended emails by not doing this. It took four hours to notice and considerably longer to apologise for.</p>
+
+        <h2>11. Workflows That Break On Duplicates</h2>
+
+        <p>Now the specific damage, because "duplicates are bad" is not an argument until you can name what fails.</p>
+
+        <p><strong>Suppression by recent purchase.</strong> The most common and the most embarrassing. A promotional send excludes anyone with <code>commerce_last_order_date</code> inside fourteen days. Rachael's guest-checkout record has the order; her account record has the email subscription. She gets 20% off two days after paying full price. That email generates a refund request, and rightly so.</p>
+
+        <p><strong>Abandoned cart recovery.</strong> The cart abandonment event lands on the contact matched by the checkout email. If that is a new record, the recovery email goes to someone with no purchase history and no consent record, which is both ineffective and possibly a compliance problem. If it lands on a second record for an existing customer, the "new customer" discount in the template fires for a loyal repeat buyer.</p>
+
+        <p><strong>Lifecycle-based scoring.</strong> Score accumulates on whichever record the activity happened to touch. A contact who has opened fourteen emails on one record and placed six orders on another looks like two lukewarm prospects rather than one very good customer, and never crosses the threshold that routes them to a sales rep.</p>
+
+        <p><strong>Suppression lists and unsubscribes.</strong> This one is the serious one. HubSpot's unsubscribe is keyed to the email address, not the contact record, so an unsubscribe does propagate across records sharing an address. But a customer who unsubscribes on their Gmail and still has a record with their work address will keep receiving mail, and from their point of view you ignored an opt-out. That is a regulatory exposure, not an annoyance. If your business sends to EU or UK contacts it belongs on the same risk register as anything in <a href="/blog/cybersecurity-best-practices-ecommerce/">your broader compliance posture</a>.</p>
+
+        <p><strong>Reporting.</strong> Repeat purchase rate, customer lifetime value, cohort retention and channel ROI are all computed per contact. Split one buyer into three and every one of those numbers moves in the pessimistic direction, which leads to decisions like cutting a channel that was working.</p>
+
+        <h2>12. Merging, And What It Costs</h2>
+
+        <p>HubSpot can merge two contacts. The merge keeps the primary record's ID and property values, moves the secondary's activities, associations, and form submissions across, and retains the secondary's email as a secondary email on the primary. That last part is genuinely helpful — after a merge, mail sent to either address lands on one record.</p>
+
+        <p>What merging does not do cleanly: it does not merge property values field by field in any way you control beyond choosing which record is primary. Custom property values on the secondary are lost where the primary has its own. Analytics attribution is taken from the primary. And while HubSpot added an unmerge capability, it is time-limited — treat a merge as irreversible in your planning and you will not be caught out.</p>
+
+        <p>So merging is a repair, not a strategy. The API endpoint is <code>POST /crm/v3/objects/contacts/merge</code> with a primary and a secondary object ID, and it is tempting to write a job that finds fuzzy matches and merges them automatically. I would not, at least not without a human in the loop for anything below a very high confidence bar.</p>
+
+        <pre><code class="language-python"># Candidate detection is safe to automate. Merging is not.
+# This writes candidates to a review queue; a human approves each batch.
+def merge_candidates(contacts):
+    by_phone, by_name_addr = {}, {}
+    for c in contacts:
+        p = normalise_e164(c.get("phone"))
+        if p:
+            by_phone.setdefault(p, []).append(c)
+        key = (c.get("lastname", "").strip().lower(),
+               c.get("zip", "").strip().lower().replace(" ", ""))
+        if all(key):
+            by_name_addr.setdefault(key, []).append(c)
+
+    out = []
+    for group in list(by_phone.values()) + list(by_name_addr.values()):
+        if len(group) &lt; 2:
+            continue
+        # Never auto-merge across differing lifecycle stages or owners:
+        # those disagreements usually mean the records are genuinely different.
+        owners = {c.get("hubspot_owner_id") for c in group if c.get("hubspot_owner_id")}
+        out.append({"records": group, "confidence": "low" if len(owners) &gt; 1 else "high"})
+    return out</code></pre>
+
+        <p>My rule of thumb: automate merges where the match is on a normalised phone number <em>and</em> a matching postcode <em>and</em> neither record has a sales owner. Everything else goes to a queue that somebody clears weekly. On the beekeeping supplies retailer, that queue held about 4,100 candidate pairs on the first run and roughly forty a week afterwards, which is a manageable habit rather than a project.</p>
+
+        <h2>13. Marketing Contacts, And The Bill</h2>
+
+        <p>HubSpot bills marketing hubs by marketing contact count, in tiers. Every contact you create through an integration defaults according to a portal setting, and the default on many portals is that API-created contacts become marketing contacts. Push 60,000 historical guest-checkout records into a portal and the next invoice reflects it.</p>
+
+        <p>The property is <code>hs_marketable_status</code>, and you can set it on creation. My default is that a contact becomes marketing only when there is a marketing reason: they consented to email, or they are an active customer within the retention window your marketing team actually mails. Everyone else is created as non-marketing and can be promoted later by a workflow.</p>
+
+        <p>Worth knowing: setting a contact back to non-marketing does not take effect until the start of the next billing period, so you cannot fix an overrun mid-month. And the count is of marketing contacts, not of contacts — a portal with 900,000 records and 40,000 marketing contacts is entirely normal and costs what 40,000 costs.</p>
+
+        <h2>14. Consent, Subscription Types And The Bits That Are Legal</h2>
+
+        <p>The consent model in HubSpot has three layers that get confused with each other. There is the global "unsubscribed from all email" flag. There are subscription types, which are the granular topics a contact can opt in or out of individually. And there is the legal basis for processing, which is a separate property set on the contact under GDPR settings.</p>
+
+        <p>Order confirmations and shipping notifications are transactional and, in HubSpot, require the transactional email add-on to send outside the marketing subscription model. Sending them as marketing email means an unsubscribed customer does not get their delivery notification, which produces a support ticket and, occasionally, a chargeback.</p>
+
+        <p>The rule I hold to: consent is captured at the point of collection, with the exact wording shown, and written once. Your integration must never infer consent from a purchase. "They bought something so they want our newsletter" is not a legal basis in the UK or the EU under a strict reading, and the soft opt-in exception is narrower than most marketing teams believe — same or similar products, an opt-out offered at collection and in every message.</p>
+
+        <p>Practically, that means the checkout page carries a real, unticked checkbox, its state travels with the order, and the integration writes the corresponding subscription. If the checkbox is missing, the integration writes nothing rather than writing false, because writing false on every order will eventually overwrite a consent someone gave elsewhere.</p>
+
+        <h2>15. Storefront Differences: Magento And Shopify</h2>
+
+        <p>The two platforms hand you very different raw material.</p>
+
+        <p>Shopify gives you a customer object for guest orders, webhooks that are reliable and signed, and a <code>customers/data_request</code> and <code>customers/redact</code> webhook pair you are obliged to handle for app store distribution. The webhook payloads are complete enough that you rarely need a follow-up API call. The awkwardness is that a Shopify customer's email can be changed by the merchant in admin, and the webhook that fires does not tell you the previous value — so if email is your key, you lose the link. Another argument for keying on the customer ID.</p>
+
+        <p>Magento 2 gives you a richer customer model with an entity ID that is genuinely stable, and a much worse event story. The observer and message queue infrastructure works but is per-installation, and consumer processes silently dying is a common enough production issue that any Magento integration needs a heartbeat check on the consumer, not just on the endpoint. Guest orders have no customer entity at all, only an email on the order, so guest-to-account linking is work you have to do yourself.</p>
+
+        <pre><code class="language-php">&lt;?php
+// Magento 2: link guest orders to a customer entity at registration time.
+// Run this on customer_register_success, not on a nightly cron —
+// the customer is standing there, and the CRM should be correct before
+// the welcome email goes out.
+namespace Vendor\HubSpot\Observer;
+
+use Magento\Framework\Event\Observer;
+use Magento\Framework\Event\ObserverInterface;
+
+class LinkGuestOrders implements ObserverInterface
+{
+    public function __construct(
+        private \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orders,
+        private \Vendor\HubSpot\Model\ContactSync $sync
+    ) {}
+
+    public function execute(Observer $observer): void
+    {
+        $customer = $observer->getEvent()->getCustomer();
+        $collection = $this->orders->create()
+            ->addFieldToFilter('customer_email', $customer->getEmail())
+            ->addFieldToFilter('customer_is_guest', 1);
+
+        foreach ($collection as $order) {
+            $order->setCustomerId($customer->getId())
+                  ->setCustomerIsGuest(0)
+                  ->save();
+        }
+        // Recalculate the rolled-up totals and push once, not per order.
+        $this->sync->pushCustomer((int) $customer->getId());
+    }
+}</code></pre>
+
+        <p>If you run both platforms against one portal — which is more common than you would think, usually a Magento B2B site and a Shopify D2C site — the identity problem doubles and you need a storefront discriminator in your key. That specific situation is the subject of the companion article on <a href="/blog/zoho-crm-magento-shopify-integration/">running one CRM across Magento and Shopify</a>, and the reasoning there transfers directly.</p>
+
+        <h2>16. Worked Example: The Homeware Retailer</h2>
+
+        <p>Back to Rachael's employer. Roughly 240,000 contacts in the portal, 4,600 orders a month across Shopify Plus, HubSpot Marketing Professional with Sales Professional, and a nightly Python job that had been written by a contractor two years earlier and touched by nobody since.</p>
+
+        <p><strong>What we found in the audit.</strong> 38,900 contacts with no email address at all, created by the nightly job from phone orders. About 11,000 clusters of two or more records sharing a normalised phone number. 71% of contacts with <code>hs_analytics_source</code> of <em>Offline Sources</em>. Marketing contact count of 186,000 against an active mailing audience of about 52,000. And a workflow suppression list that was correct in design and ineffective in practice.</p>
+
+        <p><strong>What we changed, in order.</strong> First, added <code>commerce_customer_id</code> as a unique-value property and backfilled it from Shopify customer IDs, matching on email where possible — that covered 91% of records. Second, switched the nightly job from create-by-email to batch upsert on that property. Third, moved order data off deals and into a custom object, and deleted 51,000 retail deals after exporting them. Fourth, captured <code>hubspotutk</code> at checkout and moved contact creation to the Forms API. Fifth, set <code>hs_marketable_status</code> to false for anyone without consent and outside a 24-month purchase window.</p>
+
+        <p><strong>Numbers after ninety days.</strong> Marketing contacts dropped from 186,000 to 58,400, which moved them down two pricing tiers. Contacts attributed to <em>Offline Sources</em> fell from 71% to 12%, and paid social turned out to be responsible for a meaningful share of first-time customers, which nobody had been able to see. The duplicate review queue went from 4,100 pairs to about forty a week. Repeat purchase rate, once the duplicates were merged, was 31% rather than the 24% the dashboard had been showing for a year.</p>
+
+        <p><strong>What went wrong.</strong> Two things. The deal deletion was done in a single batch on a Thursday afternoon and it broke three saved sales reports that had been filtering on the ecommerce pipeline; nobody had told us those reports existed, and we had not asked. Rebuilding them took a week of back-and-forth. Worse, the marketing contact reclassification caught about 900 people who genuinely had consented but whose consent predated the subscription type we were checking against — they went non-marketing for a month and dropped out of an active nurture sequence. We caught it because the sequence's enrolment count fell off a cliff, which is exactly the volume-against-baseline alert I would recommend to anyone.</p>
+
+        <p><strong>What I would do differently.</strong> Run the marketing-status reclassification as a dry run that writes to a scratch property first, and compare the intended new value against current mailing behaviour for a week before applying it. It costs four days and it would have caught the 900.</p>
+
+        <h2>17. Failure Modes And What To Do About Them</h2>
+
+        <p><strong>The silent lifecycle write.</strong> A backwards stage change returns 200 and changes nothing. Your integration logs success. Detect it by reading back the value on any transition your code believes is important, or by accepting that only forward transitions are yours to make.</p>
+
+        <p><strong>The 409 you swallowed.</strong> Create-by-email returns 409 with the existing ID. Code that treats 409 as an error and moves on leaves the record un-updated forever. Code that parses the ID out of the error body and switches to a PATCH is correct but ugly; upserting on a unique property avoids the situation.</p>
+
+        <p><strong>Property type mismatches.</strong> HubSpot date properties are midnight UTC timestamps and will reject a datetime with a time component on some field types. Number properties reject currency symbols and thousands separators. These fail per-record inside a batch, so a batch of 100 returns a success status with three silent rejections. Read the per-input errors.</p>
+
+        <p><strong>Workflow enrolment storms.</strong> Covered above, and worth a checklist item before every backfill: list the active workflows whose enrolment triggers reference any property you are about to write, and pause them.</p>
+
+        <p><strong>The stale association type ID.</strong> A label renamed in the UI changes nothing about the ID, but a label deleted and recreated gets a new one. Look it up at start-up.</p>
+
+        <p><strong>Deleted contacts coming back.</strong> A contact deleted in HubSpot for a GDPR erasure request will be recreated by your next sync if the source record still exists. Erasure has to propagate both ways or it is not erasure. Handle the deletion webhook, mark the source record as suppressed, and skip it thereafter.</p>
+
+        <h2>18. What To Monitor</h2>
+
+        <p>Three numbers, checked daily, catch nearly everything.</p>
+
+        <p><strong>Contacts created per day, against a rolling baseline.</strong> A spike means your matching is broken and you are creating duplicates. A drop to zero means the sync is dead. Both are worth an alert, and the spike is the one people forget to alert on.</p>
+
+        <p><strong>The ratio of upserts that created versus updated.</strong> On a mature portal this should be dominated by updates. If creates rise above about 5% of daily volume without a marketing campaign to explain it, something has changed about your key.</p>
+
+        <p><strong>Contacts with no <code>commerce_customer_id</code>.</strong> This is your unmatched pile. It should be small and stable. A growing unmatched pile is duplicates accumulating in slow motion, and it is the metric that would have caught the beekeeping supplies retailer eighteen months earlier.</p>
+
+        <p>Add a weekly duplicate-candidate count to that, published somewhere visible even when it is boring, for the same reason a clean reconciliation dashboard is worth publishing on an ERP integration: people only notice a number changing if they are used to seeing it.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"Should we use the official HubSpot connector for Shopify?"</strong> For a small store with straightforward requirements, yes — it is free, it handles the common cases, and building the same thing yourself is not a good use of money. Outgrow it when you need control over what becomes a marketing contact, when you want orders as a custom object rather than deals, or when you have more than one storefront. The migration off it is unpleasant because it has created deals you now want to remove, so decide early if you can.</p>
+
+        <p><strong>"Can we sync in real time?"</strong> For order events, yes, and you should — a cart abandonment email that arrives the next morning is worth a fraction of one that arrives in ninety minutes. For rolled-up properties like lifetime value, a nightly recalculation is fine and much cheaper in API calls. Split the flows by urgency rather than syncing everything at one cadence.</p>
+
+        <p><strong>"What do we do about customers who never gave an email?"</strong> Phone orders, marketplace orders, in-store purchases. My preference is that they do not become HubSpot contacts at all unless there is a marketing purpose, because a record with no email is a record you cannot mail, cannot deduplicate reliably, and will pay for. Keep them in the commerce platform and push them up only when an email appears.</p>
+
+        <p><strong>"How do we handle a customer changing their email address?"</strong> If you keyed on the customer ID, the upsert updates the email and the record survives. If you keyed on email, you get a second contact, and you find out weeks later. This one question is the whole argument for unique-value properties.</p>
+
+        <p><strong>"Is the Ecommerce Bridge API still the right entry point?"</strong> It exists and it works, but the CRM object APIs plus custom objects give you more control and are where HubSpot's development attention has gone. I would build new integrations on the v3 CRM objects and v4 associations, and treat the Bridge as a legacy path you may have to read from on an inherited project.</p>
+
+        <p><strong>"How much of this applies to other CRMs?"</strong> The identity reasoning is universal. The specific mechanics are not — the forward-only lifecycle stage is a HubSpot quirk, the marketing contact billing model is a HubSpot quirk, and the attribution cookie stitching is a HubSpot quirk. Everything about deciding what a person is transfers to any CRM you name.</p>
+
+        <h2>20. What I Would Do First</h2>
+
+        <p>If you have an existing HubSpot integration and you suspect it is doing some of this to you, in this order.</p>
+
+        <p>One. Count your duplicates before you argue about anything. Export contacts, normalise phone numbers to E.164, group by phone and by surname-plus-postcode, and count the clusters. The number is usually larger than anyone expects and it makes the rest of the conversation short.</p>
+
+        <p>Two. Look at the distribution of <code>hs_analytics_source</code>. If <em>Offline Sources</em> is above about 30% on a business that sells online, your integration is destroying attribution and the marketing team is making decisions on bad data right now.</p>
+
+        <p>Three. Compare your marketing contact count against the number of contacts your marketing team actually emailed in the last ninety days. The gap is money.</p>
+
+        <p>Four. Add a unique-value property for the commerce customer ID, backfill it, and switch to upsert. This is a day of work and it is the change that stops the problem getting worse while you clean up what exists.</p>
+
+        <p>Five. Only then start merging. Candidate detection automated, merges reviewed, weekly cadence, and a count published where somebody sees it.</p>
+
+        <p>The thing I keep coming back to on these projects is that none of the failures are exotic. A CRM and a storefront disagree about what a person is, nobody writes the disagreement down, and eighteen months later a woman called Rachael gets the same apology email three times. The engineering to prevent it is a unique key and a review queue. The hard part is deciding, once, and then not letting anyone quietly change it.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 & Shopify Plus</a></strong>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
               <p>Comparing Zoho CRM and HubSpot connectors.</p>
             </li>
             <li>
-              <strong><a href="/blog/designing-for-convert/">Designing for Conversion: UX & UI Strategies</a></strong>
+              <strong><a href="/blog/designing-for-convert/">Designing for Conversion: UX &amp; UI Strategies</a></strong>
               <p>Abandoned cart recovery strategies.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -270,6 +713,6 @@ async function createHubSpotContact(customer) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

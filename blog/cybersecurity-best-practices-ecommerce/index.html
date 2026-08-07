@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Cybersecurity Best Practices for E-Commerce Merchants | MODRACX</title>
-  <meta name="description" content="Essential cybersecurity checklist for online merchants. Learn how to stop Magecart JavaScript injection, mitigate DDoS attacks, and enforce PCI-DSS compliance." />
+  <meta name="description" content="The merchant threat model for ecommerce security: Magecart script governance, credential stuffing, card testing, L7 DDoS, and PCI DSS 4.0 script rules." />
   <meta property="og:title" content="Cybersecurity Best Practices for E-Commerce Merchants | MODRACX" />
   <meta property="og:description" content="Essential cybersecurity checklist for online merchants by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Cybersecurity Best Practices for E-Commerce Merchants</h1>
-        <p class="lede">Cyberattacks cost online retailers billions annually in stolen payment data and regulatory fines. Enforcing strict Subresource Integrity (SRI) hashes prevents supply-chain Magecart compromises.</p>
+        <p class="lede">A review widget from a vendor's CDN put a fake card form on a client's checkout for nine days, across 4,180 orders. Nothing on our servers changed, so nothing we monitored saw it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 31 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,19 +205,716 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Subresource Integrity (SRI) HTML Tag Example</h2>
+        <p>The ticket said: "Customer says our checkout asked for her card twice." Priority: low. It sat in the queue for six days because the support agent could not reproduce it, the customer would not send a screenshot, and the order had gone through fine on the second attempt.</p>
 
-        <pre><code class="language-html">&lt;!-- Subresource Integrity (SRI) Hash Check for External JS --&gt;
-&lt;script 
-  src="https://cdn.example.com/library.js" 
-  integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC" 
-  crossorigin="anonymous"&gt;&lt;/script&gt;</code></pre>
+        <p>She had sent a screenshot, eventually, to a different inbox. It showed the checkout page of an aquarium supplies retailer I look after, with the payment iframe from their gateway, and above it — rendered in a font that did not match the theme — a second card form. Card number, expiry, CVV, cardholder name. It posted to a domain that had been registered eleven days earlier and resolved to a VPS in Lithuania. It had been live for nine days. In that window the store took 4,180 orders.</p>
 
-        <hr />
+        <p>The injection point was not the store's code. It was a review-widget script, loaded from a vendor's CDN, which had been loading a second-stage payload for about a fortnight. The vendor's own build pipeline had been compromised. Our Magento install was patched, our WAF was on, our admin had two-factor authentication, and none of that mattered, because the attack arrived through a script we had explicitly told the browser to trust.</p>
+
+        <p>That incident is the reason I no longer talk about ecommerce security as a checklist. A checklist tells you to enable a firewall and rotate passwords. It does not tell you that the highest-expected-loss attack on a modern storefront runs entirely in the customer's browser, in code you did not write, delivered by a company whose security posture you have never audited. What follows is the threat model I actually use, in the order I actually fix things, with the costs attached.</p>
+
+        <h2>1. Ordering Defences by Expected Loss, Not by Fear</h2>
+
+        <p>Security work on a storefront is a budget allocation problem disguised as a technical one. You have a finite number of engineering days per quarter. Spending them on the wrong control is not neutral — it is the same as spending them on nothing, except you also get to feel safe.</p>
+
+        <p>The ordering I use is expected loss: probability of the event within twelve months, multiplied by the cost when it happens, divided by the engineering effort to reduce it meaningfully. That last term matters. A control that halves a risk for two days of work beats a control that eliminates a risk for four months, almost every time, because the four-month project will not get finished.</p>
+
+        <p>Here is roughly how it falls out for a mid-market store — say £5m to £50m annual revenue, on Magento, WooCommerce or Shopify Plus, with an in-house team of two to six.</p>
+
+        <table class="data-table">
+          <tr>
+            <th>Threat</th>
+            <th>Annual likelihood</th>
+            <th>Cost when it lands</th>
+            <th>Effort to halve it</th>
+          </tr>
+          <tr>
+            <td>Client-side skimmer via third-party script</td>
+            <td>Moderate and rising</td>
+            <td>Card data breach, forensic investigation, brand fines, possible SAQ escalation</td>
+            <td>3–10 days</td>
+          </tr>
+          <tr>
+            <td>Credential stuffing / account takeover</td>
+            <td>Near certain — it is happening now</td>
+            <td>Fraud chargebacks, loyalty point theft, support load, churn</td>
+            <td>2–5 days</td>
+          </tr>
+          <tr>
+            <td>Card testing / BIN enumeration on payment endpoint</td>
+            <td>Near certain if you have a public payment API</td>
+            <td>Gateway authorisation fees, decline-ratio monitoring programmes, gateway suspension</td>
+            <td>1–3 days</td>
+          </tr>
+          <tr>
+            <td>Unpatched platform RCE (Magento, plugin)</td>
+            <td>High if patch latency exceeds 72 hours</td>
+            <td>Full compromise, persistent backdoor, skimmer, ransomware</td>
+            <td>Ongoing process, ~1 day/month</td>
+          </tr>
+          <tr>
+            <td>Admin credential compromise / phishing</td>
+            <td>Moderate</td>
+            <td>Equivalent to full compromise, with worse logging</td>
+            <td>2–4 days</td>
+          </tr>
+          <tr>
+            <td>L7 DDoS during a peak trading window</td>
+            <td>Low–moderate, correlated with promotions</td>
+            <td>Lost revenue at the worst possible hour</td>
+            <td>1–2 days if you already have a CDN</td>
+          </tr>
+          <tr>
+            <td>Ransomware on infrastructure</td>
+            <td>Low for cloud-hosted, real for self-managed</td>
+            <td>Existential without tested restores</td>
+            <td>3–6 days to prove restores work</td>
+          </tr>
+          <tr>
+            <td>L3/L4 volumetric DDoS</td>
+            <td>Low</td>
+            <td>Usually none — your CDN absorbs it</td>
+            <td>Already done if you are behind a CDN</td>
+          </tr>
+        </table>
+
+        <p>Notice what is at the bottom. Volumetric DDoS is the attack every executive asks about and the one you will spend least time on, because Cloudflare, Fastly and AWS Shield already handle it. Notice what is at the top: a category most merchants have no named owner for.</p>
+
+        <h2>2. The Client-Side Supply Chain Is the Surface Nobody Owns</h2>
+
+        <p>Open your checkout and count the origins it loads code from. On the retailer in the opening story it was fourteen — analytics, tag manager, two ad pixels, session replay, chat, reviews, a promo script, a currency switcher, a personalisation vendor, a consent platform, an A/B tool, a font service, and one domain nobody recognised. Marketing had added nine. Engineering had added four. The fourteenth was loaded by one of the other thirteen.</p>
+
+        <p>Every one of those scripts runs with the same privileges as your own code. There is no sandbox. A script from a reviews vendor can read the value of an input field in your checkout, listen to keystrokes, rewrite the DOM, intercept form submissions, and exfiltrate everything it sees to any origin your Content Security Policy permits — and if you have no CSP, to any origin at all. The browser does not distinguish between the JavaScript your developers shipped and the JavaScript a tag manager injected eleven minutes ago.</p>
+
+        <p>This is the mechanism behind every Magecart incident you have read about. British Airways in 2018: a modified Modernizr script sent 380,000 sets of payment details to a lookalike domain, and the ICO fined them £20m in October 2020. Ticketmaster the same year, injected through a chatbot from a supplier called Inbenta — a company nobody there considered payment infrastructure. Polyfill.io in June 2024, where a domain trusted by well over a hundred thousand sites changed hands and began serving conditional malware.</p>
+
+        <p>You cannot fix this by writing careful code, because your code is not the problem. You cannot fix it with vendor questionnaires, because the vendors who get compromised return excellent questionnaires. And you cannot remove every third-party script, because marketing will win that argument and should. What you can do is cut the payment page to near zero scripts, govern the rest, and instrument the page so a misbehaving script surfaces in hours rather than in nine days.</p>
+
+        <h2>3. Get the Card Data Out of Your DOM First</h2>
+
+        <p>Before any of the monitoring machinery, do the structural thing: make sure the card fields are not in your document at all.</p>
+
+        <p>A hosted payment field — Stripe Elements, Adyen Components, Braintree Hosted Fields — renders the card input inside a cross-origin iframe, and same-origin policy then stops every script on your page reading it. A skimmer can still overlay a fake form on top, which is what happened in my opening story, but it cannot silently read the real one. An overlay is visible and eventually gets reported; a keylogger on a native input is invisible forever.</p>
+
+        <p>A full redirect flow is the strongest position available, and you should think hard before "improving" it by bringing the fields back in-page. I have twice been asked to do that for conversion reasons. Both times the measured lift was under one percent and inside the noise. I would not make that trade again without a properly powered test, priced to include the compliance consequences — embedding rather than redirecting can change which questionnaire you are eligible for.</p>
+
+        <h2>4. Subresource Integrity and Its Real Limits</h2>
+
+        <p>SRI is the control everyone reaches for, and it is genuinely good at exactly one thing: guaranteeing that a specific file, at a specific URL, has specific bytes. Generate the hash, put it on the tag, and the browser refuses to execute the script if a single byte differs.</p>
+
+        <pre><code class="language-bash"># Generate an SRI hash for a pinned third-party file
+curl -s https://cdn.vendor.example/widget-4.2.1.js \
+  | openssl dgst -sha384 -binary \
+  | openssl base64 -A
+
+# Verify what you already have deployed matches what the CDN serves today.
+# Run this in CI: a mismatch means the vendor mutated a "pinned" file.
+expected="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC"
+actual="sha384-$(curl -s https://cdn.vendor.example/widget-4.2.1.js \
+  | openssl dgst -sha384 -binary | openssl base64 -A)"
+[ "$expected" = "$actual" ] || echo "DRIFT on widget-4.2.1.js"</code></pre>
+
+        <p>Now the limits, because they are larger than the benefit in most real deployments.</p>
+
+        <p><strong>SRI only covers the file you named.</strong> If that file calls <code>document.createElement('script')</code> and loads a second file, SRI has nothing to say about the second file. Almost every commercial tag does this. Google Tag Manager exists to do this. Applying SRI to <code>gtm.js</code> would be pointless even if it were possible, because the interesting code is whatever the container loads next.</p>
+
+        <p><strong>SRI is incompatible with rolling releases.</strong> Vendors who serve a mutable URL like <code>widget.js</code> and push updates continuously cannot be pinned. If you pin the hash, their next release breaks your page — and it breaks it hard, because a failed integrity check means the script does not execute at all. I have taken down a chat widget this way and, worse, once took down a consent management platform, which meant the banner never rendered, which meant no analytics fired for four hours on a Saturday.</p>
+
+        <p><strong>SRI says nothing about behaviour.</strong> A vendor can ship a legitimately signed, correctly hashed, freshly released version of their script that contains a skimmer, because their build server was compromised. The hash matches. The browser runs it. This is precisely what happened to the retailer in my opening. SRI would have changed nothing.</p>
+
+        <p>So: use SRI for genuinely static, versioned, pinned assets — a specific version of a library from a public CDN, your own assets served from a separate domain. Do not build your payment-page defence on it. The <a href="/blog/sri-implementation/">deeper mechanics of hash generation and fallback handling</a> are worth reading separately, but the strategic point is that SRI is a tamper check on bytes at rest, and the modern attack tampers at build time.</p>
+
+        <h2>5. CSP Is Mostly a Detector, and That Is Fine</h2>
+
+        <p>Content Security Policy gets sold as prevention. On a storefront it functions much better as detection, and I now deploy it with that intent from the start.</p>
+
+        <p>Prevention assumes you can enumerate every legitimate script origin and block the rest, and on a marketing-driven storefront that enumeration is stale within a fortnight. Detection is achievable today: deploy report-only, point it at a collector you control, and you get a live feed of every resource your pages load that you did not expect. That feed is the closest thing to an intrusion detection system a storefront gets for free.</p>
+
+        <pre><code class="language-nginx"># Report-only on the whole site: a live inventory of what actually loads.
+add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://cdn.vendor.example; connect-src 'self' https://api.gateway.example; report-uri /_csp-report; report-to csp-endpoint" always;
+
+add_header Reporting-Endpoints "csp-endpoint=\"/_csp-report\"" always;
+
+# Enforcing, and deliberately narrow, on the payment page only.
+location = /checkout/payment {
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; frame-src https://js.gateway.example; connect-src https://api.gateway.example; form-action 'self'; base-uri 'none'; report-uri /_csp-report" always;
+    # add_header does not inherit into a location that declares its own,
+    # so every other security header must be repeated here.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+}</code></pre>
+
+        <p>Two things in that config are the actual point. <code>base-uri 'none'</code> stops an injected <code>&lt;base&gt;</code> tag silently redirecting every relative script URL on the page to an attacker's host, which is an elegant attack most policies forget about. <code>form-action 'self'</code> stops an injected form from posting anywhere else — this is the single directive that would have blocked the fake card form in my opening incident, and it is the one I now write first.</p>
+
+        <p>Reports arrive as JSON, and the field that matters is <code>blocked-uri</code>. On a payment page a value like <code>https://cdn-metrics-analytics.example.net/collect</code> is exactly what a skimmer's exfiltration looks like: a plausible-sounding domain, registered recently, appearing nowhere else on the site. If you are enforcing, it is blocked. If you are report-only, it is an alert. Either way you know within minutes rather than nine days.</p>
+
+        <p>The volume problem is real and worth planning for. A busy storefront with report-only CSP will generate tens of thousands of reports a day, most of them noise from browser extensions injecting into the page, ad blockers, and Safari quirks. Deduplicate aggressively and alert on novelty rather than volume.</p>
+
+        <pre><code class="language-bash"># Triage a day of CSP reports: what is new today that was not seen yesterday?
+jq -r '.["csp-report"]["blocked-uri"]' reports-today.ndjson \
+  | sed -E 's#^(https?://[^/]+).*#\1#' \
+  | grep -v -E '^(chrome-extension|moz-extension|safari-extension|about|data|inline|eval)' \
+  | sort -u > hosts-today.txt
+
+comm -23 hosts-today.txt hosts-baseline.txt
+# Anything printed here loaded on your site for the first time today.
+# On a payment page, treat every line as an incident until proven otherwise.</code></pre>
+
+        <p>If you want the full policy-building process — nonces, hash-based allowlisting, the migration path off <code>'unsafe-inline'</code> — that is its own project and I have written about <a href="/blog/csp-implementation/">deploying CSP on a live storefront without breaking it</a> at length. Here the point is narrower: get report-only CSP on your checkout this week, even with a policy you know is imperfect, because the reporting stream has value on day one.</p>
+
+        <h2>6. Script Governance: The Boring Control That Actually Works</h2>
+
+        <p>PCI DSS 4.0 requirement 6.4.3 asks for three things about every script on a payment page: a method to confirm each script is authorised, a method to assure the integrity of each script, and an inventory of all scripts with a written business or technical justification. That third item sounds like paperwork. It is the most useful of the three.</p>
+
+        <p>Keep the inventory in your repository, not a spreadsheet, and make the build fail when reality diverges from it.</p>
+
+        <pre><code class="language-json">{
+  "payment_page_scripts": [
+    {
+      "url": "https://js.gateway.example/v3/checkout.js",
+      "owner": "engineering",
+      "justification": "Renders hosted card fields. Required for payment capture.",
+      "authorised_by": "K.D'Silva",
+      "authorised_on": "2025-11-04",
+      "integrity": "sri",
+      "review_due": "2026-05-04"
+    },
+    {
+      "url": "https://www.googletagmanager.com/gtm.js",
+      "owner": "marketing",
+      "justification": "Conversion measurement. Container restricted to allowlisted tags on /checkout/*.",
+      "authorised_by": "K.D'Silva",
+      "authorised_on": "2025-11-04",
+      "integrity": "monitoring-only",
+      "review_due": "2026-02-04"
+    }
+  ]
+}</code></pre>
+
+        <p>Then a CI job that renders the payment page in a headless browser, collects every script actually requested, and diffs it against that file. Anything unlisted fails the build. This catches the case that governance processes always miss: a marketer publishing a GTM container that adds a new vendor tag, on a Friday, with no deploy and no code review.</p>
+
+        <pre><code class="language-javascript">// ci/payment-page-scripts.js — run under Playwright in CI
+const { chromium } = require('playwright');
+const allowed = new Set(
+  require('../security/payment-scripts.json')
+    .payment_page_scripts.map(s =&gt; new URL(s.url).origin)
+);
+
+(async () =&gt; {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  const seen = new Set();
+
+  page.on('request', req =&gt; {
+    if (req.resourceType() === 'script') seen.add(new URL(req.url()).origin);
+  });
+
+  await page.goto('https://staging.shop.example.com/checkout/payment',
+                  { waitUntil: 'networkidle' });
+  // Tag managers often inject after networkidle; give them a beat.
+  await page.waitForTimeout(5000);
+
+  const unexpected = [...seen].filter(o =&gt; !allowed.has(o) &amp;&amp; o !== 'https://staging.shop.example.com');
+  await browser.close();
+
+  if (unexpected.length) {
+    console.error('Unauthorised script origins on payment page:\n  ' + unexpected.join('\n  '));
+    process.exit(1);
+  }
+})();</code></pre>
+
+        <p>Requirement 11.6.1 is the runtime half: a change- and tamper-detection mechanism that alerts on unauthorised modification of the HTTP headers and script contents of the payment page as received by the consumer browser, evaluated at least weekly or per a targeted risk analysis. Commercial products — Cloudflare Page Shield, Akamai Page Integrity Manager, Jscrambler — combine CSP reporting with a synthetic browser that fetches your payment page over residential-looking paths and hashes what it gets.</p>
+
+        <p>You can build a crude version. A MutationObserver that reports script insertions and form-action changes covers a surprising amount of ground:</p>
+
+        <pre><code class="language-javascript">// Payment-page sentinel. Load it first, before anything else.
+(function () {
+  const known = new Set([location.origin, 'https://js.gateway.example']);
+  const report = (kind, detail) =&gt; navigator.sendBeacon(
+    '/_page-integrity',
+    JSON.stringify({ kind, detail, path: location.pathname, ts: Date.now() })
+  );
+
+  new MutationObserver(records =&gt; {
+    for (const r of records) {
+      for (const n of r.addedNodes) {
+        if (n.tagName === 'SCRIPT' &amp;&amp; n.src) {
+          const origin = new URL(n.src, location.href).origin;
+          if (!known.has(origin)) report('script-injected', origin);
+        }
+        // A skimmer's favourite move: a second form overlaying the real one.
+        if (n.tagName === 'FORM') report('form-injected', n.action || '(none)');
+      }
+      if (r.type === 'attributes' &amp;&amp; r.attributeName === 'action') {
+        report('form-action-changed', r.target.action);
+      }
+    }
+  }).observe(document.documentElement, {
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['action', 'src', 'formaction']
+  });
+})();</code></pre>
+
+        <p>Be honest about what this is. It runs in the same untrusted context as the attacker, so a sophisticated skimmer can disable it — overwrite <code>MutationObserver</code>, or <code>navigator.sendBeacon</code>, before your sentinel loads. It raises the cost of the attack rather than preventing it. Most commodity skimmers do not bother, which is why it still catches things. If you are in scope for 11.6.1 and want an answer you can put in front of a QSA, buy the commercial product; the build-your-own version is a supplement, not a substitute.</p>
+
+        <p>Both 6.4.3 and 11.6.1 were future-dated in PCI DSS v4.0 and became mandatory on <strong>31 March 2025</strong>. If your last assessment predates that and nobody has mentioned scripts to you, start that conversation now rather than at renewal. One nuance: in January 2025 the Council revised SAQ A, removing both requirements from that questionnaire and replacing them with an eligibility criterion under which the merchant confirms its site is not susceptible to script attacks affecting the payment page. That moves the attestation from a control to a claim; it does not move the risk. Which questionnaire you fall under is covered in the <a href="/blog/pci-dss-compliance/">PCI DSS scoping walkthrough</a>.</p>
+
+        <h2>7. Credential Stuffing Is Already Happening To You</h2>
+
+        <p>Every storefront with a login form is being attacked continuously. Not targeted — indiscriminate. Attackers take a combolist from an unrelated breach, run it against a few thousand login endpoints, and harvest whatever reuses passwords. Success rates sit in the fraction-of-a-percent range, which sounds negligible until you multiply by list sizes in the tens of millions.</p>
+
+        <p>The first time I looked properly at a client's authentication logs — a UK sports nutrition retailer, about 90,000 registered accounts — the baseline was 400 to 600 login attempts an hour, of which roughly 70% failed. During a burst it went to 40,000 an hour. They had noticed none of it, because failed logins were not graphed anywhere and the origin servers were coping.</p>
+
+        <h3>Rate limiting is necessary and insufficient</h3>
+
+        <p>Start with the cheap control. Nginx's <code>limit_req</code> with a low rate on authentication endpoints removes the unsophisticated majority.</p>
+
+        <pre><code class="language-nginx">http {
+    # 10MB holds roughly 160,000 IP states. Key on IP for anonymous endpoints.
+    limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+    limit_req_zone $binary_remote_addr zone=api:10m   rate=60r/m;
+    limit_req_status 429;
+    limit_req_log_level warn;
+
+    server {
+        location = /customer/account/loginPost {
+            # burst=5 nodelay lets a fumbling human retry; a bot hits the wall.
+            limit_req zone=login burst=5 nodelay;
+            proxy_pass http://php_backend;
+        }
+
+        location ~ ^/(rest|graphql) {
+            limit_req zone=api burst=20 nodelay;
+            proxy_pass http://php_backend;
+        }
+    }
+}</code></pre>
+
+        <p>Two failure modes to plan for. First, if you are behind a CDN, <code>$binary_remote_addr</code> is the CDN's edge IP unless you have configured <code>real_ip_header</code> correctly, and you will rate-limit your entire customer base into one bucket. I have watched this happen on a Black Friday. Second, distributed stuffing operations rotate through residential proxy pools with tens of thousands of addresses, sending two or three attempts per IP. Per-IP limits do not see them at all.</p>
+
+        <p>So watch a signal that does not care how the attacker distributes traffic: the site-wide ratio of failed to successful logins.</p>
+
+        <pre><code class="language-sql">-- Site-wide failure ratio, five-minute buckets. Alert when it doubles.
+SELECT
+    date_trunc('minute', created_at)
+      - (EXTRACT(MINUTE FROM created_at)::int % 5) * INTERVAL '1 minute' AS bucket,
+    COUNT(*) FILTER (WHERE success = false) AS failures,
+    COUNT(*) FILTER (WHERE success = true)  AS successes,
+    ROUND(COUNT(*) FILTER (WHERE success = false)::numeric
+          / NULLIF(COUNT(*), 0), 3) AS fail_ratio,
+    COUNT(DISTINCT ip_address) AS distinct_ips,
+    COUNT(DISTINCT username)   AS distinct_users
+FROM login_attempt
+WHERE created_at &gt; NOW() - INTERVAL '6 hours'
+GROUP BY 1
+ORDER BY 1 DESC;
+-- distinct_users climbing much faster than distinct_ips means spraying
+-- from a small pool. The reverse means a residential proxy network.</code></pre>
+
+        <h3>Bot management, fingerprinting, and what it costs you</h3>
+
+        <p>Above rate limiting sits managed bot detection: Cloudflare Bot Management, Akamai Bot Manager, DataDome, HUMAN. These score requests using TLS fingerprints (JA3/JA4), HTTP/2 frame ordering, header ordering, browser-environment probes and behavioural signals. They are genuinely effective — a good deployment removes 90%+ of automated login traffic — and they are the right purchase for most stores past a certain size.</p>
+
+        <p>The cost is false positives, and merchants consistently underestimate it. A 0.5% false-positive rate on login sounds fine. On a store doing 20,000 logins a day that is 100 real customers a day hitting a challenge or a block. Some solve the challenge. Some are on an old Android browser, or a corporate network with TLS inspection that mangles the fingerprint, or a screen reader that cannot complete the interaction. Those customers do not file a bug. They leave.</p>
+
+        <p>My rule: never hard-block on a bot score at the login form. Challenge, step up, or throttle — but reserve outright 403 for scores at the very top of the confidence range, and monitor the block rate as a business metric with an owner. When I set this up now, I put the challenge rate on the same dashboard as conversion rate, deliberately, so that whoever tightens the threshold sees what it costs.</p>
+
+        <h2>8. Card Testing and BIN Enumeration on the Payment Endpoint</h2>
+
+        <p>This one is under-discussed and it will cost you money before it costs you data.</p>
+
+        <p>An attacker with a list of stolen card numbers needs to know which are still live. Your checkout is a free oracle for that: submit a small order, see whether the authorisation succeeds. Some run pure BIN enumeration instead — take a valid issuer prefix, generate candidates that pass the Luhn check, and brute-force expiry and CVV against any endpoint that will tell them apart. The tell is a flood of tiny orders, many distinct cards, few distinct customers, and a decline rate that would be alarming on real traffic.</p>
+
+        <pre><code class="language-sql">-- Card testing signature: many attempts, tiny values, terrible auth rate.
+SELECT
+    DATE_TRUNC('hour', created_at) AS hr,
+    COUNT(*)                                   AS attempts,
+    COUNT(DISTINCT card_fingerprint)           AS distinct_cards,
+    COUNT(DISTINCT customer_email)             AS distinct_emails,
+    COUNT(DISTINCT remote_ip)                  AS distinct_ips,
+    ROUND(AVG(amount), 2)                      AS avg_amount,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'declined')
+          / COUNT(*), 1)                       AS decline_pct
+FROM payment_attempt
+WHERE created_at &gt; NOW() - INTERVAL '48 hours'
+GROUP BY 1
+HAVING COUNT(*) &gt; 50
+ORDER BY 1 DESC;
+-- distinct_cards close to attempts, with decline_pct above ~60, is the
+-- pattern. Normal traffic reuses cards and declines under 15%.</code></pre>
+
+        <p>The direct costs stack up fast. Your gateway charges a per-authorisation fee whether the authorisation succeeds or not — typically a few pence, which is nothing until you are absorbing 200,000 attempts. Stripe and several others now levy an explicit card-testing surcharge on excessive declined attempts. Beyond the fees, the card networks operate acquirer monitoring programmes that look at decline ratios and fraud ratios; sustained abuse gets escalated through your acquirer, and the endpoint of that path is your merchant account being restricted at a moment of the network's choosing rather than yours.</p>
+
+        <p>Controls, in the order I apply them. Put an invisible challenge on the payment submission route, not just the login route — highest-yield change here, and most merchants have never protected that endpoint at all. Rate limit by IP, device fingerprint and billing postcode. Never return the raw gateway decline reason to the client: the difference between "invalid CVV" and "insufficient funds" is exactly the signal being farmed. Enforce 3-D Secure with a sensible exemption strategy. And turn on your gateway's own card-testing rules, which you already pay for and which are routinely left off.</p>
+
+        <h2>9. DDoS: The Volumetric One Is Solved, the Application One Is Not</h2>
+
+        <p>Layer 3 and 4 attacks — SYN floods, UDP amplification, DNS and NTP reflection — are measured in terabits per second and are somebody else's problem. Cloudflare has publicly mitigated attacks above 5 Tbps. You will not build that capacity and you do not need to: put the origin behind a CDN, firewall it to that CDN's ranges, and never publish an origin IP. People skip the last step, and then an attacker finds the origin in an old DNS record, a mail header or a certificate transparency log.</p>
+
+        <pre><code class="language-bash"># Origin lockdown: accept 80/443 only from the CDN's published ranges.
+# Run this from config management, not by hand, and re-run on a schedule —
+# the ranges change.
+curl -s https://www.cloudflare.com/ips-v4 -o /tmp/cf4
+curl -s https://www.cloudflare.com/ips-v6 -o /tmp/cf6
+
+ufw --force reset
+ufw default deny incoming
+ufw allow from 203.0.113.10 to any port 22 proto tcp   # bastion only
+while read -r cidr; do
+  [ -n "$cidr" ] &amp;&amp; ufw allow from "$cidr" to any port 443 proto tcp
+done &lt; /tmp/cf4
+while read -r cidr; do
+  [ -n "$cidr" ] &amp;&amp; ufw allow from "$cidr" to any port 443 proto tcp
+done &lt; /tmp/cf6
+ufw --force enable
+
+# Then check you have not leaked the origin elsewhere:
+#   crt.sh for old subdomain certs, historic DNS records, mail SPF entries.</code></pre>
+
+        <p>Layer 7 is the one that hurts. An HTTP flood does not need volume — it needs expense. A few thousand requests per second to your layered navigation, each with a unique combination of filter parameters so nothing is cacheable, will exhaust a Magento install's PHP workers and database connections at bandwidth levels your monitoring will not flag as unusual. HTTP/2 Rapid Reset in October 2023 pushed this further, reaching hundreds of millions of requests per second by opening and immediately cancelling streams, which cost the client almost nothing and cost the server a full request lifecycle each time.</p>
+
+        <p>The defences are architectural rather than bought. Make faceted navigation and internal search cacheable or rate-limited, ideally both. Cap the filter parameters you honour and return a 400 beyond it. And make sure that when PHP workers saturate the front end degrades to a cached page rather than a 502, because a 502 during a promotion is the difference between slow and closed.</p>
+
+        <pre><code class="language-nginx"># Layered navigation is the classic L7 amplifier: uncacheable, expensive.
+map $args $too_many_filters {
+    default            0;
+    "~(.*=.*){6,}"     1;   # six or more query parameters
+}
+
+server {
+    location /catalogsearch/result/ {
+        if ($too_many_filters) { return 400; }
+        limit_req zone=search burst=10 nodelay;
+        proxy_cache          catalog;
+        proxy_cache_valid    200 2m;
+        # Serve stale rather than 502 when the backend is drowning.
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_background_update on;
+        proxy_cache_lock on;
+        proxy_pass http://php_backend;
+    }
+}</code></pre>
+
+        <p>Write the under-attack runbook before you need it: the CDN dashboard steps, when to enable a global challenge, and who is authorised to make that call at 3am. Practise it once. The genuinely useful part of a <a href="/blog/waf-implementation/">WAF deployment</a> is not the default ruleset — it is having the levers already wired up when the traffic arrives.</p>
+
+        <h2>10. The Admin Panel Is Your Real Front Door</h2>
+
+        <p>Every control above assumes the attacker is outside. Admin compromise makes all of them irrelevant, and it is a quieter, cheaper path than any of them.</p>
+
+        <p>The Magento baseline I insist on: a non-guessable admin path, two-factor authentication enforced with no exceptions, IP allowlisting at the edge for the admin route, session lifetime measured in hours not days, and a rule that no admin account is shared between humans. That last one sounds obvious and is violated at almost every merchant I have worked with, usually by an account called something like <code>agency</code> that four people at three companies know the password to.</p>
+
+        <pre><code class="language-bash"># Magento 2 admin hardening
+bin/magento setup:config:set --backend-frontname="admin_k7q2xr"
+bin/magento config:set admin/security/session_lifetime 3600
+bin/magento config:set admin/security/password_lifetime 90
+bin/magento config:set admin/security/lockout_failures 5
+bin/magento config:set admin/security/lockout_threshold 30
+bin/magento config:set admin/security/use_form_key 1
+bin/magento config:set admin/captcha/enable 1
+bin/magento module:enable Magento_TwoFactorAuth
+bin/magento config:set twofactorauth/general/force_providers google
+bin/magento cache:flush
+
+# Who actually has admin access, when did they last use it?
+bin/magento admin:user:unlock --help &gt; /dev/null   # confirm CLI available
+mysql -e "SELECT username, email, is_active, logdate, created \
+          FROM admin_user ORDER BY logdate ASC;" magento_db
+# Anything with logdate older than 90 days is a liability, not an account.</code></pre>
+
+        <p>Put the admin behind a network control as well as an application one. An allowlist at the CDN or the web server means a zero-day in the admin authentication code never reaches you.</p>
+
+        <pre><code class="language-nginx">location ^~ /admin_k7q2xr {
+    # Real client IP must already be restored from the CDN header,
+    # or this allowlist silently permits everyone.
+    allow 203.0.113.0/24;    # office
+    allow 198.51.100.17;     # VPN egress
+    deny all;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Content-Security-Policy "frame-ancestors 'none'" always;
+    proxy_pass http://php_backend;
+}</code></pre>
+
+        <p>On WooCommerce the equivalent is protecting <code>/wp-login.php</code> and <code>/wp-admin</code>, disabling XML-RPC unless something genuinely needs it, and turning off file editing in the dashboard — <code>define('DISALLOW_FILE_EDIT', true);</code> in <code>wp-config.php</code> removes the ability to inject PHP through a compromised admin session, which converts an account takeover from a full server compromise into something recoverable.</p>
+
+        <p>On Shopify you do not control the infrastructure, which removes a large class of problems and creates a different one: your exposure is entirely about who has staff accounts, what permissions they hold, and which apps are installed. Enforce SSO if you are on Plus, audit staff permissions quarterly, and remember that "Manage settings" is a far broader grant than most merchants realise.</p>
+
+        <p>Patch latency is the other half of this. CVE-2022-24086 was an unauthenticated RCE in Adobe Commerce at CVSS 9.8, exploited within days of disclosure — the "TrojanOrders" wave. CosmicSting, CVE-2024-34102 in June 2024, was another 9.8, and Sansec reported a substantial share of stores compromised before merchants patched. Neither needed anything clever from the attacker. They needed only that the merchant took a fortnight. Agree your emergency patch window in writing while nothing is on fire, and subscribe someone to the vendor's bulletins.</p>
+
+        <h2>11. Extensions and Apps: The Blast Radius Nobody Priced In</h2>
+
+        <p>A Magento extension is PHP running in your application with full database access. A WordPress plugin is the same. Installing one is a decision equivalent to hiring a developer with commit access, and it is routinely made by someone who compared feature lists.</p>
+
+        <p>The WooCommerce ecosystem has the worse record by sheer volume: tens of thousands of plugins, many maintained by one person, some abandoned, several sold quietly to new owners who then ship an update that adds something unpleasant. The WooCommerce Payments flaw disclosed in March 2023 let an unauthenticated attacker act as an administrator — serious enough that WordPress.org force-pushed the patch, which tells you how the ecosystem's own maintainers rate the average site's patching discipline.</p>
+
+        <p>My rules, which cost me arguments regularly. No extension without a named internal owner. None whose vendor has not shipped a release in twelve months. None that wraps something you could write in a hundred lines. And read the code before installing — not exhaustively, but grep for the obvious sins.</p>
+
+        <pre><code class="language-bash"># Ten-minute triage on a vendor extension before it goes near production.
+cd vendor/somevendor/module-something
+
+# Remote code execution primitives
+grep -rn --include=*.php -E '\b(eval|assert|create_function|proc_open|popen|passthru|shell_exec|system|exec)\s*\(' .
+
+# Obfuscation — legitimate extensions do not need this
+grep -rn --include=*.php -E '\b(base64_decode|gzinflate|str_rot13|hex2bin)\s*\(' .
+
+# Phoning home
+grep -rn --include=*.php -E 'file_get_contents\s*\(\s*[\x27"]https?://|curl_init' .
+
+# Unserialising anything from a request is a deserialisation bug waiting
+grep -rn --include=*.php -E 'unserialize\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)' .
+
+# And the licence phone-home that will break your site when they go bust
+grep -rn --include=*.php -iE 'licen[cs]e.*(activate|verify|check)' . | head</code></pre>
+
+        <p>Shopify apps are a different shape. There is no server for them to run PHP on, but they hold API scopes that read your entire order history, and they inject JavaScript through theme app extensions or, on older setups, ScriptTag. An app with <code>read_orders</code> and <code>read_customers</code> has your customer database. When that app's infrastructure is breached, so is your data — and the merchant, not the developer, is the data controller under GDPR.</p>
+
+        <h2>12. Dependencies, CI, and Secrets in the Pipeline</h2>
+
+        <p>The compromise in my opening story happened in a vendor's build pipeline. Yours is a target for the same reason: it holds credentials to everything and is watched by nobody.</p>
+
+        <p>Start with dependency provenance. Pin versions with a lockfile, commit it, and never let CI resolve fresh versions at build time. Scan as a build step, but do not let it become noise — a scanner reporting 340 findings, 338 in dev dependencies that never reach production, gets ignored within a month.</p>
+
+        <p>Then GitHub Actions, where the interesting attacks are now. In March 2025 <code>tj-actions/changed-files</code>, used in tens of thousands of repositories, was compromised: every version tag was retagged to a commit that dumped runner memory, secrets included, into public build logs. Anyone who wrote <code>uses: tj-actions/changed-files@v35</code> was affected. Anyone who pinned a full commit SHA was not.</p>
+
+        <pre><code class="language-yaml">name: build
+on:
+  pull_request:          # never pull_request_target on untrusted forks
+    branches: [main]
+
+permissions:
+  contents: read         # default is far too broad; grant per-job
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Pin to a full commit SHA, not a tag. Tags are mutable; SHAs are not.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false   # stops the token sitting in .git/config
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # --ignore-scripts blocks postinstall hooks, the standard npm
+      # supply-chain foothold. If a dependency needs one, allowlist it.
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high --omit=dev
+      - run: npm test
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write    # OIDC to AWS — no long-lived keys in secrets
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/deploy-shop
+          aws-region: eu-west-2</code></pre>
+
+        <p>The <code>id-token: write</code> line is the one worth internalising. OIDC federation means your CI holds no long-lived cloud credentials at all — it exchanges a short-lived signed token for a session. A leaked build log then contains nothing durable. This took me an afternoon to set up on a client's account and eliminated eleven static access keys, four of which had been created by people who no longer worked there.</p>
+
+        <p>Scan for secrets that are already committed, because they will be.</p>
+
+        <pre><code class="language-bash"># Full history scan, verified findings only, in CI and once locally.
+trufflehog git file://. --since-commit HEAD~500 --only-verified --fail
+
+# Fast pre-commit gate
+gitleaks protect --staged --redact --verbose
+
+# The finding that always turns up: an old .env in the history.
+git log --all --diff-filter=A --name-only --pretty=format: \
+  | sort -u | grep -E '(^|/)(\.env|.*\.pem|.*credentials.*|.*\.key)$'</code></pre>
+
+        <h2>13. Backups You Have Actually Restored</h2>
+
+        <p>Ransomware hits ecommerce less often than manufacturing or healthcare, mostly because storefronts sit on managed cloud infrastructure with snapshots. Where it lands, it lands on self-managed VPS estates and on office file shares rather than the storefront. Either way, an untested backup is a hope, not a control.</p>
+
+        <p>Immutability is what separates a backup from a target. If production credentials can delete your backups, an attacker who owns production owns your backups. S3 Object Lock in compliance mode means nobody — including your own root account — can delete an object before its retention expires.</p>
+
+        <pre><code class="language-bash"># Immutable backup bucket. Object Lock can only be enabled at creation.
+aws s3api create-bucket \
+  --bucket shop-backups-immutable \
+  --region eu-west-2 \
+  --create-bucket-configuration LocationConstraint=eu-west-2 \
+  --object-lock-enabled-for-bucket
+
+aws s3api put-object-lock-configuration \
+  --bucket shop-backups-immutable \
+  --object-lock-configuration '{
+    "ObjectLockEnabled": "Enabled",
+    "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Days": 35}}
+  }'
+
+# The backup role can write and read. It cannot delete, and it cannot
+# change the retention. That is the whole point.
+aws iam put-role-policy --role-name backup-writer --policy-name write-only \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::shop-backups-immutable",
+                   "arn:aws:s3:::shop-backups-immutable/*"]
+    }]
+  }'</code></pre>
+
+        <p>Then the drill. Monthly, automated, and it must produce a number.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# restore-drill.sh — proves the backup restores and records how long it took.
+set -euo pipefail
+start=$(date +%s)
+
+latest=$(aws s3 ls s3://shop-backups-immutable/db/ | sort | tail -1 | awk '{print $4}')
+aws s3 cp "s3://shop-backups-immutable/db/$latest" /tmp/restore.sql.gz
+
+createdb restore_drill
+gunzip -c /tmp/restore.sql.gz | psql -q restore_drill
+
+orders=$(psql -tA restore_drill -c "SELECT COUNT(*) FROM sales_order;")
+newest=$(psql -tA restore_drill -c "SELECT MAX(created_at) FROM sales_order;")
+dropdb restore_drill
+
+elapsed=$(( $(date +%s) - start ))
+echo "restore_ok file=$latest orders=$orders newest_order=$newest seconds=$elapsed"
+
+# Fail loudly if the newest order is stale — a backup job that has been
+# silently writing yesterday's dump for six weeks looks fine until you need it.
+[ "$orders" -gt 0 ] || { echo "EMPTY RESTORE"; exit 1; }</code></pre>
+
+        <p>That <code>newest_order</code> check exists because of a client where the backup ran nightly, uploaded successfully, was monitored, alerted correctly, and had been dumping the same stale replica for seven weeks after a failover. Every green light was green. The data was two months old.</p>
+
+        <h2>14. Logging: What You Will Wish You Had Kept</h2>
+
+        <p>PCI DSS asks for twelve months of audit log retention with three months immediately available for analysis. Treat that as a floor rather than a target. Skimmers in particular sit undetected for a median measured in weeks, so ninety days of logs will often not reach the beginning of the incident, and the first question a forensic investigator asks is when the injection started.</p>
+
+        <p>What to log, in priority order: every admin authentication with source IP and user agent; every admin configuration change with before and after values, which most platforms do badly and which is the record that reconstructs an attack; every payment attempt with result code; every customer login attempt; every deploy with commit SHA and who triggered it; every CDN or WAF rule change. Ship it all off the box, because logs on a compromised server are evidence the attacker can edit.</p>
+
+        <p>Then make sure you can answer these in under a minute.</p>
+
+        <pre><code class="language-bash"># Questions worth being able to answer in under a minute.
+
+# Admin logins from outside the allowlist in the last 30 days
+grep -h "admin_k7q2xr" /var/log/nginx/access.log-2026* \
+  | awk '$9 == 200 {print $1}' | sort | uniq -c | sort -rn \
+  | grep -v -E '^\s+[0-9]+ (203\.0\.113\.|198\.51\.100\.17)'
+
+# PHP files modified since the last deploy — the classic backdoor check
+find /var/www/shop -name '*.php' -newermt "$(git log -1 --format=%cI)" \
+  -not -path '*/var/*' -not -path '*/generated/*' -printf '%TY-%Tm-%Td %p\n' | sort
+
+# Files that are PHP but pretending not to be
+find /var/www/shop/pub/media -type f \
+  -exec grep -l -m1 '&lt;?php' {} + 2&gt;/dev/null</code></pre>
+
+        <p>That last check has found live backdoors for me twice, both times in a media directory that was writable by the web server and served without a PHP handler restriction. Deny PHP execution in every upload directory. It is two lines of config and it converts a file upload vulnerability from a compromise into an annoyance.</p>
+
+        <h2>15. Incident Response, and the Clocks That Start Running</h2>
+
+        <p>The technical response to a skimmer is straightforward and most teams get it roughly right. The clocks are where merchants get hurt, because they run in parallel and they start before you have finished panicking.</p>
+
+        <p>Under GDPR, Article 33 gives you 72 hours from becoming aware of a personal data breach to notify the supervisory authority — and "becoming aware" is read generously against you. Article 34 requires notifying individuals without undue delay where there is high risk to their rights and freedoms, which a card skimmer categorically is. Card brand obligations run through your acquirer and are immediate rather than measured in days; above certain thresholds a PCI Forensic Investigator is appointed by the brands, paid for by you, on their schedule.</p>
+
+        <p>Two expensive mistakes I have watched merchants make. The first is deleting the malicious script and restoring from backup before capturing evidence — that destroys the timeline, and the timeline determines how many customers you notify. Snapshot the volumes before you clean, even at the cost of an hour's downtime. The second is a holding statement saying "no evidence of data loss" when you mean "we have not looked yet". It gets quoted back at you forever, and it costs you credibility with the regulator at the worst possible moment.</p>
+
+        <p>The sequence I use: preserve, then scope, then contain, then notify, then remediate. Preserve means images and log exports to a separate account. Scope means establishing the earliest evidence of compromise and what data was in the affected page. Contain means removing the attacker's access, not just their payload — rotate every credential the compromised host could reach, including ones you think are unrelated. Notify means the acquirer and the supervisory authority, with counsel involved. Remediate is everything after, and it is the longest part.</p>
+
+        <h2>16. The Human Layer, Which Is Where It Usually Starts</h2>
+
+        <p>Most of the compromises I have investigated did not begin with a clever exploit. They began with a person.</p>
+
+        <p>Phishing against ecommerce staff is targeted and competent. The lure that works is a plausible order dispute, a chargeback notice, a courier exception, an urgent supplier invoice — the operational noise your team processes all day. Generic awareness training does very little against it. Phishing-resistant authentication does: hardware keys or passkeys for anyone with admin access, no exceptions and no fallback to SMS, because the fallback is the attack path.</p>
+
+        <p>Over-privileged accounts are the quieter problem. Everyone gets full admin because scoping roles is fiddly and it is easier to say yes. Then a customer service agent's account can export the full customer table, edit CMS blocks — which is a script injection primitive — and change payment configuration.</p>
+
+        <pre><code class="language-sql">-- Magento: who has effectively unrestricted admin, and when did they
+-- last actually log in?
+SELECT
+    u.username,
+    u.email,
+    r.role_name,
+    u.is_active,
+    u.logdate                                       AS last_login,
+    DATEDIFF(NOW(), COALESCE(u.logdate, u.created)) AS days_idle
+FROM admin_user u
+JOIN authorization_role  ar ON ar.user_id = u.user_id AND ar.user_type = 2
+JOIN authorization_role  r  ON r.role_id  = ar.parent_id
+LEFT JOIN authorization_rule ru
+       ON ru.role_id = r.role_id AND ru.resource_id = 'Magento_Backend::all'
+WHERE ru.permission = 'allow'
+ORDER BY days_idle DESC;
+-- Anything over 60 days idle with full admin gets disabled first and
+-- discussed afterwards. Nobody has ever complained.</code></pre>
+
+        <p>Offboarding deserves a written list of every system, maintained by whoever owns access rather than by HR, and it should include the things that are not obvious: the shared Cloudflare login, the gateway dashboard, the courier portal, the Google Analytics property, the domain registrar. I have found ex-employees with active registrar access more than once, which is the single most dangerous leftover credential in the set — it is game over for email, certificates and DNS in one step.</p>
+
+        <p>This layer is also where zero-trust thinking earns its keep, in the practical sense of removing the flat internal network where being on the VPN implies being trusted. The <a href="/blog/zero-trust-security/">identity-per-request model applied to commerce infrastructure</a> is a bigger programme than most merchants need at once, but the first slice — put the admin panel and the staging environments behind per-user identity rather than a shared network boundary — is a week of work with an outsized return.</p>
+
+        <h2>17. A Worked Example, With What Went Wrong</h2>
+
+        <p>The aquarium supplies retailer from the opening. Magento 2.4.5-p1, roughly £11m annual revenue, about 62,000 orders a year, a two-person in-house team plus my agency. Here is what the numbers actually looked like.</p>
+
+        <p><strong>The incident.</strong> The skimmer was live for nine days before detection, which came from a customer screenshot rather than any system we owned. In that window: 4,180 orders, of which the forensic reconstruction put 3,911 as having reached the compromised payment step. Of those, 1,246 customers entered card details into the injected overlay — the rest either used a saved card, paid with PayPal, or abandoned. The overlay posted to a domain registered eleven days before it went live.</p>
+
+        <p><strong>Detection failure, in detail.</strong> We had a WAF, file integrity monitoring on the document root, and 90-day log retention. None of them could see this, because nothing on our infrastructure changed: the code was served from the vendor's CDN, executed in the customer's browser, and exfiltrated straight from the browser to the attacker. Our servers were never involved. That took the longest to explain to the board, and it is what I now lead with when scoping security work — server-side monitoring has a blind spot the size of your entire third-party script estate.</p>
+
+        <p><strong>The costs.</strong> Forensic investigation £34,000. Legal and notification £11,000. About £19,000 in fraud-related chargebacks over four months, roughly two-thirds eventually recovered. Sixty hours of my time, 140 of theirs. Their acquirer moved them from SAQ A-EP to a full Report on Compliance, adding around £22,000 a year in assessment costs. No regulatory fine — which I put down to the 41-hour notification and to not claiming there was no data loss before we knew.</p>
+
+        <p><strong>What we changed.</strong> Card fields moved from a partially in-page implementation to fully hosted iframe fields. Payment page cut from fourteen script origins to three. Enforcing CSP on the checkout route with <code>form-action 'self'</code> and <code>base-uri 'none'</code>. Report-only CSP everywhere else with a collector and a daily novelty diff. Commercial page-integrity monitoring, at about £900 a month, which the board approved in eleven minutes having previously declined it twice. A script inventory in the repo with a CI check that fails the build.</p>
+
+        <p><strong>What went wrong during the remediation.</strong> Two things, and both are the reason I write runbooks differently now.</p>
+
+        <p>First, we enabled enforcing CSP on the checkout in a single deploy, on a Tuesday afternoon, with a policy derived from three days of report-only data. It blocked the currency switcher, which was loaded conditionally for non-UK visitors and had therefore not appeared in a report-only sample dominated by UK traffic. International checkout was broken for about 70 minutes. Roughly 40 orders affected. The fix was trivial; the lesson was that report-only sampling must cover a full weekly cycle and must be segmented by the dimensions that change which scripts load — geography, device, logged-in state, A/B test bucket.</p>
+
+        <p>Second, and worse, I kept a review widget from a different vendor while removing the compromised one, on the basis that the new vendor had a better security posture. That judgement was based on their marketing site. Six weeks later their script began loading a session-replay library that recorded form field contents at checkout — not malicious, just a product decision shipped to every customer, and one that would have dragged the vendor into PCI scope had our CSP not blocked the new origin and paged me at 7am. I had swapped a known-bad vendor for an unknown one and called it an improvement. The right answer was the one I eventually reached: no third-party scripts on the payment page at all, reviews rendered server-side from a nightly export.</p>
+
+        <p><strong>What I would do differently.</strong> I would have pushed harder, earlier, for the payment page to be a separate minimal route with its own template, its own header policy and no tag manager. I proposed it fourteen months before the incident. It was descoped because it complicated conversion tracking. I let that go without escalating, and I should not have — the honest version of the conversation is that I did not want to be the engineer who kept raising a risk nobody else was worried about. That is a bad reason to stop raising it.</p>
+
+        <h2>18. The Headers That Are Genuinely Free</h2>
+
+        <p>A short section because the work is small and the return is disproportionate. Strict-Transport-Security with a long max-age and <code>includeSubDomains</code>. <code>X-Content-Type-Options: nosniff</code>, which closes the trick of uploading a file the browser decides is JavaScript. <code>frame-ancestors 'none'</code> everywhere except pages you deliberately embed. Cookies with <code>Secure</code>, <code>HttpOnly</code> and <code>SameSite=Lax</code>. An afternoon's work, breaks almost nothing, removes several classes of attack outright — the <a href="/blog/secure-http-headers/">full header configuration for a commerce stack</a> is worth having open while you do it. The one needing thought rather than copy-paste is HSTS preloading, which is effectively permanent: removal takes months and propagates on browser release cycles. I have watched a company go a fortnight unable to bring a legacy internal tool back online because of a preload submission made three years earlier by someone following a checklist.</p>
+
+        <h2>19. Questions I Get Asked</h2>
+
+        <p><strong>"We're on Shopify. Doesn't Shopify handle security?"</strong> They handle the infrastructure, the platform code, and PCI compliance of the checkout, and that removes most of the server-side risk. What remains yours: staff account hygiene, app permissions, any scripts you or your apps inject into the storefront, your own domain's DNS and email security, and the customer data you export into other systems. The Magecart risk does not vanish — it moves to your theme and your apps. Merchants who believe otherwise are usually the ones with fourteen apps installed and no idea what scopes they hold.</p>
+
+        <p><strong>"Is a WAF enough?"</strong> No, and the reason is specific rather than rhetorical. A WAF inspects requests reaching your origin. A client-side skimmer never touches your origin. A credential stuffing campaign looks like valid login requests. A card testing attack looks like valid payment requests. A WAF is genuinely good at blocking known exploit patterns against your platform — SQL injection attempts, known Magento payload signatures, path traversal — and that is worth having. It is not a substitute for anything above it in the ordering.</p>
+
+        <p><strong>"How do I convince finance to fund this?"</strong> Not with fear, which they have learned to discount. Use expected loss with real numbers from your own business: your average order value, your current chargeback rate, your gateway's per-authorisation fee, the assessment cost difference between your current SAQ and a Report on Compliance. In my worked example the board declined page-integrity monitoring twice at £900 a month and approved it immediately after an incident that cost £64,000 in direct costs and £22,000 a year in ongoing assessment. Present the second number before the incident, not after.</p>
+
+        <p><strong>"Our penetration test came back clean. Are we fine?"</strong> A clean pen test on a storefront usually means the test scoped your application and not your third-party script estate, your CI pipeline, your admin access model or your vendors. Read the scope section before the findings section. Ask specifically whether the payment page's client-side dependencies were assessed. In my experience the answer is no about four times in five.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>If you inherited a storefront tomorrow with no security work done and a fortnight to spend, this is the order. Not the order of importance — the order of execution, because sequencing is most of the skill.</p>
+
+        <p><strong>Day one: inventory the payment page.</strong> Open the checkout, open DevTools, and write down every origin that loads a script. Do it as a logged-in customer and as a guest, on mobile and desktop, in your largest and second-largest markets. This takes two hours and it will change your priorities. Most merchants discover at least one origin nobody can name.</p>
+
+        <p><strong>Day two: hosted payment fields.</strong> If card fields are in your DOM, find out what it takes to move them into your gateway's iframe components. This is the single largest structural risk reduction available and it may already be a configuration change. If it is a project, start it now and continue with the rest in parallel.</p>
+
+        <p><strong>Day three: report-only CSP with a collector.</strong> Even a rough policy. The reporting stream starts building your baseline immediately, and you will need at least a full week of it — covering a weekend, covering all your markets — before you can enforce anything safely.</p>
+
+        <p><strong>Day four: admin lockdown.</strong> Non-default admin path, enforced 2FA, IP allowlist at the edge, and disable every admin account idle for more than sixty days. Then check your patch level against the vendor's current security bulletin and agree an emergency patch window in writing with the business.</p>
+
+        <p><strong>Day five: rate limit authentication and payment.</strong> Both endpoints. Payment especially, because almost nobody does it and card testing is already costing you money you have attributed to something else. Add the failed-login-ratio query to a dashboard with an alert.</p>
+
+        <p><strong>Then, in order:</strong> enforce CSP on the checkout route with <code>form-action</code> and <code>base-uri</code> locked down, once you have a full week of report data segmented by market. Pin your CI actions to commit SHAs and move cloud credentials to OIDC. Run a secret scan over full history and rotate what it finds. Write the incident response plan with real phone numbers. Audit installed extensions and apps against a named owner. Book the page-integrity monitoring conversation with whoever holds the budget, and bring the assessment-cost numbers.</p>
+
+        <p>What I would not do first: buy a WAF and consider the problem addressed, run a penetration test before fixing the things you already know about, or write a policy document. Those all have their place and none of them are where the loss is.</p>
+
+        <p>The uncomfortable thing about ecommerce security in 2026 is that the highest-value attack does not touch your servers, is not visible in your logs, is delivered by a company you pay, and will be found by a customer before it is found by you. That was true in 2018 when British Airways learned it, and it was true nine days into an injection on a store I was responsible for. Build the part of your monitoring that watches the browser. Everything else on this list is easier and most of it you were going to do anyway.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -224,11 +923,10 @@
             </li>
             <li>
               <strong><a href="/blog/waf-implementation/">Implementing a Web Application Firewall (WAF)</a></strong>
-              <p>Cloudflare & AWS WAF expression rules.</p>
+              <p>Cloudflare &amp; AWS WAF expression rules.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -262,6 +960,6 @@
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

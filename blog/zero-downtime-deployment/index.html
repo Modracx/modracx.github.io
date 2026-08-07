@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Zero-Downtime Deployments for High-Traffic E-Commerce | MODRACX</title>
-  <meta name="description" content="Technical guide on executing zero-downtime deployments for Magento 2 using Deployer, Blue/Green load balancer switching, and database schema migrations." />
+  <meta name="description" content="Zero-downtime deploys for Magento and high-traffic ecommerce: realpath cache, connection draining, expand/migrate/contract schema changes, canary rollouts, and rehearsed rollback." />
   <meta property="og:title" content="Zero-Downtime Deployments for High-Traffic E-Commerce | MODRACX" />
   <meta property="og:description" content="Technical guide on zero-downtime deployments by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Zero-Downtime Deployments for High-Traffic E-Commerce</h1>
-        <p class="lede">A 5-minute site outage during high-volume sales periods results in thousands of dollars in lost revenue. Atomic symlink deployments and Blue/Green target group shifts maintain 100% availability.</p>
+        <p class="lede">An atomic symlink swap took ninety-four seconds to become visible on six of eight nodes, and the store stayed up the whole time serving broken pages. Zero-downtime is a state-compatibility problem, not a deploy-script problem.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 37 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,21 +205,673 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Deployer PHP Atomic Symlink Script</h2>
+        <h2>1. Ninety Seconds, On A Tuesday</h2>
+
+        <p>A distributor I look after deploys on Tuesday mornings, which is a choice I recommend and will defend. In October 2023 one of those deploys took the storefront down for ninety-four seconds. Not a hard 503 — worse. The site stayed up and served pages, and every one of those pages was broken: unstyled HTML, JavaScript 404s, and an "add to cart" button that posted to a route that no longer existed.</p>
+
+        <p>The deploy itself was atomic. Symlink swap, sub-millisecond, exactly as designed. What was not atomic was everything around it. The CDN was still serving the previous release's HTML from a 60-second cache, and that HTML referenced <code>/static/version1697...</code> asset paths that the new release had just replaced. Meanwhile PHP-FPM's realpath cache was still resolving <code>current/</code> to the old release directory on six of the eight app nodes, so those nodes were executing old code against a database that had already been migrated.</p>
+
+        <p>Ninety-four seconds of a store that looked online and was not. Roughly £3,100 in orders that did not happen, which we know because the following Tuesday at the same hour, without a deploy, we did £3,100 more.</p>
+
+        <p>The lesson I took, and the one this article is built around: <strong>zero-downtime deployment is not a deployment technique.</strong> The symlink swap is the easy fifteen percent. The hard part is that a running ecommerce system has at least five kinds of state — in-flight HTTP requests, database schema, cached HTML, session data, and browser-side assets already delivered — and a deploy has to be simultaneously correct for the old code and the new code across all of them, for as long as any old thing is still alive.</p>
+
+        <h2>2. What Zero Downtime Actually Has To Mean</h2>
+
+        <p>The definition people use is "no 5xx responses during a deploy". That is far too weak, and it is why teams declare victory and then bleed conversions on deploy days without knowing it.</p>
+
+        <p>The definition I use: <strong>no request that a customer initiated before the deploy started may fail or behave incorrectly, and no request initiated during or after the deploy may see an inconsistent mixture of old and new behaviour.</strong></p>
+
+        <p>That second clause is the demanding one. It rules out a whole category of deploys that pass every health check. A customer who loaded a product page from release N and clicks "add to cart" ninety seconds later is talking to release N+1. If the cart endpoint changed its expected payload, that customer gets a silent failure — no error page, just a button that does nothing. Your monitoring will show 200s.</p>
+
+        <p>Practically, this gives you four properties to engineer for:</p>
+
+        <p><strong>Atomicity.</strong> At any instant, a request is served entirely by one release. No half-copied directories, no partially written files.</p>
+
+        <p><strong>Backward compatibility.</strong> Release N+1's database schema must work with release N's code, because release N's code is still running somewhere for the duration of the rollout, and will still be running in the customer's browser tab for far longer.</p>
+
+        <p><strong>Forward compatibility, briefly.</strong> Release N's code must tolerate release N+1's data. If N+1 starts writing a new enum value into a column N reads, N will throw.</p>
+
+        <p><strong>Reversibility.</strong> You can go back. Which is a schema constraint, not a deploy-script constraint, and it is the one that gets designed away first.</p>
+
+        <h2>3. The Five Kinds Of State, And What Each One Breaks</h2>
+
+        <p>Before any tooling, it is worth being explicit about what a deploy actually disturbs. Every zero-downtime failure I have investigated maps to one of these.</p>
+
+        <p><strong>In-flight requests.</strong> A PHP request that started 400ms ago against release N is still executing when you swap the symlink. If it does an <code>include</code> after the swap, it includes a file from N+1. Half the request is old code, half is new. This is the failure mode that produces genuinely baffling stack traces.</p>
+
+        <p><strong>Database schema.</strong> The database is shared and singular. There is exactly one of it and it cannot be two versions at once. Everything about zero-downtime migration follows from that single fact.</p>
+
+        <p><strong>Server-side caches.</strong> Full page cache, block cache, config cache, opcache, realpath cache. Each has its own invalidation semantics and its own TTL, and they do not clear in lockstep. Varnish holding release N's HTML while the app serves release N+1 is the ninety-four-second story above.</p>
+
+        <p><strong>Sessions and carts.</strong> Serialised objects in Redis. If N+1 changes the shape of a session object — renames a property on a quote item, moves a value into a new container — then N's deserialisation of N+1's data, or vice versa, produces a fatal error or a silently empty cart.</p>
+
+        <p><strong>Client-side assets.</strong> The longest-lived state of all. A customer's browser holds release N's JavaScript bundle for as long as that tab is open, which could be days. That bundle will keep calling your API.</p>
+
+        <p>Notice the timescales. Atomic swap: microseconds. In-flight requests: hundreds of milliseconds. Caches: seconds to minutes. Sessions: hours. Open browser tabs: days. Your compatibility window is set by the longest of those, not the shortest, and almost everyone budgets for the shortest.</p>
+
+        <h2>4. Atomic Releases: Getting The Easy Part Right</h2>
+
+        <p>The standard layout is release directories and a symlink. On PHP stacks Deployer is the tool I reach for; Capistrano is the same idea for Ruby, and the pattern is old enough that every ecosystem has a version of it.</p>
+
+        <pre><code class="language-bash">/var/www/shop/
+  releases/
+    20260112143022/     # previous
+    20260119091544/     # current
+    20260126101233/     # being built
+  shared/
+    var/log/
+    pub/media/
+    app/etc/env.php
+  current -> releases/20260119091544</code></pre>
+
+        <p>The critical detail, and it is a single character: the symlink swap must be atomic. <code>ln -s</code> onto an existing link fails; <code>rm</code> then <code>ln -s</code> leaves a window of tens of milliseconds where <code>current</code> does not exist, and on a busy node that window is hundreds of failed requests. The correct incantation creates a temporary link and renames it, because <code>rename(2)</code> is atomic on POSIX filesystems:</p>
+
+        <pre><code class="language-bash"># Wrong: there is a window with no symlink at all.
+rm -f /var/www/shop/current
+ln -s /var/www/shop/releases/20260126101233 /var/www/shop/current
+
+# Right: rename(2) replaces the link in a single atomic operation.
+ln -sfn /var/www/shop/releases/20260126101233 /var/www/shop/current.tmp
+mv -Tf /var/www/shop/current.tmp /var/www/shop/current</code></pre>
+
+        <p>Deployer's <code>deploy:symlink</code> task already does this correctly. I mention it because I have twice found hand-rolled deploy scripts doing the first version, in both cases written by someone competent who did not know the difference existed.</p>
+
+        <p>A Deployer recipe for Magento 2, with the parts that matter annotated:</p>
 
         <pre><code class="language-php">&lt;?php
-// Deployer PHP Task for Atomic Symlink Swapping
 namespace Deployer;
 
-task('deploy:symlink', function () {
-    run("ln -sfn {{release_path}} {{deploy_path}}/current");
-});</code></pre>
+require 'recipe/magento2.php';
 
-        <hr />
+set('application', 'shop');
+set('repository', 'git@github.com:client/shop.git');
+set('keep_releases', 6);   // enough to roll back past a bad week
+
+// Anything that must survive a release swap lives in shared/.
+set('shared_dirs', ['var/log', 'var/report', 'pub/media', 'pub/sitemap']);
+set('shared_files', ['app/etc/env.php']);
+
+// Directories the web server must be able to write into.
+set('writable_dirs', ['var', 'pub/static', 'pub/media', 'generated']);
+
+host('app-01.shop.internal')-&gt;set('labels', ['role' =&gt; 'web']);
+host('app-02.shop.internal')-&gt;set('labels', ['role' =&gt; 'web']);
+host('cron-01.shop.internal')-&gt;set('labels', ['role' =&gt; 'cron']);
+
+// Build once, on one machine, and ship the artifact. Compiling DI and
+// static content independently on eight nodes produces eight subtly
+// different builds and takes eight times as long.
+task('build:artifact', function () {
+    runLocally('composer install --no-dev --prefer-dist --optimize-autoloader');
+    runLocally('bin/magento setup:di:compile');
+    runLocally('bin/magento setup:static-content:deploy en_GB en_US -f --jobs=4');
+    runLocally('tar -czf build.tar.gz --exclude=.git .');
+});
+
+// Deregister from the load balancer BEFORE touching anything on the node.
+task('lb:out', function () {
+    $id = get('hostname');
+    runLocally("aws elbv2 deregister-targets --target-group-arn {{tg_arn}} \
+        --targets Id=$id");
+    // Wait out the deregistration delay plus a margin. If you skip this,
+    // the LB is still routing to a node you are mid-deploy on.
+    runLocally('sleep 35');
+});
+
+task('lb:in', function () {
+    $id = get('hostname');
+    runLocally("aws elbv2 register-targets --target-group-arn {{tg_arn}} \
+        --targets Id=$id");
+    runLocally("aws elbv2 wait target-in-service --target-group-arn {{tg_arn}} \
+        --targets Id=$id");
+});
+
+after('deploy:failed', 'deploy:unlock');</code></pre>
+
+        <p>Two opinions embedded in that file. Build once and ship an artifact, rather than running <code>composer install</code> on each node — I have seen a Composer registry blip produce two nodes on different minor versions of a dependency, which took a day to diagnose. And take the node out of the load balancer before you touch it, rather than relying on a health check to notice, because the health check's polling interval is your outage window.</p>
+
+        <h2>5. The Realpath Cache, Which Ate Ninety Seconds Of My Life</h2>
+
+        <p>This is the specific mechanism behind the incident I opened with, and it catches nearly every PHP team the first time.</p>
+
+        <p>PHP caches the resolution of paths to inodes in the realpath cache, controlled by <code>realpath_cache_ttl</code>, which defaults to 120 seconds. When your document root is <code>/var/www/shop/current/pub</code> and <code>current</code> is a symlink, PHP resolves that symlink once and caches the answer. Swap the symlink and PHP-FPM keeps resolving to the old release for up to two minutes.</p>
+
+        <p>Opcache compounds it. Opcache keys compiled scripts by resolved path, so if realpath still says the old directory, opcache serves the old compiled bytecode, and <code>opcache_reset()</code> does not help because the path resolution happened before opcache was consulted.</p>
+
+        <p>There are two fixes and only one of them is good.</p>
+
+        <p>The bad fix, which is everywhere on the internet: reload PHP-FPM after each deploy. <code>systemctl reload php8.3-fpm</code> does a graceful restart of workers and clears both caches. It works. It also means every deploy restarts your PHP pool, which drops warm opcache and produces a burst of slow requests while it recompiles — on a large Magento codebase that is fifteen to thirty seconds of elevated latency per node.</p>
+
+        <p>The good fix: do not put a symlink in the document root at all. Point nginx at the resolved release path and change the nginx config instead.</p>
+
+        <pre><code class="language-nginx"># /etc/nginx/conf.d/shop-release.conf — written by the deploy, then reloaded.
+# $realpath_root gives nginx's own resolution, and passing it to PHP means
+# PHP never has to resolve the symlink itself.
+map $host $release_root {
+    default /var/www/shop/current;
+}
+
+server {
+    root $release_root/pub;
+
+    location ~ ^/(index|get|static|errors/report|errors/404|errors/503|health)\.php$ {
+        fastcgi_pass php-fpm;
+        include fastcgi_params;
+
+        # These two lines are the whole fix. nginx resolves the symlink on
+        # every request (cheaply, with its own open_file_cache) and hands
+        # PHP an already-resolved absolute path.
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        fastcgi_param DOCUMENT_ROOT   $realpath_root;
+    }
+}</code></pre>
+
+        <p>With <code>$realpath_root</code>, PHP is given a path like <code>/var/www/shop/releases/20260126101233/pub/index.php</code> and there is no symlink for it to cache. A deploy becomes visible on the very next request. No FPM reload, no opcache cold start.</p>
+
+        <p>Set <code>open_file_cache</code> in nginx thoughtfully if you do this — nginx has its own caching of stat results, and a long <code>open_file_cache_valid</code> reintroduces the same problem one layer up:</p>
+
+        <pre><code class="language-nginx">open_file_cache          max=20000 inactive=60s;
+open_file_cache_valid    10s;   # not 300s; this is your deploy propagation delay
+open_file_cache_min_uses 2;
+open_file_cache_errors   off;   # or a 404 during deploy gets cached as a 404</code></pre>
+
+        <p>That last line is not optional. With <code>open_file_cache_errors on</code>, a file that momentarily does not exist during a deploy gets its non-existence cached for the validity period, and you serve 404s for assets that are demonstrably present on disk. It is a wonderfully confusing bug.</p>
+
+        <h2>6. Draining In-Flight Requests</h2>
+
+        <p>Taking a node out of rotation is not the same as the node being idle. Between deregistration and quiescence you have requests still executing, and on a checkout path those can run for seconds.</p>
+
+        <p>The sequence that actually drains cleanly:</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# drain.sh — take one node out of service and wait for genuine quiescence.
+set -euo pipefail
+
+NODE="$1"
+TG="${TARGET_GROUP_ARN}"
+
+# 1. Stop the LB sending new work. Deregistration delay on the target group
+#    should be set to at least your p99.9 request duration; 30s is typical.
+aws elbv2 deregister-targets --target-group-arn "$TG" --targets "Id=$NODE"
+
+# 2. Flip the local health endpoint to unhealthy immediately, so anything
+#    that bypasses the LB (internal callers, a second LB) also backs off.
+ssh "$NODE" 'touch /var/www/shop/shared/var/.draining'
+
+# 3. Wait for in-flight work to finish. Polling the actual FPM status is
+#    far better than sleeping a fixed number of seconds and hoping.
+for i in $(seq 1 60); do
+  active=$(ssh "$NODE" "curl -sf localhost/status?json | python3 -c \
+    'import sys,json; print(json.load(sys.stdin)[\"active processes\"])'")
+  # 1 is the status request itself.
+  if [ "$active" -le 1 ]; then
+    echo "drained after ${i}s"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "WARNING: still $active active after 60s; proceeding anyway" &gt;&amp;2</code></pre>
+
+        <p>Requiring <code>pm.status_path</code> to be enabled in your FPM pool is a small price for knowing rather than guessing. The fixed <code>sleep 30</code> that most deploy scripts use is either too short on a bad day or wasteful on a good one, and it never tells you which.</p>
+
+        <p>For long-running work — queue consumers, report generation — draining means something different. Send <code>SIGTERM</code>, let the consumer finish its current message, and do not send <code>SIGKILL</code> until you have waited longer than your longest message takes. Magento's <code>queue:consumers:start</code> respects <code>--max-messages</code>, and running consumers with a bounded message count under a supervisor is a simpler way to get the same property: they exit on their own schedule and come back on the new release.</p>
+
+        <h2>7. Database Migrations: Expand, Migrate, Contract</h2>
+
+        <p>This is the part that actually decides whether zero-downtime is achievable, and it is a schema design discipline rather than a deploy tool.</p>
+
+        <p>The rule: <strong>every schema change must be deployable while the previous release is still running.</strong> That eliminates, immediately and permanently, renaming a column in one step, dropping a column in the same release that stops using it, adding a <code>NOT NULL</code> column without a default, and changing a column type in place.</p>
+
+        <p>What you do instead is split every destructive change across three releases.</p>
+
+        <h3>Expand</h3>
+
+        <p>Release N+1 adds the new structure. It does not remove anything. Old code continues to work because nothing it depends on has changed.</p>
+
+        <pre><code class="language-sql">-- Release N+1. Additive only. Old code ignores the new column entirely.
+ALTER TABLE sales_order_grid
+  ADD COLUMN fulfilment_channel VARCHAR(32) NULL DEFAULT NULL,
+  ADD INDEX IDX_FULFILMENT_CHANNEL (fulfilment_channel);
+
+-- New code writes BOTH the old and the new field. Old code reads the old
+-- one and is none the wiser. This dual-write phase is what makes rollback
+-- possible: revert to N and nothing is missing.</code></pre>
+
+        <h3>Migrate</h3>
+
+        <p>Backfill the new structure for existing rows, in batches, outside the deploy. This is not a deploy step and should never be one. A backfill that locks a 40-million-row table for eleven minutes is an outage regardless of how atomic your symlink was.</p>
+
+        <pre><code class="language-php">&lt;?php
+// A backfill worker. Batched, resumable, and rate-limited by replica lag.
+final class BackfillFulfilmentChannel
+{
+    private const BATCH = 2000;
+
+    public function run(\PDO $db): void
+    {
+        $lastId = (int) ($this-&gt;checkpoint() ?? 0);
+
+        while (true) {
+            $rows = $db-&gt;prepare(
+                'SELECT entity_id, shipping_method FROM sales_order
+                 WHERE entity_id &gt; :id AND fulfilment_channel IS NULL
+                 ORDER BY entity_id LIMIT ' . self::BATCH
+            );
+            $rows-&gt;execute([':id' =&gt; $lastId]);
+            $batch = $rows-&gt;fetchAll(\PDO::FETCH_ASSOC);
+            if (!$batch) break;
+
+            $db-&gt;beginTransaction();
+            $upd = $db-&gt;prepare(
+                'UPDATE sales_order SET fulfilment_channel = :c WHERE entity_id = :id'
+            );
+            foreach ($batch as $row) {
+                $upd-&gt;execute([
+                    ':c'  =&gt; $this-&gt;deriveChannel($row['shipping_method']),
+                    ':id' =&gt; $row['entity_id'],
+                ]);
+                $lastId = (int) $row['entity_id'];
+            }
+            $db-&gt;commit();
+            $this-&gt;checkpoint($lastId);
+
+            // Back off if replicas are falling behind. A backfill that
+            // outruns replication turns into a read-path incident on a
+            // system where nothing was deployed at all.
+            while ($this-&gt;replicaLagSeconds($db) &gt; 5) {
+                usleep(500_000);
+            }
+        }
+    }
+}</code></pre>
+
+        <p>The replica-lag check is the line people leave out and then regret. A tight backfill loop on the primary generates binlog faster than replicas can apply it, and if your read traffic goes to replicas you have just given yourself stale carts and missing orders without deploying a single line of application code.</p>
+
+        <h3>Contract</h3>
+
+        <p>Release N+2, or N+5, or the following month — after you are certain no running code touches the old structure — removes it. Verify rather than assume. A query against your slow log, or a temporary trigger that logs writes to the deprecated column, is cheap insurance.</p>
+
+        <pre><code class="language-sql">-- Release N+3, once the old column has had zero reads for a fortnight.
+ALTER TABLE sales_order DROP COLUMN shipping_method_legacy;</code></pre>
+
+        <p>The uncomfortable truth about expand/migrate/contract is that the contract step never gets scheduled. Teams do expand, do migrate, ship the feature, and the deprecated column sits there for four years growing an ever-more-elaborate mythology about whether anything still needs it. Put the contract migration in the backlog with a date, attached to the same ticket, or accept that you are building a schema you cannot change.</p>
+
+        <h3>Online schema change for large tables</h3>
+
+        <p>MySQL 8.0 does far more <code>ALGORITHM=INPLACE</code> operations than 5.7 did, but "inplace" is not the same as "non-blocking", and adding an index to a large <code>sales_order_grid</code> will still hold a metadata lock at the start and end of the operation. On tables above a few million rows I use <code>pt-online-schema-change</code> or <code>gh-ost</code>.</p>
+
+        <pre><code class="language-bash"># gh-ost: builds a shadow table, tails the binlog to keep it in sync,
+# then does an atomic cut-over. The throttle flags are the important part.
+gh-ost \
+  --host=db-primary.internal --database=shop --table=sales_order \
+  --alter="ADD COLUMN fulfilment_channel VARCHAR(32) NULL, \
+           ADD INDEX IDX_FC (fulfilment_channel)" \
+  --max-load='Threads_running=40' \
+  --critical-load='Threads_running=120' \
+  --chunk-size=1000 \
+  --max-lag-millis=1500 \
+  --throttle-control-replicas='db-replica-01.internal,db-replica-02.internal' \
+  --allow-on-master \
+  --postpone-cut-over-flag-file=/tmp/ghost.postpone \
+  --execute</code></pre>
+
+        <p>The <code>postpone-cut-over-flag-file</code> is the flag I would not run without. It lets gh-ost do all its work and then wait, indefinitely, until you delete that file. You do the copy at 3am on a Sunday and the cut-over at 10am on a Monday with the whole team watching, rather than having a cut-over fire unattended.</p>
+
+        <h2>8. Magento's setup:upgrade Is The Enemy Of All This</h2>
+
+        <p>Every Magento deploy guide tells you to run <code>bin/magento setup:upgrade</code>. On a zero-downtime deploy this command is a problem, and it is worth being precise about why.</p>
+
+        <p><code>setup:upgrade</code> does three unrelated things: it applies schema changes from every installed module, it applies data patches, and — this is the killer — it puts the application into maintenance mode for the duration unless you tell it not to. On a large installation with a lot of third-party modules it takes anywhere from forty seconds to several minutes.</p>
+
+        <p>The split you want:</p>
+
+        <pre><code class="language-bash"># 1. Find out whether anything is actually pending. On most deploys the
+#    answer is nothing, and the whole step can be skipped.
+bin/magento setup:db:status
+# echo $? -> 0 = up to date, 1 = upgrade needed, 2 = manual action required
+
+# 2. If schema changes ARE pending, generate the SQL rather than applying
+#    it blindly, and review it. --dry-run writes the statements to a file.
+bin/magento setup:db-schema:upgrade --dry-run
+
+# 3. Apply schema separately from data patches. Schema first, on one node.
+bin/magento setup:db-schema:upgrade
+
+# 4. Data patches after the code is live everywhere, because patches often
+#    depend on new code being present.
+bin/magento setup:db-data:upgrade</code></pre>
+
+        <p>My working rule on any Magento project of size: <strong>a deploy that requires a schema change is a different kind of deploy and gets a different runbook.</strong> Ninety percent of deploys touch no schema at all, and <code>setup:db:status</code> returning 0 lets you skip the expensive step entirely. Reserve the schema deploy for a scheduled slot, with the expand/contract discipline above applied to whatever the modules want to do.</p>
+
+        <p>The uncomfortable part is that third-party modules do not follow expand/contract. A vendor extension will happily drop a column in the same release that stops using it, and you find out when you try to roll back. Reading the <code>db_schema.xml</code> diff of every module update before you take it is tedious and I do it anyway, because the alternative is discovering the problem at the point where rollback was the plan.</p>
+
+        <h2>9. Blue/Green, Rolling, Canary: Picking One</h2>
+
+        <p>These get discussed as though they were interchangeable. They have genuinely different cost and risk profiles, and the right answer depends mostly on how expensive your infrastructure is and how confident you are in your tests.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th></th><th>Rolling</th><th>Blue/Green</th><th>Canary</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Extra infrastructure</td><td>None</td><td>100% duplicate</td><td>5-10%</td></tr>
+            <tr><td>Mixed-version window</td><td>Whole rollout</td><td>Seconds (cut-over)</td><td>Hours, deliberately</td></tr>
+            <tr><td>Rollback speed</td><td>Another rollout</td><td>Instant (flip back)</td><td>Instant (shift traffic)</td></tr>
+            <tr><td>Blast radius of a bad release</td><td>Grows during rollout</td><td>Everything, at once</td><td>Contained</td></tr>
+            <tr><td>Detects load-dependent bugs</td><td>Partially</td><td>No</td><td>Yes</td></tr>
+            <tr><td>Schema discipline needed</td><td>Full expand/contract</td><td>Full expand/contract</td><td>Full expand/contract</td></tr>
+            <tr><td>Realistic for a £3m/yr store</td><td>Yes</td><td>Rarely</td><td>Sometimes</td></tr>
+          </tbody>
+        </table>
+
+        <p>Read the last row of the middle column carefully, because blue/green is the technique people ask for by name and it is usually the wrong one. Doubling your application tier for the duration of a deploy is fine when the tier is stateless containers costing pennies per minute. It is not fine when it is eight provisioned instances with warm caches, because your green environment starts cold and cutting over to it hands 100% of traffic to a fleet with an empty opcache and an empty Redis. I have seen a textbook-correct blue/green cut-over produce a worse customer experience than the rolling deploy it replaced, purely from cache cold-start.</p>
+
+        <p>And note what blue/green does <em>not</em> solve: the database. There is still one of it. Green talks to the same primary as blue. Every schema compatibility constraint in this article applies unchanged. The people who believe blue/green removes the need for expand/contract are the people who have not yet had to roll back.</p>
+
+        <p>My default recommendation for a mid-size Magento or headless commerce stack is rolling with a canary step: deploy to one node, hold it at 5% of traffic for ten minutes with automated metric comparison, then roll the rest. You get the containment benefit without the duplicate-fleet cost, and the ten minutes catches the class of bug that only appears under real traffic patterns.</p>
+
+        <h2>10. Sessions, Carts, And Serialised Objects</h2>
+
+        <p>Sessions in Redis are the state people forget until it breaks in a way that looks like nothing else.</p>
+
+        <p>The failure: release N+1 changes the shape of something stored in the session. Perhaps a quote item gains a property, or a custom module renames a key. Release N reads that session and either throws on deserialisation or — more often, and worse — silently returns null for the property it expected. Customers see empty carts. Nothing appears in the error log because nothing errored.</p>
+
+        <p>Three rules I hold to:</p>
+
+        <p><strong>Never change the shape of a serialised session object in the same release that starts writing it.</strong> Add the new field, tolerate its absence for a release, then rely on it.</p>
+
+        <p><strong>Never store objects in the session where a scalar will do.</strong> PHP's serialisation of objects is tied to class definitions. Storing an array or a JSON blob decouples the data from the code that produced it, and makes version skew a data problem rather than a fatal error.</p>
+
+        <p><strong>Version the session namespace when you have no choice.</strong> If you genuinely must break compatibility, change the Redis key prefix. Every customer gets a new empty session, which is bad, but it is bad in an obvious way you can announce rather than bad in a way that silently drops carts.</p>
+
+        <pre><code class="language-php">// app/etc/env.php — the prefix is the escape hatch. Bumping it invalidates
+// every session at once. Use it deliberately, never as routine hygiene.
+'session' =&gt; [
+    'save' =&gt; 'redis',
+    'redis' =&gt; [
+        'host' =&gt; 'redis-session.internal',
+        'port' =&gt; '6379',
+        'database' =&gt; '2',
+        'disable_locking' =&gt; '0',
+        'max_concurrency' =&gt; '20',
+        'break_after_frontend' =&gt; '5',
+        'prefix' =&gt; 'sess_v4_',
+    ],
+],</code></pre>
+
+        <p>Keep sessions in a different Redis database — or a different instance entirely — from your cache. When you flush cache during a deploy, and you will, a shared instance means you flushed every cart on the site. I have watched this happen on a Friday afternoon. The <code>FLUSHALL</code> was in the deploy script, had been for two years, and had only ever been run against a Redis where sessions did not live.</p>
+
+        <h2>11. Static Assets And Version Skew In The Browser</h2>
+
+        <p>The longest-lived state is the one you have least control over. A customer opened your product page an hour ago and the tab is still open. Their browser holds release N's JavaScript. When they interact, that code hits your API — which is now release N+1.</p>
+
+        <p>Two distinct problems.</p>
+
+        <p><strong>Assets disappearing.</strong> Release N's HTML references <code>/static/version1706/js/bundle.js</code>. If your deploy deletes the old static directory, that request 404s and the page breaks in place. The fix is to keep the previous release's static assets served for as long as any HTML referencing them can plausibly be in circulation. Content-hashed filenames plus keeping N-1 and N-2 on disk covers it — this is what <code>keep_releases</code> is really for, and why I set it to 6 rather than 3.</p>
+
+        <p>If assets go to S3 or a CDN bucket rather than the app nodes, this is easier: upload new assets, never delete old ones on deploy, and prune with a lifecycle rule at 30 days.</p>
+
+        <pre><code class="language-bash"># Sync new assets. Note the absence of --delete; that flag is what turns a
+# deploy into an outage for anyone holding older HTML.
+aws s3 sync pub/static/ "s3://shop-static/${RELEASE}/" \
+  --cache-control 'public, max-age=31536000, immutable' \
+  --exclude '*.map' \
+  --size-only
+
+# Prune separately, on a schedule, well outside any deploy.
+aws s3 rm "s3://shop-static/" --recursive \
+  --exclude '*' --include "*/" --dryrun   # review before removing --dryrun</code></pre>
+
+        <p><strong>API contract drift.</strong> Old JavaScript calling a changed endpoint. The mitigations, in order of how much I like them: do not break endpoints (add fields, never remove or repurpose them); version the endpoint if you must; and, as a last line, have the client send its release identifier and let the server respond with a "please reload" signal when the gap is too wide.</p>
+
+        <pre><code class="language-javascript">// Injected into the page at build time.
+const CLIENT_RELEASE = '20260126101233';
+
+async function api(path, init = {}) {
+  const res = await fetch(path, {
+    ...init,
+    headers: { ...init.headers, 'X-Client-Release': CLIENT_RELEASE }
+  });
+
+  // The server sets this when the client build is older than the oldest
+  // release it still supports. Prompt rather than force-reload: a forced
+  // reload mid-checkout loses form state and is worse than the skew.
+  if (res.headers.get('X-Release-Skew') === 'unsupported') {
+    showBanner('A new version is available. Refresh to continue.');
+  }
+  return res;
+}</code></pre>
+
+        <p>I am deliberately not auto-reloading there. Blowing away a half-filled checkout form to fix a compatibility problem the customer cannot see is a bad trade. Tell them, let them choose.</p>
+
+        <h2>12. Caches, And The Thundering Herd After A Flush</h2>
+
+        <p>The instinct after a deploy is to flush everything. Resist it. A cold full-page cache on a busy storefront means every request goes to PHP simultaneously, and PHP capacity is sized for a warm cache.</p>
+
+        <p>What I actually do, in order of aggressiveness:</p>
+
+        <p><strong>Flush nothing</strong> if the release changed no templates, no layout XML, and no config. Most releases. Use the git diff to decide programmatically rather than flushing out of superstition.</p>
+
+        <p><strong>Invalidate by tag</strong> where the change is scoped. Varnish and Fastly both support surrogate-key purging, and Magento already emits the tags.</p>
+
+        <p><strong>Soft-purge</strong> where your CDN supports it. Fastly's soft purge marks content stale rather than removing it, so the first request after the purge gets the stale copy immediately while a background fetch revalidates. Your cache hit ratio does not fall off a cliff.</p>
+
+        <pre><code class="language-bash"># Fastly soft purge by surrogate key — stale-while-revalidate semantics
+# rather than a hole in the cache.
+curl -X POST "https://api.fastly.com/service/${SERVICE_ID}/purge/cms-block-homepage-hero" \
+  -H "Fastly-Key: ${FASTLY_TOKEN}" \
+  -H "Fastly-Soft-Purge: 1"</code></pre>
+
+        <p><strong>Warm before you cut over</strong> if you must flush hard. A crawler over your top 500 URLs, run against the new release before it takes traffic, costs two minutes and removes the herd entirely.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# warm.sh — hit the top N URLs against a specific node before it rejoins
+# the load balancer. Concurrency deliberately modest: this is meant to
+# populate the cache, not to load-test the node you are about to depend on.
+set -euo pipefail
+NODE="$1"
+xargs -a top-500-urls.txt -P 8 -I{} \
+  curl -s -o /dev/null -w '%{http_code} %{time_total} {}\n' \
+    --resolve "shop.example.com:443:${NODE}" "https://shop.example.com{}" \
+  | awk '$1 != "200" { print "WARN", $0 }'</code></pre>
+
+        <p>The <code>--resolve</code> flag is what makes this target one specific node rather than whatever the load balancer feels like. Without it you warm the fleet you were already serving from and learn nothing.</p>
+
+        <h2>13. Health Checks That Tell The Truth</h2>
+
+        <p>The default health check is a request to <code>/</code> that returns 200. It is worse than nothing, because it gives you confidence you have not earned. A Magento node with a dead Redis connection will happily serve a cached homepage.</p>
+
+        <p>A health check should assert the dependencies the node actually needs, and it should be able to say "not yet" during a deploy without saying "broken".</p>
+
+        <pre><code class="language-php">&lt;?php
+// pub/health.php — deliberately outside the framework so a broken DI
+// container still produces a useful answer rather than a 500.
+header('Content-Type: application/json');
+header('Cache-Control: no-store');
+
+$release = trim(@file_get_contents(__DIR__ . '/../RELEASE') ?: 'unknown');
+$checks  = [];
+$ok      = true;
+
+// Explicit drain flag: the deploy touches this before taking work away.
+if (file_exists(__DIR__ . '/../var/.draining')) {
+    http_response_code(503);
+    echo json_encode(['status' =&gt; 'draining', 'release' =&gt; $release]);
+    exit;
+}
+
+try {
+    $env = require __DIR__ . '/../app/etc/env.php';
+    $db  = new PDO(
+        sprintf('mysql:host=%s;dbname=%s', $env['db']['connection']['default']['host'],
+                $env['db']['connection']['default']['dbname']),
+        $env['db']['connection']['default']['username'],
+        $env['db']['connection']['default']['password'],
+        [PDO::ATTR_TIMEOUT =&gt; 2]
+    );
+    // A real query, not just a connection. Connecting proves the socket
+    // opened; it does not prove the schema this release expects is there.
+    $db-&gt;query('SELECT 1 FROM setup_module LIMIT 1')-&gt;fetch();
+    $checks['db'] = 'ok';
+} catch (Throwable $e) {
+    $checks['db'] = 'fail: ' . $e-&gt;getMessage();
+    $ok = false;
+}
+
+try {
+    $r = new Redis();
+    $r-&gt;connect($env['cache']['frontend']['default']['backend_options']['server'], 6379, 2.0);
+    $r-&gt;ping();
+    $checks['redis'] = 'ok';
+} catch (Throwable $e) {
+    $checks['redis'] = 'fail';
+    $ok = false;
+}
+
+// Cheap proof that the code and the schema agree, which is exactly the
+// thing a mid-rollout mixed-version fleet gets wrong.
+$checks['schema_version'] = $db-&gt;query(
+    "SELECT schema_version FROM setup_module WHERE module = 'Magento_Sales'"
+)-&gt;fetchColumn() ?: 'unknown';
+
+http_response_code($ok ? 200 : 503);
+echo json_encode(['status' =&gt; $ok ? 'ok' : 'fail', 'release' =&gt; $release] + $checks);</code></pre>
+
+        <p>Two design points. The drain flag is checked first and returns 503 without touching any dependency, so a node you are deliberately removing does not page anyone. And the health check reports the release identifier, which means your load balancer's target health page becomes a live view of which nodes are on which version during a rollout — genuinely useful, and free.</p>
+
+        <p>Keep it out of the full page cache and out of any WAF rate limit. Both mistakes are common and both produce a fleet that marks itself unhealthy under load, which is precisely the wrong time.</p>
+
+        <h2>14. Rollback: The Step Nobody Rehearses</h2>
+
+        <p>Every deployment document has a rollback section. Almost none of them have been executed under pressure.</p>
+
+        <p>Code rollback is easy — repoint the symlink at the previous release directory, reload nothing if you took the <code>$realpath_root</code> approach. Deployer gives you <code>dep rollback</code> and it works.</p>
+
+        <p>Everything else is where it falls apart.</p>
+
+        <p><strong>Schema is not rollback-able.</strong> If N+1 dropped a column, going back to N means restoring it, and the data is gone. This is the entire argument for expand/contract stated as an operational consequence rather than a principle. Your rollback capability is exactly as good as your schema discipline.</p>
+
+        <p><strong>Data written by the new release may be unreadable by the old one.</strong> New enum values, new serialisation formats, new columns the old code will not populate. Dual-writing during the expand phase is what protects you.</p>
+
+        <p><strong>Static assets and CDN state.</strong> If you purged the CDN on deploy and the old assets are gone from origin, rolling back the code leaves you serving HTML that references nothing.</p>
+
+        <p>The practice that actually helps: roll back on a schedule, in production, deliberately, when nothing is wrong. Once a quarter, deploy a release and then immediately roll it back, at a quiet hour, with someone watching the graphs. It takes twenty minutes. It finds the broken assumption while the stakes are low, which is the only time you want to find it.</p>
+
+        <p>I started doing this after a rollback attempt during a genuine incident failed because <code>keep_releases</code> was set to 2 and the release we needed had already been pruned. Twenty minutes of quarterly practice would have surfaced that a year earlier.</p>
+
+        <h2>15. Queues, Cron, And The Things That Are Not HTTP</h2>
+
+        <p>Deploy discussions focus on web nodes because that is where customers are. The background tier breaks in quieter and more expensive ways.</p>
+
+        <p><strong>Cron overlapping a deploy.</strong> Magento's cron runs every minute and its jobs can run for many minutes. A deploy that swaps code underneath a running indexer produces class-not-found fatals mid-reindex, and depending on the indexer, a partially rebuilt index that looks fine to every health check. Disable cron before the deploy and re-enable after, and make that part of the deploy, not a wiki page.</p>
+
+        <pre><code class="language-php">// deploy.php — bracket the whole deploy for cron hosts.
+task('cron:pause', function () {
+    run('crontab -l | sed "s|^\([^#]\)|#\1|" | crontab -');
+    // Wait for anything already running to finish rather than yanking it.
+    run('while pgrep -f "bin/magento cron:run" &gt; /dev/null; do sleep 2; done');
+})-&gt;select('role=cron');
+
+task('cron:resume', function () {
+    run('crontab -l | sed "s|^#\(\* \)|\1|" | crontab -');
+})-&gt;select('role=cron');
+
+before('deploy:symlink', 'cron:pause');
+after('deploy:success', 'cron:resume');</code></pre>
+
+        <p><strong>Message format changes.</strong> A queue is a durable buffer of messages written by one version and read by another, which makes it a distributed-systems compatibility problem wearing a friendly hat. If N+1 changes a message schema, N+1's consumers must still handle N's messages sitting in the queue, and N's consumers — still running for the next few minutes — must not choke on N+1's. Same expand/contract rule, same three-release cadence.</p>
+
+        <p><strong>Consumer restarts.</strong> Run consumers with <code>--max-messages</code> under a supervisor so they exit and restart naturally onto the new code. A consumer that runs forever is a consumer running last month's release, and I have found consumers eleven releases behind on sites that deploy weekly.</p>
+
+        <h2>16. What Actually Happened On The Black Friday Freeze</h2>
+
+        <p>The distributor from the opening. Turnover around £14m, Magento 2.4.6, eight app nodes behind an ALB, Varnish, MySQL 8.0 with two replicas, roughly 3,000 orders on a normal day and 11,000 on Black Friday.</p>
+
+        <p>They had a code freeze from 1 November to 5 December. Five weeks. The freeze existed because deploys were scary, and deploys were scary because of the ninety-four-second incident. The business hated it — five weeks of no fixes, and a backlog that then went out in one enormous release on 6 December, which is the single riskiest thing you can do.</p>
+
+        <p>The work, over about seven weeks:</p>
+
+        <p><strong>Week 1-2, the realpath fix.</strong> Switched nginx to <code>$realpath_root</code>, removed the PHP-FPM reload from the deploy, dropped <code>open_file_cache_valid</code> from 300s to 10s. Deploy propagation went from "up to 120 seconds and unpredictable" to "next request". This alone removed the mixed-version window on a fleet of eight.</p>
+
+        <p><strong>Week 2, drain properly.</strong> Replaced <code>sleep 20</code> with the FPM status poll. Median observed drain time was 1.8 seconds; p99 was 6.4 seconds. The old fixed sleep was both wasteful and, twice in the logs I went back through, insufficient.</p>
+
+        <p><strong>Week 3, the CDN skew.</strong> Static assets moved to S3 behind CloudFront with content hashes, and the <code>--delete</code> flag came out of the sync. This was the actual cause of the unstyled-page symptom, and it took an embarrassingly long time to see because everyone was focused on the PHP layer.</p>
+
+        <p><strong>Week 4, the schema audit.</strong> I went through eighteen months of migrations and found four destructive changes that had shipped as single-step deploys. None had caused an incident. All four meant that a rollback across those releases would have destroyed data, so the "we can always roll back" assumption in the runbook had been false for a year and a half. That finding did more to change behaviour than anything else in the project.</p>
+
+        <p><strong>Week 5, canary.</strong> Added an ALB weighted target group. One node takes 5% of traffic for ten minutes on the new release, with an automated comparison of error rate, p95 latency and add-to-cart conversion against the other seven. Below threshold, the rollout proceeds; above, it halts and pages.</p>
+
+        <p><strong>Week 6, what went wrong.</strong> The canary comparison fired a false positive on its first real use and halted a perfectly good release. The cause: the canary node was cold, so its p95 latency was legitimately worse for the first four minutes while opcache and Redis filled. I had compared the wrong window. Fixed by warming the node before it takes canary traffic and only comparing minutes 5 through 10. Obvious in hindsight; not obvious at 7am with a halted deploy.</p>
+
+        <p><strong>Week 7, rollback drill.</strong> Deployed and rolled back three times on a Wednesday evening. Found that <code>keep_releases</code> was 3 and that the media symlink was being recreated on rollback in a way that briefly 404'd product images. Both fixed in an hour, both would have been discovered during an incident otherwise.</p>
+
+        <p>Where it landed, measured across the following quarter:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Before</th><th>After</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Deploys per week</td><td>0.7</td><td>9.4</td></tr>
+            <tr><td>Deploy duration, code-only</td><td>11 min</td><td>4 min</td></tr>
+            <tr><td>Customer-visible errors per deploy (median)</td><td>~340</td><td>0</td></tr>
+            <tr><td>Worst deploy in the quarter</td><td>94 s degraded</td><td>0 s (one halted canary)</td></tr>
+            <tr><td>Mean time to roll back</td><td>Untested</td><td>2 min 40 s, rehearsed</td></tr>
+            <tr><td>Code freeze length, following November</td><td>5 weeks</td><td>4 days (schema changes only)</td></tr>
+          </tbody>
+        </table>
+
+        <p>The number I care about is the last one. The freeze did not disappear, and I do not think it should have — on the highest-revenue days of the year there is a reasonable argument for not changing the database. But it shrank from five weeks of paralysis to four days of a specific, justified restriction, and that is a business outcome rather than an engineering one.</p>
+
+        <p>If you are building the pipeline that runs all this, the mechanics of gating and artifact promotion are covered in more detail in the piece on <a href="/blog/cicd-pipeline-ecommerce/">CI/CD pipelines for enterprise ecommerce</a>; this article assumes you have somewhere to run these steps from.</p>
+
+        <h2>17. Questions I Get Asked</h2>
+
+        <p><strong>"Do we need Kubernetes for zero-downtime deploys?"</strong></p>
+
+        <p>No, and for a Magento monolith I would generally say no even if you are willing. Kubernetes gives you rolling updates, readiness gates and instant rollback of the pod spec for free, which is genuinely valuable. It does not give you schema compatibility, session compatibility, cache warming or CDN coordination, and those are four of the five hard problems. A team that moves a monolith to Kubernetes hoping to fix deploys usually ends up with the same deploy problems plus a cluster to run. If you are already containerised, use the tools. If you are not, symlink releases plus a load balancer gets you the same customer-facing outcome for a fraction of the operational surface.</p>
+
+        <p><strong>"How long should the deregistration delay be?"</strong></p>
+
+        <p>Longer than your p99.9 request duration, and measure it rather than guessing. On most storefronts p99.9 is dominated by checkout and payment callbacks and lands between 8 and 20 seconds. I set 30. Setting it to 300 "to be safe" means every deploy takes an extra five minutes per node, which on eight nodes is forty minutes and will get the whole practice abandoned.</p>
+
+        <p><strong>"Can we skip expand/contract if we use blue/green?"</strong></p>
+
+        <p>No. This is the most common misconception in the whole topic. Blue and green share one database. During cut-over both are serving traffic for at least a few seconds, and after cut-over you want the ability to flip back — which requires the old code to work against the new schema. Blue/green makes the code swap cleaner. It changes nothing about the data.</p>
+
+        <p><strong>"What about deploying during business hours?"</strong></p>
+
+        <p>That is the goal, and it is the honest test of whether any of this works. A team that only deploys at 2am has not achieved zero-downtime deployment; they have achieved low-traffic deployment, which is a different and much weaker property. Once you can deploy at 11am on a Tuesday without checking the order graph afterwards, you are done. Until then you are not, whatever the runbook says.</p>
+
+        <p><strong>"Our third-party extensions break these rules. What do we do?"</strong></p>
+
+        <p>Read the schema diff before you take the update, and when it contains a destructive change, decide consciously: hold the update, fork the module, or take the update in a scheduled maintenance slot with a database snapshot taken first. What you must not do is discover it during a rollback attempt. This is the strongest practical argument I have for keeping third-party module count low — every extension is a schema you do not control.</p>
+
+        <p><strong>"Is a database snapshot before deploy enough of a safety net?"</strong></p>
+
+        <p>It is a safety net for catastrophe, not for rollback. Restoring a snapshot loses every order placed since it was taken, so using it means you have accepted data loss. It belongs in your disaster plan and it does not belong in your deploy plan. If your rollback strategy is "restore the snapshot", you do not have a rollback strategy.</p>
+
+        <h2>18. What I'd Do First</h2>
+
+        <p>Assume you deploy today and it mostly works but nobody is comfortable. In this order.</p>
+
+        <p><strong>One.</strong> Measure what actually happens during a deploy. Put a synthetic check on your add-to-cart flow at 10-second intervals, deploy, and read the result. Most teams have never looked, and the answer is either "nothing happens, we are fine" — which lets you stop worrying — or a specific failure you can now name. Do this before changing anything.</p>
+
+        <p><strong>Two.</strong> Fix the realpath cache. If you are on PHP behind a symlinked document root, switch nginx to <code>$realpath_root</code> and drop the FPM reload. It is a config change and half an hour of testing, and on a multi-node fleet it eliminates the largest source of mixed-version weirdness.</p>
+
+        <p><strong>Three.</strong> Audit your last twenty migrations for destructive changes. Not to fix them — they have already shipped — but to find out whether your rollback plan is real. If it is not, you need to know that before you need it.</p>
+
+        <p><strong>Four.</strong> Make draining explicit. Deregister before you touch the node, poll for quiescence rather than sleeping, and put a drain flag in the health check. This is an afternoon.</p>
+
+        <p><strong>Five.</strong> Rehearse a rollback in production at a quiet hour. It will find something. It always finds something, and the something is always cheaper to fix on a Wednesday evening than at 4pm on Black Friday.</p>
+
+        <p><strong>Six.</strong> Only now, add a canary step. It is the highest-value control on the list and it is last because it is useless without the five above — a canary that halts on a cold-cache false positive, or that cannot roll back cleanly, is a mechanism for making deploys more frightening rather than less.</p>
+
+        <p>None of this is technically difficult. The realpath fix is four lines. The drain script is thirty. What makes it hard is that it is spread across six systems owned by four people, and the failure it prevents is invisible until it is expensive. That is why the code freeze exists, and that is what the work is actually for.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -230,7 +884,6 @@ task('deploy:symlink', function () {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -264,6 +917,6 @@ task('deploy:symlink', function () {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

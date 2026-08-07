@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Lazy Loading Strategies: Eliminating Render-Blocking Assets | MODRACX</title>
-  <meta name="description" content="Engineering guide on implementing native lazy loading (`loading=lazy`), IntersectionObserver JavaScript API, and async/defer script execution." />
+  <meta name="description" content="Lazy loading images, iframes and video without breaking LCP or CLS: native loading=lazy, fetchpriority, IntersectionObserver, video facades and reserved space." />
   <meta property="og:title" content="Lazy Loading Strategies: Eliminating Render-Blocking Assets | MODRACX" />
   <meta property="og:description" content="Engineering guide on implementing lazy loading strategies by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Lazy Loading Strategies: Eliminating Render-Blocking Assets</h1>
-        <p class="lede">Never lazy-load Largest Contentful Paint (LCP) images! Learn how to combine native `loading="lazy"` for below-the-fold media with IntersectionObserver for dynamic component loading.</p>
+        <p class="lede">A furniture retailer added loading=lazy to every image on the site and pushed LCP from 2.4s to 4.1s. The attribute was right; the hero image was not.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 34 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,30 +205,537 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>IntersectionObserver Lazy Loading Example</h2>
+        <h2>1. The Day We Made the Homepage Slower by Optimising It</h2>
 
-        <pre><code class="language-javascript">// JavaScript IntersectionObserver for Off-Screen Component Initialization
-const observer = new IntersectionObserver((entries, obs) => {
-  entries.forEach(entry => {
-    if (entry.isIntersecting) {
-      const container = entry.target;
-      loadHeavyWidget(container);
-      obs.unobserve(container);
-    }
+        <p>A plumbing retailer I work with pushed a release in October that added <code>loading="lazy"</code> to every <code>&lt;img&gt;</code> on the site. One line in a Twig template, applied globally. The developer who did it was following a performance checklist and had done exactly what the checklist said.</p>
+
+        <p>Largest Contentful Paint on the homepage went from 2.4 seconds to 4.1. On the category pages it went from 2.1 to 3.6. Field data caught up over the following fortnight and their Core Web Vitals assessment flipped from passing to failing on mobile for the first time in a year.</p>
+
+        <p>The cause was the hero image. It was the LCP element on every template, sitting at the top of the viewport, and it now carried <code>loading="lazy"</code>. That attribute tells the browser to skip the image during the initial preload scan, wait until layout has run, check whether the element is near the viewport, and only then start the download. On a page where the image is unambiguously visible, that sequence adds most of a second of pure delay for no benefit whatsoever.</p>
+
+        <p>We removed the attribute from the hero and LCP came back to 2.3 seconds — slightly better than before, because the rest of the change was genuinely useful. The net effect of the original release, once corrected, was good. The uncorrected version was the worst homepage performance they had shipped in two years.</p>
+
+        <p>That is the whole tension of this subject in one incident. Lazy loading media is one of the highest-leverage things you can do to a content-heavy commerce site, and applied without judgement it makes the single metric you care most about worse. This article is about where the line sits.</p>
+
+        <p>A note on scope: this is about media — images, iframes, and video. Deferring JavaScript is a separate discipline with different failure modes, and I have written about <a href="/blog/lazy-loading-code-splitting/">code splitting and route-level JavaScript loading</a> elsewhere. Everything below is about bytes the browser fetches to paint something.</p>
+
+        <h2>2. What Lazy Loading Actually Buys You</h2>
+
+        <p>Be precise about the win, because it is not the one most people describe.</p>
+
+        <p>Lazy loading does not make images load faster. Every image that eventually appears is downloaded eventually. What it does is remove images from competition during the window where competition matters.</p>
+
+        <p>A browser has finite bandwidth and, under HTTP/1.1, a hard limit of around six connections per host. Under HTTP/2 and HTTP/3 the connection limit disappears but the bandwidth does not, and the browser's priority scheduling has to decide what gets it. A product listing page with sixty product images, all eagerly requested, puts sixty items into that queue. The ones below the fold are not more important than your LCP image, but they are competing with it for the same pipe, and on a 4G connection with 1.5 Mbps of usable throughput that competition is measured in seconds.</p>
+
+        <p>So the benefit is threefold, and worth separating.</p>
+
+        <p><strong>Bandwidth contention during load.</strong> The LCP image gets a larger share of a scarce resource. This is the effect that shows up in your metrics.</p>
+
+        <p><strong>Total bytes for users who do not scroll.</strong> On the retailer's category pages, median scroll depth was 38%. Roughly six in ten product images below that line were never seen. Not downloading them saved a genuine amount of data — around 1.4MB per session on mobile — which matters to people on metered connections even though it will never appear in a lab test.</p>
+
+        <p><strong>Main-thread work.</strong> Decoding a JPEG is not free. A 1200×1200 image costs several milliseconds of decode plus the memory to hold the decoded bitmap, which for that size is roughly 5.8MB regardless of how small the compressed file was. Sixty of those on a 2GB Android device is how you get a tab that reloads itself when the user comes back to it.</p>
+
+        <p>That third one is underrated. I have seen a category page where the fix for "the page keeps reloading on my phone" was not memory leaks in JavaScript at all — it was decoded image bitmaps, and lazy loading fixed it.</p>
+
+        <h2>3. Native loading="lazy", and What the Browser Really Does</h2>
+
+        <p>The attribute has been in Chrome since version 77 in September 2019, Firefox 75 in April 2020, and Safari 15.4 in March 2022. Support is effectively universal now, and there is no meaningful reason to ship a JavaScript polyfill for images.</p>
+
+        <pre><code class="language-html">&lt;!-- Below the fold. Width and height are not optional; see below. --&gt;
+&lt;img src="/media/product/4471.webp"
+     width="600" height="600"
+     loading="lazy"
+     decoding="async"
+     alt="Oak dining chair, natural finish"&gt;</code></pre>
+
+        <p>What happens under the hood is more interesting than the attribute suggests, and knowing it explains most of the surprises.</p>
+
+        <p>The preload scanner — the lightweight parser that races ahead of the main HTML parser looking for resources to fetch — skips lazy images entirely. That is the source of the win and also the source of the hero-image disaster. For an image that must load immediately, the preload scanner is the fastest path to a request, often hundreds of milliseconds ahead of layout, and <code>loading="lazy"</code> opts out of it.</p>
+
+        <p>Then, once layout has run, the browser computes each lazy image's distance from the viewport and fetches anything within a threshold. That threshold is not zero and it is not small. Chrome originally used 3000px on fast connections, which was so generous it barely deferred anything on a typical page; they tightened it in late 2021 to roughly 1250px on fast connections and 2500px on slow ones. Firefox and Safari use their own values.</p>
+
+        <p>Two consequences follow. First, an image 900 pixels below the fold marked lazy will very likely be fetched immediately anyway, so marking it lazy achieves nothing. Second, you cannot test lazy loading by scrolling slowly in a maximised desktop window — half the page is inside the threshold. Test at mobile viewport size with the network panel open.</p>
+
+        <h3>loading="eager" is not the same as omitting the attribute</h3>
+
+        <p>Mostly it is, in that both mean "fetch normally". I still write <code>loading="eager"</code> explicitly on the LCP image, for a reason that has nothing to do with the browser: it documents intent. Six months later, when someone adds a global lazy default to the image component, an explicit <code>eager</code> is a signal that this one was thought about. A missing attribute is indistinguishable from an oversight.</p>
+
+        <h2>4. Never Lazy-Load the LCP Image</h2>
+
+        <p>This is the one rule I would keep if I could only keep one.</p>
+
+        <p>The LCP element on a commerce page is almost always an image: the hero on the homepage, the main product photograph on a PDP, occasionally the first tile on a category grid. It is by definition in the initial viewport. Deferring it costs you the preload scanner, costs you a layout pass, and buys nothing, because the image is going to be fetched a few hundred milliseconds later regardless.</p>
+
+        <p>The measured cost varies with how heavy the page's HTML and CSS are, because the delay is however long it takes to get from "preload scanner would have seen it" to "layout has run". On a light page that is 100ms. On the plumbing retailer's homepage, with a large stylesheet and a chunk of blocking third-party script, it was over 800ms.</p>
+
+        <p>The corollary is that you must know which element is your LCP, per template, and that is not always the one you would guess. Use the attribution API rather than assuming.</p>
+
+        <pre><code class="language-javascript">// Log the actual LCP element and why it was slow. Run this on real pages,
+// not just the homepage — templates differ and so do their LCP elements.
+new PerformanceObserver((list) =&gt; {
+  const entry = list.getEntries().at(-1);   // last entry wins; LCP can change
+  const el = entry.element;
+  console.log({
+    lcpMs: Math.round(entry.startTime),
+    tag: el?.tagName,
+    src: entry.url,
+    loading: el?.getAttribute('loading'),
+    fetchpriority: el?.getAttribute('fetchpriority'),
+    // If this is far above renderTime, the delay is network, not rendering.
+    loadTimeMs: Math.round(entry.loadTime || 0)
   });
-}, { rootMargin: '200px 0px' });
+}).observe({ type: 'largest-contentful-paint', buffered: true });</code></pre>
 
-document.querySelectorAll('.lazy-widget').forEach(el => observer.observe(el));</code></pre>
+        <p>If that ever logs <code>loading: "lazy"</code>, you have found a bug worth several hundred milliseconds. I run a variant of this as a synthetic check in CI on six representative URLs, and it fails the build if the LCP element carries a lazy attribute. It is a five-line assertion that has caught the regression three times across two clients.</p>
 
-        <hr />
+        <h3>The carousel problem</h3>
+
+        <p>Hero carousels complicate this because only the first slide is visible. The correct configuration is eager on slide one, lazy on slides two onwards — but a lot of carousel libraries render all slides into the DOM at full size, positioned off to the side, which means the browser considers them within the viewport horizontally and may fetch them anyway.</p>
+
+        <p>What actually worked on the retailer's site was rendering only the first slide server-side and injecting the rest after the <code>load</code> event. Crude, and it means the carousel is not interactive for a second or so. Nobody interacts with a hero carousel in the first second. Their own analytics said the second slide was viewed by 4% of sessions, which raised a more useful question about whether the carousel should exist at all — but that is a merchandising argument I lost.</p>
+
+        <h2>5. fetchpriority, and Where It Fits</h2>
+
+        <p>Lazy loading is the "later" lever. <code>fetchpriority</code> is the "sooner" lever, and they are complementary rather than alternatives.</p>
+
+        <p>Browsers assign images a low priority by default until layout tells them the image is in the viewport, at which point the priority is raised. That reassessment costs time. <code>fetchpriority="high"</code> tells the browser to treat the image as important from the moment the preload scanner sees it, without waiting for layout.</p>
+
+        <pre><code class="language-html">&lt;!-- The LCP image: fetched by the preload scanner, at high priority,
+     and decoded synchronously so it paints in the same frame. --&gt;
+&lt;img src="/media/hero-1600.webp"
+     srcset="/media/hero-800.webp 800w, /media/hero-1600.webp 1600w"
+     sizes="100vw"
+     width="1600" height="900"
+     fetchpriority="high"
+     decoding="sync"
+     alt="Autumn living room collection"&gt;</code></pre>
+
+        <p>On the furniture homepage this was worth another 210ms of LCP on a throttled 4G profile, on top of removing the lazy attribute. It shipped in Chrome 101 in April 2022 and is now supported across the board; where it is not understood, it is ignored harmlessly.</p>
+
+        <p>Use it on exactly one image per page. The point of a priority signal is that it is relative, and a page where four images are high priority has communicated nothing. I have reviewed a template with <code>fetchpriority="high"</code> on every product tile in the grid, added by someone reasoning that images are important. The effect was to flatten the priority ordering back to where it started.</p>
+
+        <p>The mirror image is also useful and almost never used: <code>fetchpriority="low"</code> on eagerly-loaded images that genuinely are not important, like a payment-methods strip in the footer that you cannot lazy load because it is inside a component you do not control.</p>
+
+        <h2>6. Reserving Space, or How Lazy Loading Causes Layout Shift</h2>
+
+        <p>The second failure mode, after LCP, is Cumulative Layout Shift. It is caused by the same change and is more insidious because it does not show up at all in a lab test run at desktop width.</p>
+
+        <p>An image with no intrinsic size information occupies zero height until its bytes arrive and the browser learns its dimensions. Eagerly loaded, that gap is short and usually happens before anything below it has painted. Lazily loaded, the gap is however long it takes the user to scroll to it — so the content below shifts down at exactly the moment the user is reading it. That is the worst possible time, and CLS weights it accordingly.</p>
+
+        <p>The fix is old and simple: put <code>width</code> and <code>height</code> attributes on every image. Since 2019 browsers use those two numbers to compute an aspect ratio and reserve a correctly proportioned box before any bytes arrive, even when CSS overrides the actual rendered size.</p>
+
+        <pre><code class="language-css">/* This pairing is what makes the width/height attributes work with a
+   fluid layout. Without it, the CSS width overrides the attribute and the
+   aspect ratio is lost. */
+img {
+  max-width: 100%;
+  height: auto;      /* required: lets the reserved ratio drive the height */
+}
+
+/* When the intrinsic ratio is not the display ratio — a square thumbnail
+   cropped from a landscape original — state the display ratio explicitly
+   and let object-fit do the crop. */
+.product-tile img {
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  width: 100%;
+  height: auto;
+}</code></pre>
+
+        <p>The <code>height: auto</code> line is the one people miss. A reset stylesheet that sets <code>img { width: 100%; }</code> without it silently discards the aspect ratio the attributes provided, and you get the shift back. I have found this in three separate codebases, always inherited from a normalise file nobody had read.</p>
+
+        <p>For images whose dimensions genuinely are not known at render time — user-generated content, a feed from a supplier who will not tell you — you have two honest options. Store the dimensions at upload time and emit them, which is the right answer. Or wrap the image in a container with a fixed aspect ratio and accept that some images will be letterboxed. What you must not do is nothing.</p>
+
+        <h3>Measuring the shift lazy loading caused</h3>
+
+        <pre><code class="language-javascript">// Attribute layout shifts to the element that moved. Run it on a real
+// scroll-through of a category page, not a synthetic load.
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    if (entry.hadRecentInput) continue;   // user-initiated shifts do not count
+    for (const source of entry.sources || []) {
+      console.log({
+        score: entry.value.toFixed(4),
+        node: source.node,
+        // A shift whose previousRect has zero height is an unreserved image.
+        collapsed: source.previousRect.height === 0
+      });
+    }
+  }
+}).observe({ type: 'layout-shift', buffered: true });</code></pre>
+
+        <p>The <code>collapsed</code> flag is the tell. Any shift where the previous rectangle had zero height is almost certainly a media element that arrived into a space nobody reserved for it. On the retailer's category page that single check found eleven of them, all in a "recently viewed" strip rendered by a third-party recommendation widget that emitted images with no dimensions at all. Fixing widget markup you do not own is unpleasant, but the CSS <code>aspect-ratio</code> escape hatch works on other people's elements too.</p>
+
+        <h2>7. Responsive Images and Lazy Loading Together</h2>
+
+        <p>These two interact in a way that catches people, because <code>sizes</code> is evaluated at a point in time and lazy loading changes when that point is.</p>
+
+        <p>With <code>srcset</code> and a <code>sizes</code> attribute, the browser picks a candidate based on the layout width the <code>sizes</code> expression describes and the device pixel ratio. For an eager image, that happens during the preload scan, before layout, which is why <code>sizes</code> has to be a CSS-length expression you write by hand rather than something the browser measures. For a lazy image, selection happens after layout — so the browser knows the real width, and a hand-written <code>sizes</code> that is wrong is now demonstrably wrong.</p>
+
+        <p>In practice most <code>sizes</code> attributes are wrong. The commonest error is <code>sizes="100vw"</code> on an image that renders at 300px inside a grid, which makes the browser download a 1600px file to display at 300. On a 3x device that is a 4800px selection. I have seen a 2.1MB hero-sized JPEG delivered into a 280px product tile because of one copied attribute.</p>
+
+        <pre><code class="language-html">&lt;!-- Honest sizes for a grid that is 1 column on mobile, 2 on tablet,
+     4 on desktop with a 1280px max container and 24px gutters. Work the
+     numbers out once and put them in the component, not in each template. --&gt;
+&lt;img src="/media/p/4471-600.webp"
+     srcset="/media/p/4471-300.webp 300w,
+             /media/p/4471-600.webp 600w,
+             /media/p/4471-900.webp 900w,
+             /media/p/4471-1200.webp 1200w"
+     sizes="(min-width: 1024px) 296px,
+            (min-width: 640px) 44vw,
+            92vw"
+     width="600" height="600"
+     loading="lazy" decoding="async"
+     alt="Oak dining chair, natural finish"&gt;</code></pre>
+
+        <p>Chrome 133 shipped <code>sizes="auto"</code> in early 2025, which lets the browser use the real laid-out width for lazy images and removes the whole class of mistake. It only works with <code>loading="lazy"</code>, because only then is layout guaranteed to have happened. It is a genuine improvement and I use it, with a handwritten fallback in the same attribute list for browsers that do not understand it yet.</p>
+
+        <p>Getting the candidate list itself right — which widths, which formats, how many — is a separate exercise, and I have gone through it in detail in the piece on <a href="/blog/responsive-webp-images/">responsive WebP and AVIF delivery</a>. The short version: four or five widths is plenty, and the gap between them should be wide enough that a wrong pick costs little.</p>
+
+        <h2>8. decoding="async" and What It Does Not Do</h2>
+
+        <p>Small attribute, widely cargo-culted, occasionally harmful.</p>
+
+        <p><code>decoding="async"</code> tells the browser it may decode the image off the main thread and paint the surrounding content without waiting. <code>decoding="sync"</code> asks it to decode before the next paint so the image appears in the same frame as everything around it. The default, <code>auto</code>, lets the browser choose, and browsers are reasonably good at choosing.</p>
+
+        <p>The honest summary is that this attribute has a much smaller effect than the internet suggests. It matters for large images being inserted into an already-painted page, where a synchronous decode can block a frame and produce visible jank during scroll. For images present in the initial HTML it makes very little difference, and on the LCP image specifically, <code>async</code> can occasionally split the paint into two frames and push LCP slightly later.</p>
+
+        <p>My rule: <code>async</code> on lazy images, leave it off or use <code>sync</code> on the LCP image, and do not spend an afternoon on it either way. If you want the effect reliably in JavaScript, <code>img.decode()</code> gives you a promise that resolves when the bitmap is ready, which is the right tool for swapping a placeholder without a flash.</p>
+
+        <pre><code class="language-javascript">// Swap a low-quality placeholder for the real image without a visible flash:
+// decode first, then attach. This is the one case where the timing is
+// genuinely under your control.
+async function swap(placeholderEl, fullSrc) {
+  const img = new Image();
+  img.src = fullSrc;
+  try {
+    await img.decode();          // bitmap ready; attaching now cannot jank
+  } catch {
+    return;                      // decode failed: leave the placeholder up
+  }
+  placeholderEl.replaceWith(img);
+}</code></pre>
+
+        <h2>9. IntersectionObserver, and When Native Is Not Enough</h2>
+
+        <p>For plain <code>&lt;img&gt;</code> elements, native lazy loading has made JavaScript-based lazy loading obsolete, and if you still ship a lazy-load library for images you should delete it. It is costing you a script and doing worse than the browser.</p>
+
+        <p>There are four cases where I still write an observer.</p>
+
+        <p><strong>CSS background images</strong>, which have no <code>loading</code> attribute and never will, because CSS has no concept of it.</p>
+
+        <p><strong>Whole components</strong>, where the point is not to defer one image but to avoid instantiating a map, a video player, or a review widget at all.</p>
+
+        <p><strong>Loading well before the viewport with a custom margin</strong>, when the native threshold is not aggressive enough for a particular layout — a horizontally-scrolling shelf, for instance, where the native threshold is measured vertically and does not help you.</p>
+
+        <p><strong>Progressive placeholder swaps</strong>, where you want a blur-up transition rather than a hard appear.</p>
+
+        <pre><code class="language-javascript">// One observer for the whole page, not one per element. Creating an observer
+// per element is the commonest performance mistake in lazy-load code and it
+// costs more than the lazy loading saves on a page with 60 tiles.
+const io = new IntersectionObserver((entries, observer) =&gt; {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const el = entry.target;
+
+    if (el.dataset.bg) {
+      el.style.backgroundImage = `url("${el.dataset.bg}")`;
+      delete el.dataset.bg;
+    }
+    // Unobserve immediately. An element left under observation keeps the
+    // callback firing on every scroll for the rest of the session.
+    observer.unobserve(el);
+  }
+}, {
+  // Start work 300px before the element enters. Tune this against how fast
+  // people actually scroll on your site, not against a round number.
+  rootMargin: '0px 0px 300px 0px',
+  threshold: 0
+});
+
+document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code></pre>
+
+        <p>Two details that separate working code from code that mostly works. <code>rootMargin</code> on an observer whose root is the document is relative to the viewport, so a bottom margin of 300px is what you want for downward scrolling; people frequently write it as 300px on all sides and wonder why upward scrolling behaves oddly. And if you use <code>threshold</code> values other than 0 on elements taller than the viewport, the callback never fires, because an element 2000px tall can never be 50% visible in a 800px viewport. That bug is subtle, only appears on long-form content, and I have shipped it.</p>
+
+        <h3>The no-JavaScript case</h3>
+
+        <p>An observer-based lazy loader means no images at all if the script fails — a CDN hiccup, a content blocker, a parse error in an unrelated bundle. Native lazy loading has no such failure mode. That asymmetry is most of why I use JavaScript only for the cases the platform genuinely cannot cover, and it is worth saying to whoever suggests standardising everything on one library.</p>
+
+        <h2>10. Iframes Are Where the Real Money Is</h2>
+
+        <p>If you have a third-party iframe on a high-traffic template, that is very likely the single biggest media win available to you, and it dwarfs anything you will get from images.</p>
+
+        <p>An embedded YouTube player costs roughly 500KB to 900KB of JavaScript, CSS, and images before anyone presses play, spread across three or four origins with their own DNS, TCP, and TLS handshakes. An embedded Google Map is comparable. A Trustpilot widget or an embedded booking calendar is smaller but still substantial. All of that is fetched, parsed, and executed for a component most visitors never touch.</p>
+
+        <p><code>loading="lazy"</code> works on iframes and has since Chrome 77; Safari added it in 16.4 and Firefox in 121, so it is now everywhere.</p>
+
+        <pre><code class="language-html">&lt;!-- The minimum viable improvement: one attribute, and the whole player
+     stack is deferred until the user scrolls near it. --&gt;
+&lt;iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"
+        width="560" height="315"
+        loading="lazy"
+        title="Assembly guide: oak dining chair"
+        frameborder="0"
+        allowfullscreen&gt;&lt;/iframe&gt;</code></pre>
+
+        <p>The better answer is a facade: render a static thumbnail and a play button, and only create the iframe on click. Now the cost is paid by people who actually want the video, which on the retailer's assembly-guide pages was 6% of visitors.</p>
+
+        <pre><code class="language-html">&lt;div class="video-facade"
+     data-video-id="dQw4w9WgXcQ"
+     style="aspect-ratio: 16 / 9"&gt;
+  &lt;img src="/media/video/dQw4w9WgXcQ-720.webp"
+       width="1280" height="720" loading="lazy" decoding="async"
+       alt="Assembly guide: oak dining chair"&gt;
+  &lt;button type="button" class="video-facade__play"&gt;
+    Play video (opens YouTube player)
+  &lt;/button&gt;
+&lt;/div&gt;</code></pre>
+
+        <pre><code class="language-javascript">document.addEventListener('click', (e) =&gt; {
+  const btn = e.target.closest('.video-facade__play');
+  if (!btn) return;
+
+  const box = btn.closest('.video-facade');
+  const id = box.dataset.videoId;
+  const frame = document.createElement('iframe');
+
+  // autoplay=1 because the user just asked for it with a click; without it
+  // the facade costs an extra tap and people report it as broken.
+  frame.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&amp;rel=0`;
+  frame.width = 1280; frame.height = 720;
+  frame.title = box.querySelector('img').alt;
+  frame.allow = 'accelerometer; autoplay; encrypted-media; picture-in-picture';
+  frame.allowFullscreen = true;
+  frame.style.cssText = 'width:100%;height:100%;border:0';
+
+  box.replaceChildren(frame);
+}, { passive: true });</code></pre>
+
+        <p>Three things to get right. Use <code>youtube-nocookie.com</code>, which avoids setting tracking cookies until playback and simplifies your consent story considerably. Host the thumbnail yourself rather than hotlinking YouTube's — their image CDN is another origin and another handshake, and their thumbnails are unpredictably sized. And make the play control a real <code>&lt;button&gt;</code>: a div with a click handler is not focusable, not announced, and not operable by keyboard, and this is exactly the kind of component where that gets noticed in an accessibility audit.</p>
+
+        <p>On the retailer's assembly-guide pages, replacing three embedded players with facades cut the page's total transfer from 3.4MB to 610KB and Total Blocking Time from 890ms to 120ms. That is a bigger improvement than every image optimisation on the site combined, achieved in an afternoon.</p>
+
+        <h2>11. Video, Which Has Its Own Rules</h2>
+
+        <p>The <code>&lt;video&gt;</code> element does not support <code>loading="lazy"</code>. Its lever is <code>preload</code>, which has three values and one of them is nearly always right.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>preload</th><th>What it fetches</th><th>When I use it</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>none</code></td><td>Nothing until play</td><td>Default choice for anything below the fold</td></tr>
+            <tr><td><code>metadata</code></td><td>Duration, dimensions, first frames</td><td>When the UI must show a real duration</td></tr>
+            <tr><td><code>auto</code></td><td>As much as the browser likes</td><td>Autoplaying hero video, and only then</td></tr>
+          </tbody>
+        </table>
+
+        <p>The mistake I see most is <code>preload="metadata"</code> everywhere, chosen because it sounds modest. It is not free — it opens a connection, issues a range request, and on some servers pulls a surprising amount of the file before it has enough to report duration. On a page with eight product videos that is eight connections and often a megabyte or two, for information you can put in the HTML as text.</p>
+
+        <pre><code class="language-html">&lt;!-- Below-the-fold product video. poster is what the user sees; the video
+     itself costs nothing until they press play. --&gt;
+&lt;video controls
+       preload="none"
+       poster="/media/video/4471-poster.webp"
+       width="1280" height="720"
+       playsinline&gt;
+  &lt;source src="/media/video/4471.webm" type="video/webm"&gt;
+  &lt;source src="/media/video/4471.mp4"  type="video/mp4"&gt;
+&lt;/video&gt;</code></pre>
+
+        <p>The <code>poster</code> attribute is doing the real work there. It is an ordinary image request, it paints immediately, and it means the element is not an empty black rectangle. Give it the same treatment as any other image: correct dimensions, a modern format, and a size appropriate to its display box.</p>
+
+        <p>For an autoplaying background hero video — which I would usually argue against, but sometimes lose — the rules are different and worth stating. It must be <code>muted</code> or it will not autoplay at all. It must be <code>playsinline</code> or iOS will open it fullscreen. It should be short and heavily compressed, because it is competing with your LCP. And it should be swapped for a static image below a certain viewport width, because nobody on a phone on a train wants three megabytes of decorative video.</p>
+
+        <pre><code class="language-javascript">// Do not autoplay decorative video for people who asked not to have motion,
+// and do not do it on a metered or slow connection.
+const video = document.querySelector('.hero-video');
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const conn = navigator.connection || {};
+const cheap = !conn.saveData &amp;&amp; !/2g/.test(conn.effectiveType || '');
+
+if (video &amp;&amp; !reduced &amp;&amp; cheap &amp;&amp; matchMedia('(min-width: 900px)').matches) {
+  video.preload = 'auto';
+  video.play().catch(() =&gt; { /* autoplay refused; poster stays */ });
+}</code></pre>
+
+        <p>Note the empty catch. <code>play()</code> returns a promise that rejects when the browser declines, and an unhandled rejection there produces console noise on every iOS visit that will bury real errors.</p>
+
+        <h2>12. Placeholders, and What I Stopped Doing</h2>
+
+        <p>The blur-up placeholder — a tiny base64 image inlined into the HTML, blurred with CSS, replaced when the real file arrives — was everywhere for a few years. I built it into three sites and I have since removed it from two.</p>
+
+        <p>The arithmetic stopped working. A base64 placeholder that looks reasonable is 400 to 900 bytes inlined, and base64 costs a third more than the raw bytes. Sixty of those in a category page's HTML adds 40KB to a document that is render-blocking, in order to avoid a grey box for a few hundred milliseconds on images that are below the fold anyway. You are making the critical path worse to improve something nobody sees.</p>
+
+        <p>What I use now, in order of preference.</p>
+
+        <p>A dominant colour, extracted at upload and stored as a hex string. Costs seven bytes in the markup as an inline style, gives the page a coherent look while images arrive, and produces no requests. This is the option I would default to.</p>
+
+        <p>Nothing at all, with correctly reserved space and a neutral background. Genuinely fine for below-the-fold content, and it is what I ship most often now.</p>
+
+        <p>A real blur-up placeholder for one or two hero images per template, where the visual quality of the loading state is worth the bytes. Not for a grid.</p>
+
+        <pre><code class="language-html">&lt;!-- Dominant colour as the reserved box's background. Seven bytes, no
+     request, and it disappears the moment the image paints over it. --&gt;
+&lt;img src="/media/p/4471-600.webp"
+     width="600" height="600"
+     loading="lazy" decoding="async"
+     style="background-color:#c8b49a"
+     alt="Oak dining chair, natural finish"&gt;</code></pre>
+
+        <p>BlurHash and its relatives encode a placeholder into a short string and render it on the client. Clever, and I have used it, but it needs a decoder script and a canvas per image, and on the cheap Android devices where it would matter most that decode work is not free. If you are already running a JavaScript-heavy front end it is defensible. If you are not, it is a lot of machinery for a grey box.</p>
+
+        <h2>13. Scroll Jank, Which Lazy Loading Can Cause</h2>
+
+        <p>Lazy loading trades a load-time cost for a scroll-time one, and if you are careless the scroll-time cost is worse.</p>
+
+        <p>The failure looks like this: user flicks down a long category page, a dozen images enter the threshold simultaneously, twelve requests fire, twelve decodes queue up, and the scroll stutters. It is most visible on mid-range Android, and it does not appear in any lab metric because lab tests do not scroll.</p>
+
+        <p>Three mitigations, roughly in order of effectiveness.</p>
+
+        <p><strong>Widen the threshold.</strong> If images are arriving visibly late, a larger <code>rootMargin</code> on an observer — or accepting the native threshold rather than fighting it — starts the work earlier and spreads it out. Fetching 600px early rather than 200px early costs almost nothing and removes most of the visible pop-in.</p>
+
+        <p><strong>Use <code>content-visibility</code> on off-screen sections.</strong> This lets the browser skip layout and paint for content it knows is out of view, which is a much bigger lever than the image loading itself on a page with hundreds of tiles.</p>
+
+        <pre><code class="language-css">/* Skip rendering work for offscreen rows entirely. contain-intrinsic-size
+   is the estimated height, and it is what stops the scrollbar jumping —
+   without it the browser assumes zero height and the page resizes as you
+   scroll. Get it approximately right; exact is not required. */
+.product-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}</code></pre>
+
+        <p><strong>Cap concurrent decodes.</strong> Rarely necessary, but if you are swapping images in from JavaScript you can serialise the <code>decode()</code> calls rather than firing them all at once. I have needed this exactly once, on a gallery that loaded forty 3000px images.</p>
+
+        <p>The <code>contain-intrinsic-size</code> value is the part people get wrong. Omit it and you get a scrollbar that jumps around as the user scrolls, which is a worse experience than the jank you were fixing. The <code>auto</code> keyword in front of the length tells the browser to remember the real size once it has measured it, which handles variable-height rows properly.</p>
+
+        <h2>14. Crawlers, Print, and the Cases Nobody Tests</h2>
+
+        <p>Googlebot renders pages with a viewport that is very tall — effectively scrolling the page — so native lazy-loaded images are generally discovered and indexed. Generally. The cases where I have seen images fail to index all involved JavaScript-driven lazy loading with a real <code>src</code> that only appears after an intersection event, in a page where something else in the bundle threw an error first.</p>
+
+        <p>Native <code>loading="lazy"</code> keeps the real URL in the <code>src</code> attribute, where every crawler and every parser can see it, and that alone is a good reason to prefer it. If you must use JavaScript, put the real URL in a <code>&lt;noscript&gt;</code> fallback or, better, use a <code>&lt;picture&gt;</code> element whose sources are real.</p>
+
+        <p>Printing is the other overlooked case. A page printed before the user scrolled will print blank boxes where lazy images should be, because they were never fetched. Browsers have improved here — Chrome now loads lazy images when a print is requested — but coverage is inconsistent enough that if printing matters to your business, which it does for order confirmations and picking lists, test it explicitly.</p>
+
+        <pre><code class="language-javascript">// Force everything in before a print dialog. Cheap insurance on templates
+// people actually print.
+window.addEventListener('beforeprint', () =&gt; {
+  document.querySelectorAll('img[loading="lazy"]').forEach(img =&gt; {
+    img.loading = 'eager';
+  });
+});</code></pre>
+
+        <p>The third case is in-page search. Hitting Ctrl+F and jumping to a match deep in the page can scroll past a lot of unloaded content quickly, which produces the same burst of requests as a fast flick. It is not usually a problem, but it is the reason I test long pages by jumping to the bottom rather than by scrolling smoothly.</p>
+
+        <h2>15. Worked Example: The Furniture Retailer, End to End</h2>
+
+        <p>Numbers from the site I opened with, six weeks after we finished, measured on the same set of URLs.</p>
+
+        <p><strong>Starting point.</strong> Category page, mobile, throttled 4G in Lighthouse: LCP 4.1s, CLS 0.24, total transfer 5.2MB, 78 image requests. Field data from CrUX had 62% of mobile sessions failing LCP.</p>
+
+        <p><strong>What we changed, in order, with the measured effect of each.</strong></p>
+
+        <p>Removed <code>loading="lazy"</code> from the LCP image on every template and added <code>fetchpriority="high"</code>. LCP 4.1s to 2.9s. This was one day of work including finding every template and was worth more than everything that followed.</p>
+
+        <p>Added <code>width</code> and <code>height</code> to every image emitted by the product tile component, and an <code>aspect-ratio</code> rule for the recommendation widget we did not control. CLS 0.24 to 0.03.</p>
+
+        <p>Fixed the <code>sizes</code> attribute, which had been <code>100vw</code> on tiles that render at 296px. Transfer 5.2MB to 2.6MB. This was a two-line change and halved the page weight, which tells you something about how much attention <code>sizes</code> usually gets.</p>
+
+        <p>Replaced three YouTube embeds with facades on the guide templates. Total Blocking Time 890ms to 120ms on those pages.</p>
+
+        <p>Added <code>content-visibility: auto</code> to the product rows. No change in any headline metric, but scroll on the test Android device went from visibly stuttering to smooth, and INP at the 75th percentile came down from 260ms to 140ms. That improvement was invisible to Lighthouse and obvious to anyone holding the phone.</p>
+
+        <p><strong>Final numbers.</strong> LCP 2.2s, CLS 0.03, transfer 2.1MB, 31 image requests on initial load. Field data moved to 89% of mobile sessions passing LCP over the following month.</p>
+
+        <p><strong>What went wrong.</strong> Three things, and the third is the one I am least proud of.</p>
+
+        <p>We shipped <code>sizes="auto"</code> without a fallback in the same attribute, on the assumption it would degrade gracefully. In browsers that did not support it the attribute was invalid and ignored, which meant the browser fell back to <code>100vw</code> and picked the largest candidate — so a subset of users got worse image selection than before. Caught in a week by a bandwidth alert. The fix is to write the handwritten expressions after the <code>auto</code> keyword so there is always a valid fallback.</p>
+
+        <p>The <code>content-visibility</code> change broke anchor links into the page, because a browser cannot scroll to content it has not laid out. Chrome has since improved this and the modern <code>hidden=until-found</code> behaviour handles the search case, but at the time we had to exclude any section containing an anchor target. Test your deep links after adding it.</p>
+
+        <p>And I initially argued for keeping the blur-up placeholders because they looked nice, and defended it for two weeks before actually measuring the HTML size. The category page document was 214KB, of which 61KB was base64 placeholder data on a render-blocking response. Removing them took 40ms off First Contentful Paint. I had been arguing from aesthetics and calling it engineering.</p>
+
+        <h2>16. An Audit Script Worth Running</h2>
+
+        <p>Most of this article compresses into a check you can run in the console on any page and get an immediate list of problems.</p>
+
+        <pre><code class="language-javascript">// Paste into the console on a real page. Everything it reports is a bug.
+(() =&gt; {
+  const vh = innerHeight, vw = innerWidth;
+  const problems = [];
+
+  for (const img of document.images) {
+    const r = img.getBoundingClientRect();
+    const inViewport = r.top &lt; vh &amp;&amp; r.bottom &gt; 0 &amp;&amp; r.left &lt; vw &amp;&amp; r.right &gt; 0;
+    const lazy = img.getAttribute('loading') === 'lazy';
+
+    if (inViewport &amp;&amp; lazy) {
+      problems.push(['LAZY IN VIEWPORT', img.currentSrc || img.src]);
+    }
+    if (!img.getAttribute('width') || !img.getAttribute('height')) {
+      problems.push(['NO DIMENSIONS', img.currentSrc || img.src]);
+    }
+    // Downloading more than 1.6x the displayed pixels is wasted bandwidth.
+    const displayed = r.width * devicePixelRatio;
+    if (img.naturalWidth &amp;&amp; displayed &amp;&amp; img.naturalWidth &gt; displayed * 1.6) {
+      problems.push([
+        `OVERSIZED ${img.naturalWidth}px for ${Math.round(displayed)}px`,
+        img.currentSrc || img.src
+      ]);
+    }
+  }
+
+  const eagerFrames = [...document.querySelectorAll('iframe')]
+    .filter(f =&gt; f.getAttribute('loading') !== 'lazy');
+  eagerFrames.forEach(f =&gt; problems.push(['EAGER IFRAME', f.src]));
+
+  console.table(problems);
+})();</code></pre>
+
+        <p>I run this on every site I am handed, before reading any code. It takes fifteen seconds and it usually finds the two changes worth most of the available improvement. The oversized-image check in particular tends to produce an uncomfortably long list; the 1.6x multiplier is deliberately forgiving, because responsive breakpoints mean some overshoot is unavoidable and only the egregious cases are worth acting on.</p>
+
+        <h2>17. Questions I Get Asked</h2>
+
+        <p><strong>"Should I just lazy load everything below the fold?"</strong> Nearly, yes — with the caveat that "below the fold" depends on viewport, and the fold on a 1440px desktop monitor is a long way from the fold on a phone. My working rule is that the first screenful at mobile width is eager, plus one more element for safety, and everything past that is lazy. Since the browser's own threshold is over a thousand pixels anyway, being slightly conservative costs you nothing.</p>
+
+        <p><strong>"Does lazy loading hurt SEO?"</strong> Native lazy loading does not, because the URL is in the <code>src</code> attribute where every crawler can read it. JavaScript-based lazy loading can, particularly for image search, when the real URL only exists in a data attribute until a script runs. If images appearing in Google Images matters to you, use the native attribute and provide an image sitemap.</p>
+
+        <p><strong>"What about images inside a tab or accordion that is closed?"</strong> Elements inside a <code>display: none</code> container have no layout box, so the browser cannot compute their distance from the viewport and does not load them. That is usually what you want. It becomes a problem when the tab opens and forty images start loading at once into a container the user is looking at — so for tabs where the content is heavy, I preload the first tab's images and lazy the rest, treating each tab as its own page.</p>
+
+        <p><strong>"Is there a point where I have too few images to bother?"</strong> Yes. Below roughly ten images on a page, the difference is not worth the risk of getting the LCP image wrong. I would still add width and height attributes, because those are about layout stability rather than loading, and they help regardless of count.</p>
+
+        <p><strong>"Our CMS emits images through a component. Can I default it to lazy?"</strong> Default it to lazy and make the eager case an explicit prop that the template must pass — but add a build-time or runtime check that at least one image per page has it. A default that is silently wrong on the most important image is exactly how the incident at the top of this article happened.</p>
+
+        <p><strong>"How does this interact with a CDN that resizes on the fly?"</strong> Well, and it is the setup I would choose. An image CDN that reads the <code>Accept</code> header, serves AVIF or WebP, and resizes to a width in the URL removes the build-time work of generating candidates. What it does not do is choose the right candidate for you — that is still <code>srcset</code> and <code>sizes</code>, and a CDN will happily serve you a perfectly optimised 1600px file into a 296px box.</p>
+
+        <p><strong>"Should the LCP image be preloaded in the head?"</strong> Sometimes. If the image is in the initial HTML with <code>fetchpriority="high"</code>, a preload adds little, because the preload scanner already found it. If the image URL is only known after JavaScript runs — a personalised hero, a client-rendered banner — then a preload is the only way to start the fetch early, and it is worth the markup. If the image is set by CSS as a background, a preload is essentially mandatory, because CSS backgrounds are not fetched until the CSSOM is built and the element is matched.</p>
+
+        <h2>18. What I'd Do First</h2>
+
+        <p>In this order, on a site you have just been handed.</p>
+
+        <p><strong>One.</strong> Open the three highest-traffic templates at mobile viewport size and run the audit script above. Write down what it finds. This is fifteen minutes and it will tell you whether the rest of the list is worth doing.</p>
+
+        <p><strong>Two.</strong> Identify the LCP element on each template using the attribution observer, and make sure it is eager, has <code>fetchpriority="high"</code>, and is not inside a lazily-initialised component. Nothing else on this list matters as much.</p>
+
+        <p><strong>Three.</strong> Put <code>width</code> and <code>height</code> on every image the site emits, and check that no stylesheet is setting <code>img { width: 100% }</code> without <code>height: auto</code>. This is the cheapest CLS fix that exists.</p>
+
+        <p><strong>Four.</strong> Read your <code>sizes</code> attributes and check them against the rendered width of the element. Expect to find them wrong. This is frequently the largest bandwidth saving available and it takes an afternoon.</p>
+
+        <p><strong>Five.</strong> Add <code>loading="lazy"</code> to every iframe on the site, then replace the video embeds on your highest-traffic template with facades. If you have embeds at all, this will beat every image change you make.</p>
+
+        <p><strong>Six.</strong> Only now, add <code>loading="lazy"</code> to below-the-fold images. Doing it last rather than first means the LCP element is already protected, which is the entire difference between the release that helped and the release that did not.</p>
+
+        <p><strong>Seven.</strong> Put an assertion in CI that fails if the LCP element on any monitored URL has <code>loading="lazy"</code>. It is five lines and it stops the whole thing regressing the next time someone applies a checklist globally. If you are already tracking <a href="/blog/core-web-vitals-optimization/">Core Web Vitals in your build pipeline</a>, this belongs in the same place.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/advanced-image-optimization/">Advanced Image Optimization for SEO & Performance</a></strong>
+              <strong><a href="/blog/advanced-image-optimization/">Advanced Image Optimization for SEO &amp; Performance</a></strong>
               <p>WebP/AVIF responsive picture elements.</p>
             </li>
             <li>
@@ -235,7 +744,6 @@ document.querySelectorAll('.lazy-widget').forEach(el => observer.observe(el));</
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -269,6 +777,6 @@ document.querySelectorAll('.lazy-widget').forEach(el => observer.observe(el));</
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

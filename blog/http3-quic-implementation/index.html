@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Implementing HTTP/3 with QUIC for Magento & Shopify | MODRACX</title>
-  <meta name="description" content="Technical engineering guide on deploying HTTP/3 over UDP-based QUIC protocol on Nginx/Cloudflare for Magento 2 and Shopify Plus." />
+  <meta name="description" content="What QUIC really changes for a store: stream-level head-of-line blocking, connection migration, 0-RTT replay risk, CDN deployment and unbiased measurement." />
   <meta property="og:title" content="Implementing HTTP/3 with QUIC for Magento & Shopify | MODRACX" />
   <meta property="og:description" content="Technical engineering guide on deploying HTTP/3 over QUIC by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Implementing HTTP/3 with QUIC for Magento & Shopify</h1>
-        <p class="lede">HTTP/3 replaces TCP with UDP-based QUIC, eliminating Head-of-Line blocking on lossy cellular networks. Learn how to configure Nginx QUIC modules and Alt-Svc headers.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Implementing HTTP/3 with QUIC for Magento &amp; Shopify</h1>
+        <p class="lede">We enabled HTTP/3 and the median LCP moved by 11ms. At the 95th percentile it moved by 780ms. What QUIC actually changes, and how to measure it without fooling yourself.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,23 +205,496 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Nginx Alt-Svc HTTP/3 Header Configuration</h2>
+        <h2>1. We Turned It On, And The Median Did Not Move</h2>
 
-        <pre><code class="language-nginx"># Nginx HTTP/3 QUIC Configuration
+        <p>A sports nutrition retailer asked me to enable HTTP/3 in March. Their CDN had a toggle. I flipped it, waited a fortnight, pulled the field data, and found that the median Largest Contentful Paint had changed by 11 milliseconds — which on a sample of 340,000 page views is not a change at all, it is noise wearing a hat.</p>
+
+        <p>The marketing team had been told HTTP/3 was faster. I had, implicitly, told them the same thing. So I spent a day looking properly, and the story turned out to be more interesting than either "it works" or "it doesn't".</p>
+
+        <p>At the 50th percentile: nothing. At the 75th: about 60ms better. At the 95th: 780ms better. And when I split by connection type, essentially all of the gain came from sessions on cellular networks, with the biggest effects on 4G connections in areas with patchy coverage. On desktop broadband, HTTP/3 was very slightly <em>worse</em> — a few milliseconds, attributable to the extra work of discovering the protocol on the first request.</p>
+
+        <p>That is, once you understand what QUIC actually changes, exactly the result you should predict. QUIC fixes problems that only exist when packets get lost or when the network path changes. On a clean wired connection there are no lost packets and the path never changes, so there is nothing to fix. On a phone on a train, both happen constantly.</p>
+
+        <p>This article is about what QUIC genuinely changes, what it costs to run, the one security decision that can lose you money if you get it wrong, and how to measure whether it helped without fooling yourself. The handshake and cipher mechanics of TLS 1.3 and the multiplexing model of HTTP/2 are covered in the piece on <a href="/blog/http2-tls13-implementation/">HTTP/2 and TLS 1.3 configuration</a>; I am going to assume those and talk about the delta.</p>
+
+        <h2>2. The One-Sentence Version, And Why It Understates Things</h2>
+
+        <p>HTTP/3 is HTTP semantics carried over QUIC, and QUIC is a transport protocol built on UDP that provides ordered reliable streams, congestion control and TLS 1.3 encryption in a single layer.</p>
+
+        <p>Every word of that is true and it makes QUIC sound like TCP with a different name. The consequential differences are structural:</p>
+
+        <p><strong>Streams are independent all the way down.</strong> In HTTP/2 the streams are multiplexed on top of a single TCP byte stream, so TCP's ordering guarantee applies to all of them collectively. QUIC implements streams in the transport itself, so a lost packet only stalls the stream it belonged to.</p>
+
+        <p><strong>The connection is not identified by the four-tuple.</strong> TCP connections are identified by source IP, source port, destination IP and destination port. Change any of them and the connection is dead. QUIC connections carry an explicit connection ID, so the connection survives an IP change.</p>
+
+        <p><strong>Encryption is not a layer on top; it is the same layer.</strong> The transport handshake and the TLS handshake are one exchange, which is where the round-trip saving comes from. It also means almost the entire packet — including most of the header — is encrypted and authenticated, so middleboxes cannot inspect or modify it. That is the real reason QUIC is deployable at all: TCP extensions have been effectively frozen for two decades because middleboxes drop anything they do not recognise.</p>
+
+        <p><strong>It runs in user space.</strong> TCP lives in the kernel and you get the version your operating system ships. QUIC is implemented in the application, so it can be updated on your deploy cycle rather than your kernel upgrade cycle. That is a genuine long-term advantage and it costs CPU, which we will come to.</p>
+
+        <h2>3. Head-Of-Line Blocking: The Part HTTP/2 Did Not Fix</h2>
+
+        <p>This is the headline benefit and it is routinely explained wrongly, including by me for about two years.</p>
+
+        <p>HTTP/1.1 had head-of-line blocking at the request level: one connection, one request at a time, so a slow response blocked everything behind it. HTTP/2 fixed that with multiplexing — many streams over one connection, interleaved. Problem solved, and it genuinely was, at the HTTP layer.</p>
+
+        <p>But TCP delivers bytes in order. It has to; that is its contract. So when HTTP/2 multiplexes twenty streams onto one TCP connection and a single packet is lost, TCP holds back every byte that arrived after the missing one until the retransmission arrives — including bytes belonging to the other nineteen streams, which are complete and sitting in the kernel buffer. The application cannot have them. It does not know they exist.</p>
+
+        <p>On a connection with 2% packet loss and a 60ms round trip, that retransmission costs at least 60ms and often more, and during it your CSS, your fonts and your product images are all frozen even though only one of them was affected.</p>
+
+        <p>QUIC's streams are transport-level constructs with their own sequencing. A lost packet carrying data for stream 7 blocks stream 7. Streams 3, 9 and 15 continue delivering. That is the whole idea, and its value is precisely proportional to your packet loss rate.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Network</th><th>Typical loss</th><th>Realistic HTTP/3 benefit</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Wired broadband, same country</td><td>under 0.1%</td><td>Negligible</td></tr>
+            <tr><td>Good home Wi-Fi</td><td>0.1–0.5%</td><td>Small, tens of ms at p75</td></tr>
+            <tr><td>4G, good signal</td><td>0.5–1.5%</td><td>Noticeable at p75</td></tr>
+            <tr><td>4G, congested or moving</td><td>2–5%</td><td>Large, hundreds of ms at p95</td></tr>
+            <tr><td>Congested public Wi-Fi</td><td>2–8%</td><td>Large, and highly variable</td></tr>
+            <tr><td>Satellite / very high latency</td><td>varies</td><td>Handshake saving dominates</td></tr>
+          </tbody>
+        </table>
+
+        <p>So the honest framing for a stakeholder is not "HTTP/3 makes the site faster". It is "HTTP/3 makes the worst sessions substantially less bad, and the worst sessions are disproportionately mobile customers, who are most of our traffic". That is a real benefit and it happens to be the one that moves Core Web Vitals, since those are reported at the 75th percentile rather than the median.</p>
+
+        <p>One caveat that took me a while to internalise: removing transport head-of-line blocking does not remove <em>application</em> head-of-line blocking. If your page cannot render until a render-blocking stylesheet arrives, and that stylesheet's stream is the one that lost a packet, you wait regardless. QUIC helps because the other streams keep flowing, not because the blocked one gets faster. Resource prioritisation still matters, and arguably matters more.</p>
+
+        <h2>4. Connection Migration, And Why It Matters On A Train</h2>
+
+        <p>This is the feature I find hardest to demonstrate and easiest to appreciate once you have seen it fail.</p>
+
+        <p>A customer is browsing your store on their phone on Wi-Fi at home. They walk out of the door. The phone drops to cellular, which means a new IP address. Every TCP connection they had open is now dead — not closed, just dead, because the server will send packets to an address nobody is listening on. The browser eventually times out and opens new connections, redoing DNS, TCP handshake and TLS handshake. From the user's perspective the page hangs for several seconds and then recovers.</p>
+
+        <p>QUIC connections are identified by a connection ID that both endpoints agreed on, independent of the IP addresses. When the client's address changes, it sends packets from the new address with the same connection ID. The server validates that the client can receive at the new address — a short path validation exchange, one round trip — and carries on. No new handshake, no new TLS, no re-fetching anything.</p>
+
+        <p>Whether this matters to you depends entirely on session shape. For a news site where someone reads one article and leaves, almost never. For a store where the median session is four minutes across seven page views, and a meaningful share of that traffic is on phones in motion, it happens more than you would think. On the client I mentioned, we saw roughly 3% of mobile sessions include at least one network change, and those sessions had a bounce rate about a third higher than comparable sessions without one.</p>
+
+        <p>The part that is easy to miss operationally: connection migration only works if your infrastructure routes by connection ID rather than by four-tuple. A UDP load balancer doing plain hashing on source address and port will send the migrated packets to a different backend, which has never heard of that connection ID and will drop them. You have then broken the feature you were trying to enable, and it will look like intermittent stalls that nobody can reproduce.</p>
+
+        <pre><code class="language-nginx"># Nginx 1.25+ can encode routing information into the connection ID
+# so a load balancer or a sibling worker can route migrated packets
+# back to the right place.
+quic_bpf on;   # requires Linux with eBPF support; routes across workers
+
+# Without this, a multi-worker Nginx will drop migrated connections
+# that land on a different worker than the one holding the state.</code></pre>
+
+        <p>If you are behind a CDN, this is the CDN's problem and they have solved it. That is one of several reasons the CDN route is the one I recommend, and I will come back to it.</p>
+
+        <h2>5. The Handshake, And Where The Round Trip Goes</h2>
+
+        <p>Counting round trips before the first byte of your HTML can be sent:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Protocol</th><th>New connection</th><th>Resumed connection</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>HTTP/2 over TLS 1.2</td><td>3 RTT (TCP 1 + TLS 2)</td><td>2 RTT</td></tr>
+            <tr><td>HTTP/2 over TLS 1.3</td><td>2 RTT (TCP 1 + TLS 1)</td><td>1 RTT, or 0 with early data</td></tr>
+            <tr><td>HTTP/3 (QUIC)</td><td>1 RTT</td><td>0 RTT</td></tr>
+          </tbody>
+        </table>
+
+        <p>On a 60ms round trip that is 60ms saved against a well-configured HTTP/2 stack on a fresh connection. On a 200ms round trip — a customer in Australia hitting a European origin, or a poor mobile connection where the round trip is inflated by radio scheduling rather than distance — it is 200ms, and that is the case where it is worth having.</p>
+
+        <p>The saving is smaller than the marketing suggests because it is measured against TLS 1.3, which most people already run. Against the TLS 1.2 stack a store might have been running in 2018, HTTP/3 looks miraculous. Against a current HTTP/2 setup it is one round trip.</p>
+
+        <p>And that one round trip only applies to connections you actually establish. A returning visitor with a warm connection pays nothing on either protocol. The handshake saving matters most for first-time visitors, for users arriving from an ad click, and for anything where the connection was idle long enough to be closed — which is a shorter window than most people assume, since mobile networks and NAT devices routinely reap idle UDP mappings after 30 seconds.</p>
+
+        <h2>6. 0-RTT: The Feature That Can Cost You Money</h2>
+
+        <p>0-RTT lets a returning client send application data in its very first packet, using a pre-shared key from a previous session. Zero round trips before the request is on the wire. It is the most impressive number in the QUIC brochure and it is the one thing in this article I would tell you to think carefully about before enabling.</p>
+
+        <p>The problem is replay. Data sent in 0-RTT is not protected against replay by the protocol, and cannot be — the server has no fresh randomness from the client to bind it to. An attacker who captures a 0-RTT packet can send it again, and the server will process it again. There is no way to distinguish a replay from a legitimate retransmission by inspection.</p>
+
+        <p>The mitigations are all partial. Servers keep an anti-replay cache of recently seen tickets, which works within one server but not across a fleet unless the cache is shared, and not across the ticket lifetime unless the cache is enormous. Both the TLS 1.3 and QUIC specifications are explicit that the application must decide what is safe to accept.</p>
+
+        <p>Now make it concrete for a store. Suppose 0-RTT is enabled indiscriminately and an attacker replays a captured request:</p>
+
+        <p>A replayed <code>GET /product/whey-protein</code> is harmless. It is a cache hit, it changes nothing, and the worst outcome is a distorted analytics count.</p>
+
+        <p>A replayed <code>POST /cart/add</code> adds the item again. Annoying, recoverable, and a support ticket.</p>
+
+        <p>A replayed <code>POST /coupon/apply</code> against a single-use discount code might, depending entirely on how your coupon redemption is implemented, consume a second redemption or stack a discount. On one Magento build I looked at, a promotion rule with a usage-per-customer limit was decremented before the order completed, so replaying the request burned the customer's allocation without giving them anything.</p>
+
+        <p>A replayed request that triggers an outbound side effect — a webhook to an ERP, an email, a payment authorisation — is the case that costs real money. Card authorisation endpoints should be idempotent anyway and every serious PSP supports idempotency keys, but "should be" is doing a lot of work in that sentence.</p>
+
+        <p>The rule I apply without exception: <strong>0-RTT is for idempotent GET requests only, and never for anything behind authentication.</strong> Configure it at the edge so that early data on any non-idempotent method is rejected and the client retries in the normal 1-RTT flow, which costs one round trip on a request that was going to be slow anyway.</p>
+
+        <pre><code class="language-nginx"># Nginx: accept early data, but make the application decide.
+ssl_early_data on;
+
+# The header tells the upstream that this request arrived as early
+# data. Without it, PHP has no way to know and cannot protect itself.
+proxy_set_header Early-Data $ssl_early_data;
+
+# Bluntest safe option: refuse early data for anything that mutates.
+map $request_method $reject_early {
+    default  0;
+    POST     1;
+    PUT      1;
+    PATCH    1;
+    DELETE   1;
+}
+
 server {
-    listen 443 quic reuseport;
-    listen 443 ssl http2;
-    server_name modracx.com;
-
-    # Alt-Svc Header advertises HTTP/3 availability to browser
-    add_header Alt-Svc 'h3=":443"; ma=86400';
+    location / {
+        # 425 Too Early tells a conforming client to retry the request
+        # after the handshake completes. Browsers handle this correctly.
+        if ($ssl_early_data = 1) {
+            set $early_and_mutating "$reject_early";
+        }
+        if ($early_and_mutating = 1) { return 425; }
+    }
 }</code></pre>
 
-        <hr />
+        <p>And defend in the application too, because edge configuration drifts:</p>
+
+        <pre><code class="language-php">&lt;?php
+// Front-controller guard. Cheap, and it survives someone changing
+// the CDN config without telling you.
+$early = ($_SERVER['HTTP_EARLY_DATA'] ?? '0') === '1';
+
+if ($early) {
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    $safe   = in_array($method, ['GET', 'HEAD', 'OPTIONS'], true);
+
+    // Even a GET is unsafe if it carries a session that can act.
+    $authenticated = !empty($_COOKIE['PHPSESSID'])
+                  &amp;&amp; str_starts_with($_SERVER['REQUEST_URI'], '/customer');
+
+    if (!$safe || $authenticated) {
+        http_response_code(425);          // Too Early
+        header('Retry-After: 0');
+        exit;
+    }
+}
+</code></pre>
+
+        <p>My honest position: for most stores, enable 0-RTT for static assets and anonymous cacheable pages, and disable it everywhere else. The gain on a mutating request is one round trip on a path that is already doing database work; the risk is a class of bug that is nearly impossible to reproduce and will be blamed on something else for weeks. If you cannot cleanly separate the two, turn it off entirely and take the 1-RTT handshake, which is still better than what you had.</p>
+
+        <h2>7. How A Browser Even Finds Out You Speak HTTP/3</h2>
+
+        <p>There is no way to open an HTTP/3 connection to a server you have never spoken to, because the browser has no way to know the server supports it and cannot afford to try UDP and wait for a timeout. So the first connection is always TCP.</p>
+
+        <p>The standard discovery mechanism is the <code>Alt-Svc</code> header, sent over the HTTP/2 response, advertising that the same origin is available over HTTP/3 at a given port for a given duration. The browser caches that and uses QUIC next time.</p>
+
+        <pre><code class="language-nginx">server {
+    listen 443 ssl;
+    listen 443 quic reuseport;      # reuseport on exactly one server block
+    http2 on;
+
+    # ma is the cache lifetime in seconds. 86400 is a day; I use
+    # a shorter value while rolling out so a rollback takes effect
+    # quickly rather than being pinned in browser caches.
+    add_header Alt-Svc 'h3=":443"; ma=86400' always;
+
+    # Advertise on every response including errors, or a client whose
+    # first request 404s never learns about HTTP/3.
+}</code></pre>
+
+        <p>The consequence people miss: for a first-time visitor, HTTP/3 does nothing at all. The entire first page load is HTTP/2. If your traffic is heavily weighted toward one-page visits from paid social, the share of requests that ever use HTTP/3 will be much lower than you expect. On the nutrition client, 62% of requests used HTTP/3 after four weeks; on a different site with far higher new-visitor share it was 41%.</p>
+
+        <p>The way to fix the first visit is a DNS HTTPS resource record — SVCB's HTTP-specific form, RFC 9460 — which advertises protocol support in DNS, before any connection is made. Chrome and Safari both use it. It also lets you publish the ALPN list and, usefully, the ECH configuration.</p>
+
+        <pre><code class="language-dns">; HTTPS RR: priority 1, "." means the target is the owner name itself.
+; alpn lists the protocols; h3 first means the client can go straight
+; to QUIC on the very first connection.
+example.com.     300  IN  HTTPS  1 . alpn="h3,h2" ipv4hint="203.0.113.10"
+www.example.com. 300  IN  HTTPS  1 . alpn="h3,h2"</code></pre>
+
+        <p>Most managed DNS providers support this now; Cloudflare publishes it automatically when HTTP/3 is on. If you run your own DNS, check that your provider's UI actually supports type 65 records rather than requiring a generic <code>TYPE65 \# ...</code> hex blob, because hand-encoding those is exactly as unpleasant as it sounds and I have got it wrong twice.</p>
+
+        <h2>8. The Realistic Deployment: Let The CDN Do It</h2>
+
+        <p>Here is my opinion, stated plainly: for the overwhelming majority of ecommerce sites, you should enable HTTP/3 at your CDN and not run it on your origin at all.</p>
+
+        <p>The reasoning is about where the benefit lives. QUIC's advantages apply to the lossy, high-latency, mobile leg of the connection — which is the leg between the customer and the nearest edge point of presence. The leg between the edge and your origin is a stable, low-loss, often long-lived connection over good transit, which is exactly the case where TCP works fine. Running QUIC on that leg buys you very little and costs you a UDP-capable origin, firewall changes, kernel tuning and a new class of operational failure.</p>
+
+        <p>Cloudflare, Fastly, CloudFront, Akamai and Bunny all support HTTP/3 to the client with a checkbox or a single API call. Shopify serves HTTP/3 by default, and if you are on Shopify this entire section is not a decision you have.</p>
+
+        <pre><code class="language-bash"># Cloudflare: enable HTTP/3 and confirm it took
+curl -sX PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/http3" \
+  -H "Authorization: Bearer $CF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"value":"on"}' | jq '.result.value'
+
+# 0-RTT is a separate setting and defaults to off. Leave it off unless
+# you have implemented the Early-Data guards described above.
+curl -sX PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/0rtt" \
+  -H "Authorization: Bearer $CF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"value":"off"}' | jq '.result.value'</code></pre>
+
+        <p>The exception where origin HTTP/3 is worth it: you are not using a CDN at all, you serve a geographically concentrated audience directly, and a meaningful share of them are on mobile networks. That describes some regional retailers. It does not describe most stores, and if you are weighing whether to add a CDN or add QUIC to your origin, add the CDN — the caching and the proximity are worth far more than the transport. The trade-offs of running several are covered in the piece on <a href="/blog/multi-cdn-strategies/">multi-CDN strategies</a>.</p>
+
+        <h2>9. Running It Yourself On Nginx</h2>
+
+        <p>If you do run it yourself: mainline Nginx has supported QUIC since 1.25.0, but only when built against a TLS library that exposes the QUIC APIs. OpenSSL 3.x's built-in QUIC support is not what Nginx needs; you want BoringSSL, quictls, or LibreSSL. Distribution packages frequently are not built this way, which is the first thing to check when <code>listen 443 quic</code> produces an "unknown directive" error.</p>
+
+        <pre><code class="language-bash"># Verify the binary actually has QUIC and which TLS library it used
+nginx -V 2&gt;&amp;1 | tr ' ' '\n' | grep -E 'http_v3|quic|ssl'
+
+# Build against BoringSSL if the packaged build lacks it
+git clone --depth 1 https://boringssl.googlesource.com/boringssl
+cmake -B boringssl/build -S boringssl -DCMAKE_BUILD_TYPE=Release
+cmake --build boringssl/build -j"$(nproc)"
+
+./configure --with-http_v3_module --with-http_ssl_module \
+  --with-cc-opt="-I../boringssl/include" \
+  --with-ld-opt="-L../boringssl/build/ssl -L../boringssl/build/crypto"</code></pre>
+
+        <p>A working server block, with the settings that are not obvious:</p>
+
+        <pre><code class="language-nginx">http {
+    # QUIC needs TLS 1.3. There is no QUIC over TLS 1.2, ever.
+    ssl_protocols TLSv1.3 TLSv1.2;
+
+    server {
+        listen 443 ssl;
+        listen [::]:443 ssl;
+        listen 443 quic reuseport;      # only one block gets reuseport
+        listen [::]:443 quic reuseport;
+
+        http2 on;
+        http3 on;
+
+        # Retry packets defend against address-spoofing floods by
+        # forcing the client to prove it can receive at its address.
+        # Costs one round trip when triggered; enable it on a public origin.
+        quic_retry on;
+
+        # Route migrated connections to the right worker via eBPF.
+        quic_bpf on;
+
+        # 1450 keeps the QUIC packet inside a 1500-byte MTU with room
+        # for IPv6 and UDP headers. Larger risks fragmentation, which
+        # QUIC handles badly because it forbids IP fragmentation.
+        quic_gso on;
+
+        add_header Alt-Svc 'h3=":443"; ma=86400' always;
+
+        ssl_certificate     /etc/ssl/acme/fullchain.pem;
+        ssl_certificate_key /etc/ssl/acme/privkey.pem;
+    }
+}</code></pre>
+
+        <p>And the kernel tuning, which is not optional and is the single most common reason a self-hosted QUIC deployment performs worse than the TCP it replaced:</p>
+
+        <pre><code class="language-bash"># /etc/sysctl.d/99-quic.conf
+# QUIC does its congestion control in user space and reads packets in
+# large batches. The default UDP buffers are sized for DNS and will
+# drop packets under any real load, which QUIC then interprets as
+# congestion and slows down in response. This is the classic
+# "we enabled HTTP/3 and it got slower" cause.
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.rmem_default = 1048576
+net.core.wmem_default = 1048576
+net.core.netdev_max_backlog = 8192
+
+# Check for drops after a load test; a non-zero and growing value in
+# the RcvbufErrors column means the buffers are still too small.
+netstat -su | grep -A4 Udp:</code></pre>
+
+        <p>The CPU cost is real and worth budgeting for. Because QUIC runs in user space, every packet crosses the kernel boundary and the encryption happens per-packet rather than per-record. On the hardware I have measured, serving the same traffic over HTTP/3 rather than HTTP/2 costs roughly 1.5 to 2 times the CPU, before GSO and hardware offload. Generic segmentation offload recovers a good chunk of that; <code>quic_gso on</code> is not a micro-optimisation.</p>
+
+        <h2>10. UDP Is Where The Operational Surprises Live</h2>
+
+        <p>Everything about TCP on port 443 is understood by every piece of network equipment on earth. UDP on port 443 is not.</p>
+
+        <p>Some corporate networks block outbound UDP/443 entirely, on the reasonable-sounding grounds that it is not a protocol they recognise and it defeats their inspection appliance. Some mobile carriers rate-limit it. Some hotel and airport captive portals mangle it. The good news is that browsers handle this correctly: they race the QUIC attempt against a TCP connection and use whichever completes, so a blocked path degrades to HTTP/2 rather than failing. The bad news is that the race costs a little time on every affected session, and you will never hear about it from users because the site still works.</p>
+
+        <p>Things to check before you go live on your own infrastructure:</p>
+
+        <p><strong>The security group or firewall</strong> must allow inbound UDP/443. This sounds trivial and it is the single most common reason a correctly configured Nginx serves no HTTP/3 at all. Test from outside your network, not from a box in the same VPC.</p>
+
+        <p><strong>The load balancer</strong> must support UDP and must route by connection ID. AWS Network Load Balancer handles UDP but hashes on the four-tuple, which breaks connection migration; Application Load Balancer did not support HTTP/3 to the origin at all for a long time. Check the current capability rather than trusting a blog post, including this one.</p>
+
+        <p><strong>Amplification limits.</strong> QUIC servers must not send more than three times the bytes received from an unvalidated address, to prevent being used as a reflection amplifier. That constrains how much of your response can go out before validation completes, and if your TLS certificate chain is large the handshake itself may need an extra round trip. Trimming a chain from four certificates to two is a real and free improvement here — one of the few places where certificate chain length has a measurable performance effect.</p>
+
+        <p><strong>DDoS characteristics differ.</strong> UDP floods are easier to spoof than TCP SYN floods. <code>quic_retry on</code> is the built-in defence and you should have it on for any origin exposed directly to the internet. Behind a CDN, this is handled for you.</p>
+
+        <p><strong>Your monitoring probably does not see it.</strong> If your synthetic checks use <code>curl</code> without HTTP/3 support, or your uptime monitor only speaks TCP, HTTP/3 could be completely broken for a week without a single alert. Add an explicit HTTP/3 check.</p>
+
+        <pre><code class="language-bash"># curl needs an HTTP/3-capable build; --http3-only fails rather than
+# silently falling back, which is what you want in a monitor.
+curl --http3-only -sS -o /dev/null -w '%{http_version} %{time_total}\n' \
+  https://www.example.com/
+
+# Confirm the advertisement is present on a normal HTTP/2 response
+curl -sI https://www.example.com/ | grep -i alt-svc</code></pre>
+
+        <h2>11. Measuring It Without Fooling Yourself</h2>
+
+        <p>This is the section I would keep if I had to delete the rest, because the natural way to measure HTTP/3 gives you a badly biased answer.</p>
+
+        <p>The obvious approach is to record which protocol each page view used, then compare the two groups. The Navigation Timing API tells you directly:</p>
+
+        <pre><code class="language-javascript">// nextHopProtocol: 'h3' | 'h2' | 'http/1.1'
+const nav = performance.getEntriesByType('navigation')[0];
+const proto = nav?.nextHopProtocol || 'unknown';
+
+// Attach it to your RUM beacon alongside the vitals
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    navigator.sendBeacon('/rum', JSON.stringify({
+      metric: entry.name,
+      value: entry.value,
+      proto,
+      // Connection info is Chromium-only but invaluable for the split
+      effectiveType: navigator.connection?.effectiveType,
+      rtt: navigator.connection?.rtt,
+      saveData: navigator.connection?.saveData === true,
+    }));
+  }
+}).observe({ type: 'largest-contentful-paint', buffered: true });</code></pre>
+
+        <p>Now the bias. The set of sessions that use HTTP/3 is not a random sample. It excludes first-time visitors, who are always HTTP/2 on their first load and who tend to have colder caches and worse metrics. It excludes users on networks that block UDP, which skews corporate. It over-represents returning visitors, who have warm caches and better metrics for reasons that have nothing to do with the transport.</p>
+
+        <p>So a naive comparison shows HTTP/3 dramatically ahead, and most of that gap is the returning-visitor effect. I have seen this presented as a result in a board deck. It is not a result.</p>
+
+        <p>The measurement designs that actually work, in ascending order of effort:</p>
+
+        <p><strong>Compare a time window against itself.</strong> Enable, wait a fortnight, and compare the same day-of-week traffic before and after, segmented by device and connection type. Crude, vulnerable to seasonality, but it does not have the selection problem, and for a change this size it is usually adequate.</p>
+
+        <p><strong>Restrict the comparison to returning visitors on both arms.</strong> Filter to sessions with a warm cache — a repeat visitor flag you set yourself — and compare within that population. This removes the largest confound at the cost of a smaller sample.</p>
+
+        <p><strong>Randomise the advertisement.</strong> The clean version: for a random half of visitors, do not send the <code>Alt-Svc</code> header, so they stay on HTTP/2 by assignment rather than by circumstance. Bucket by a first-party cookie so assignment is sticky. This is a real A/B test and it is the only design that gives a defensible number.</p>
+
+        <pre><code class="language-nginx"># Sticky 50/50 assignment: only advertise HTTP/3 to the treatment arm.
+# The cookie is set by the application on first response.
+map $cookie_h3exp $advertise_h3 {
+    "treatment"  1;
+    default      0;
+}
+
+server {
+    add_header Alt-Svc $h3_header always;
+}
+
+map $advertise_h3 $h3_header {
+    1  'h3=":443"; ma=86400';
+    0  '';
+}</code></pre>
+
+        <p>One warning about that design: browsers cache the <code>Alt-Svc</code> advertisement for its <code>ma</code> lifetime, so a user assigned to treatment stays on HTTP/3 for up to a day even after reassignment, and a user who was in treatment before you started the experiment is contaminated. Set <code>ma</code> short — 600 seconds — for the duration of the experiment, and discard the first day of data.</p>
+
+        <p>Do not use synthetic testing to evaluate this at all. Lighthouse runs on a simulated network with a configured loss rate of zero. QUIC's central benefit is invisible under those conditions, and you will conclude it does nothing. If you want a lab signal, use a network emulator with deliberate loss.</p>
+
+        <pre><code class="language-bash"># Emulate a bad 4G connection to see what QUIC is actually for.
+# 2% loss, 80ms delay with 20ms jitter, 12mbit ceiling.
+sudo tc qdisc add dev eth0 root netem \
+  loss 2% delay 80ms 20ms distribution normal rate 12mbit
+
+# ...run the comparison...
+
+sudo tc qdisc del dev eth0 root</code></pre>
+
+        <h2>12. The Numbers From The Nutrition Client</h2>
+
+        <p>Four weeks before and four weeks after, Cloudflare in front of a Magento 2.4.6 origin, roughly 1.4 million page views per period, 71% mobile. Comparison restricted to returning visitors to control for the cache-warmth confound, segmented by connection type. LCP at the 75th percentile, in milliseconds:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Segment</th><th>HTTP/2</th><th>HTTP/3</th><th>Delta</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Desktop, wired</td><td>1,840</td><td>1,851</td><td>+11 (worse)</td></tr>
+            <tr><td>Mobile, 4G, good signal</td><td>2,610</td><td>2,470</td><td>−140</td></tr>
+            <tr><td>Mobile, 4G, weak signal</td><td>4,930</td><td>4,120</td><td>−810</td></tr>
+            <tr><td>Mobile, 3G or slow-4G</td><td>7,220</td><td>6,050</td><td>−1,170</td></tr>
+            <tr><td>All mobile, p75</td><td>3,180</td><td>2,940</td><td>−240</td></tr>
+            <tr><td>All traffic, p50</td><td>1,910</td><td>1,899</td><td>−11</td></tr>
+          </tbody>
+        </table>
+
+        <p>A 240ms improvement at mobile p75 is worth having. It moved them from 2.9 seconds to 2.7 on the overall LCP field metric, which is inside the "good" threshold on both sides so it changed no thresholds, but it is a real improvement for the customers who were having the worst time.</p>
+
+        <p>What went wrong: about ten days in, their monitoring showed a small but persistent rise in checkout errors on iOS. It took four days to trace, and the cause was not QUIC. It was that enabling HTTP/3 changed the connection reuse behaviour enough that a race condition in their own checkout JavaScript — two requests that had previously always completed in a predictable order — began completing out of order about one time in nine hundred. The bug had been there for two years. HTTP/3 changed the timing enough to expose it.</p>
+
+        <p>I mention this because it is the honest general lesson from transport changes: they rarely break anything themselves, and they frequently expose something that was already broken and depended on incidental timing. Budget time for that. If you deploy HTTP/3 and something unrelated starts failing, the correct first hypothesis is not "roll back HTTP/3" but "what were we depending on that we should not have been".</p>
+
+        <p>The other honest note: we could not attribute any revenue change to this. The conversion rate moved by 0.04 percentage points over the period, which on their volume is well inside noise. Anyone quoting you a conversion uplift figure for enabling HTTP/3 is extrapolating from a study about page speed in general, not measuring the protocol.</p>
+
+        <h2>13. Where HTTP/3 Does Not Help, And Where It Is Worse</h2>
+
+        <p>Being specific about the limits, since most write-ups on this are uniformly positive and that is not what deploying it feels like.</p>
+
+        <p><strong>Large single downloads.</strong> One big file over a clean link is a pure throughput problem, and QUIC's user-space congestion control has historically been slightly behind a well-tuned kernel TCP with BBR. The gap has narrowed but on a fast wired connection you will not beat TCP at bulk transfer.</p>
+
+        <p><strong>Server push is gone.</strong> HTTP/2 push was removed from Chrome in 2022 and does not exist in HTTP/3. If you had a push strategy, the replacement is <code>103 Early Hints</code> with <code>preload</code> links, which is a better mechanism anyway because the client decides what it needs. Worth setting up regardless of transport.</p>
+
+        <p><strong>Prioritisation is different and less mature.</strong> HTTP/3 uses the Extensible Priorities scheme rather than HTTP/2's dependency tree, with a simpler <code>u</code> (urgency) and <code>i</code> (incremental) model. It is better in principle. In practice server support is uneven, and if you had carefully tuned HTTP/2 priorities you may find they no longer apply.</p>
+
+        <p><strong>Very short connections.</strong> A single request to a single resource on a fresh connection: HTTP/3 saves you one round trip and that is all. Below a few requests there is nothing for the multiplexing improvements to act on.</p>
+
+        <p><strong>CPU-constrained origins.</strong> Discussed above. If you are already running hot, adding a 1.5x-per-byte transport cost on the origin is not the change to make. At the CDN this is somebody else's CPU.</p>
+
+        <p><strong>Debuggability.</strong> This one is underrated. You cannot read a QUIC stream in Wireshark without the keys, your existing packet captures become useless, and half your team's mental model of "connection" no longer maps onto what the network sees. Plan for the tooling.</p>
+
+        <pre><code class="language-bash"># Make QUIC debuggable: export session keys, then point Wireshark at them
+export SSLKEYLOGFILE=/tmp/quic-keys.log
+google-chrome --user-data-dir=/tmp/chrome-quic \
+  --enable-quic --origin-to-force-quic-on=www.example.com:443
+
+# In Wireshark: Preferences → Protocols → TLS → (Pre)-Master-Secret log
+
+# qlog is the QUIC-native option — structured JSON of every event,
+# viewable in qvis. Nginx does not emit it; quiche and picoquic do.
+QLOGDIR=/tmp/qlog ./quiche-client https://www.example.com/</code></pre>
+
+        <h2>14. Platform Notes: Magento And Shopify</h2>
+
+        <p>On Shopify there is nothing to do. HTTP/3 is on, it has been on since 2020, and you cannot configure it. What you can influence is what runs over it: the number of third-party scripts on your own domain versus theirs, and whether your critical resources are discoverable early. That is more impactful than any transport decision available to you.</p>
+
+        <p>On Magento the interesting interaction is with full-page cache and the sheer number of requests a default theme makes. Magento's out-of-the-box frontend issues a lot of separate JavaScript files if you have not merged or bundled them, and this is one of the few places where HTTP/3 genuinely changes the advice.</p>
+
+        <p>Under HTTP/1.1, bundling everything into one file was correct because connections were scarce. Under HTTP/2 the advice softened. Under HTTP/3, with independent streams and no per-connection penalty, moderate numbers of separate files are cheap — and better for caching, since one changed module does not invalidate a 900KB bundle. I would not go back to hundreds of unbundled RequireJS modules, because the request overhead and the dependency resolution cost are real. But the pressure toward one giant bundle is gone, and a dozen well-partitioned chunks is a good place to land.</p>
+
+        <p>Something to check on Magento specifically: if you terminate TLS at Varnish or at a load balancer and pass through to Nginx, your <code>Alt-Svc</code> header may be stripped or your <code>X-Forwarded-Proto</code> handling may be wrong for QUIC requests, which produces redirect loops that only affect HTTP/3 clients. Test a checkout flow over <code>--http3-only</code> before believing the rollout is done.</p>
+
+        <h2>15. Questions I Get Asked</h2>
+
+        <p><strong>"Should we disable HTTP/2 once HTTP/3 works?"</strong> No, and you cannot. Every first connection is HTTP/2, clients on networks that block UDP need it, and older browsers have no HTTP/3 at all. They coexist permanently. Anyone who tells you to turn off HTTP/2 has not thought about discovery.</p>
+
+        <p><strong>"Does HTTP/3 affect SEO?"</strong> Not directly — Googlebot's crawling has used HTTP/2 for years and there is no ranking factor for transport. Indirectly, if it improves your field Core Web Vitals at p75, it feeds the page experience signals like any other performance work. The effect size is small enough that I would not build a business case on it.</p>
+
+        <p><strong>"We're seeing HTTP/3 in Chrome but not Safari. Why?"</strong> Usually the <code>Alt-Svc</code> caching lifetime or an ITP-related storage difference, but check the certificate chain first — Safari is stricter about some chain configurations and will silently fall back rather than error. Also confirm you are on a recent iOS; support has been broad since iOS 16 but corporate MDM profiles sometimes disable it.</p>
+
+        <p><strong>"Is UDP going to get us blocked by enterprise customers' firewalls?"</strong> Their browsers will fall back to TCP automatically, so nothing breaks. If you sell primarily B2B into locked-down corporate networks, the share of your traffic that ever uses HTTP/3 will be low and the investment is correspondingly less worthwhile.</p>
+
+        <p><strong>"Can we use QUIC between our edge and our origin?"</strong> Some CDNs offer it. I have not found it worth enabling. The edge-to-origin path is stable and low-loss, so QUIC's advantages barely apply, and you have added a UDP dependency to the least visible part of your stack. If your origin is far from your edges and on a poor path, that calculus changes.</p>
+
+        <p><strong>"What about ECH?"</strong> Encrypted Client Hello hides the SNI, and it is delivered via the same DNS HTTPS record as your HTTP/3 advertisement, so people tend to encounter them together. It is a privacy feature, not a performance one, and it interacts with anything that does SNI-based routing — including some WAFs and some corporate proxies. Worth knowing about; not a reason to do or not do HTTP/3.</p>
+
+        <p><strong>"Our CDN says HTTP/3 is enabled but I see h2 in DevTools."</strong> Check whether you are looking at the first load on that origin, whether DevTools is disabling cache in a way that also affects the <code>Alt-Svc</code> cache, and whether an extension or proxy is intercepting. The reliable check is <code>chrome://net-export</code> plus the netlog viewer, which shows the QUIC session establishment and any failure reason directly.</p>
+
+        <h2>16. What I Would Do First</h2>
+
+        <p>In order, assuming a typical store on a CDN:</p>
+
+        <p><strong>One.</strong> Add <code>nextHopProtocol</code> and connection type to your RUM beacon, and let it collect for two weeks <em>before</em> changing anything. Without a baseline segmented by connection quality you will not be able to tell whether this worked, and retrofitting the baseline afterwards is impossible.</p>
+
+        <p><strong>Two.</strong> Enable HTTP/3 at the CDN. Leave 0-RTT off. This is one setting and it is the bulk of the available benefit.</p>
+
+        <p><strong>Three.</strong> Verify from outside your network with <code>curl --http3-only</code> against your homepage, a category page, a product page and the cart. Do not accept "the dashboard says it's on".</p>
+
+        <p><strong>Four.</strong> Publish DNS HTTPS records so first-time visitors get QUIC on their first connection. On most managed DNS this is automatic; if it is not, it is worth the ten minutes.</p>
+
+        <p><strong>Five.</strong> Watch your error rates for a fortnight with more attention than the change seems to warrant, because of the timing-exposure problem described above. Anything that starts failing is probably a latent bug, and you want to catch it while the deploy is fresh in everyone's mind.</p>
+
+        <p><strong>Six.</strong> Do the measurement properly — returning-visitors-only comparison at minimum, randomised <code>Alt-Svc</code> if the result needs to be defensible. Then tell your stakeholders the truth, which is that the median did not move and the worst sessions got meaningfully better.</p>
+
+        <p><strong>Seven.</strong> Only if you have a specific reason: consider 0-RTT for static assets and anonymous cacheable pages, with the <code>Early-Data</code> guards in place and tested. This is the last thing on the list because it is the only one that can hurt you, and its benefit is one round trip on requests that were already fast.</p>
+
+        <p>Origin QUIC does not appear on that list. For most stores it never should.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -232,7 +707,6 @@ server {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -266,6 +740,6 @@ server {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

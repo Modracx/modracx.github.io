@@ -11,10 +11,29 @@
 
 ## Token Intent
 
+- Channel: `--c-bg`, `--c-surface`, `--c-ink`, `--c-gold`, `--c-lavender` —
+  bare `r g b` triplets, so any rule can tint with
+  `rgb(var(--c-gold) / 0.4)` and follow the theme for free
 - Primitive: cosmic indigo base with gold and lavender light
 - Semantic: void, midnight, glass, glass-edge, ink scale, glow
+- Text vs decoration: `--gold` / `--lavender` draw; `--gold-ink` /
+  `--lavender-ink` are the only accents allowed to colour text;
+  `--on-accent` is the ink that rides on an accent fill
 - Component: wards, glass panels, relics, meters, codex, missive, sheet,
-  grimoire, waypoints
+  grimoire, waypoints, theme switch
+
+## Themes
+
+Two charts, both defined in `css/tokens.css` and nowhere else:
+
+- Night chart — `:root`, the default
+- Day chart — `[data-theme="light"]`, and `prefers-color-scheme: light` for
+  readers who have not chosen
+
+An explicit `[data-theme]` always wins. Atmosphere does not switch off in the
+day chart, it dims: `--star-opacity`, `--nebula-opacity`, `--grain-opacity`,
+`--vignette-strength`. The particle canvas carries its own matched palettes in
+`js/particles.js` and repaints on the `themechange` event.
 
 ## Typography
 
@@ -37,7 +56,10 @@ renders one static frame instead of animating.
 
 ## Interaction
 
-- Visible focus states
+- Visible focus states — a hard 2px ring plus a soft halo, so it reads on any
+  ground in either chart
+- All text at 5:1 or better in both charts, enforced by
+  `npm run audit:contrast`
 - 44px touch targets
 - Motion is ambient and continuous, never blocking
 - No hover-only critical interactions; the ward sheets are real links first

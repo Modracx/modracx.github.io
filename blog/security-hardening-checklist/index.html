@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Security Hardening Checklist for Magento 2 | MODRACX</title>
-  <meta name="description" content="An exhaustive technical security checklist for Magento 2 servers. Linux file permissions, custom admin URIs, 2FA enforcement, and Database encryption." />
+  <meta name="description" content="Server and infrastructure hardening for a Magento stack: SSH, firewalls, file permissions, PHP-FPM, MySQL grants, Redis, secrets on disk, and how to verify it stayed done." />
   <meta property="og:title" content="Security Hardening Checklist for Magento 2 | MODRACX" />
   <meta property="og:description" content="Magento 2 security hardening checklist by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -194,17 +196,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Security Hardening Checklist for Magento 2</h1>
-        <p class="lede">The production server security hardening manual for Magento 2: Linux permission rules, custom admin URIs, 2FA enforcement, and env.php encryption keys.</p>
+        <p class="lede">The hosting partner called it fully hardened. From a hotel wifi, MySQL answered, Redis answered without a password, and OpenSearch listed every index. Here is the server layer, done properly.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 26 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -229,318 +231,766 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>The Architecture of E-commerce Defense</h2>
-        <p>Securing a production Magento 2 environment requires a defense-in-depth strategy extending from the edge network to the database layer. Default configurations provided by Magento and standard Linux distributions are insufficient against sophisticated botnets. An exposed admin endpoint, relaxed file permissions, or an unencrypted database can lead to data breaches.</p>
-        <p>This technical manual outlines the configurations necessary to harden a Magento 2 deployment. Designed for high-availability production environments using Nginx, PHP-FPM, Redis, and MySQL/MariaDB, these measures minimize the attack surface. Refer to my guide on <a href="/blog/secure-ecommerce-checklist/">Securing Your Ecommerce Store: The Technical Hardening Blueprint</a>.</p>
-        <p>Every script and rule is designed for direct implementation in a continuous integration and continuous deployment (CI/CD) pipeline to ensure consistency and prevent configuration drift over time.</p>
+        <h2>1. The Server That Was "Behind a Firewall"</h2>
 
-        <hr />
+        <p>A distributor I did some work for in 2024 ran a two-node Magento 2.4 setup on a well-known cloud provider. Their hosting partner had described the environment as "fully hardened, behind a firewall". When I ran a port scan from a laptop on a hotel wifi, the MySQL port answered. So did Redis. So did the OpenSearch HTTP interface, which returned a cheerful JSON banner with the cluster name and version number, and which accepted a request to list every index without asking who I was.</p>
 
-        <h2>1. Linux Kernel and OS-Level Hardening</h2>
-        <p>Before modifying application code, secure the underlying operating system. The Linux kernel provides parameters to prevent network-based attacks like SYN floods and IP spoofing. Modifying <code>/etc/sysctl.conf</code> applies these optimizations globally.</p>
-        
-        <pre><code class="language-bash"># /etc/sysctl.conf - Network Security Optimizations
-# Disable IP forwarding unless acting as a router
-net.ipv4.ip_forward = 0
+        <p>None of this was malicious neglect. The environment had been built two years earlier by someone who had opened those ports temporarily during a migration, from a static office IP, and the rule had been widened to <code>0.0.0.0/0</code> during a debugging session at some point and never narrowed again. The firewall existed. It just permitted everything anyone had ever needed.</p>
 
-# Ignore ICMP broadcast requests to prevent smurf attacks
-net.ipv4.icmp_echo_ignore_broadcasts = 1
+        <p>What made it worse was that Redis had no password, because "it's internal". The Magento session store lived in it. Anyone who could reach that port could read session data, which on a Magento install means admin session tokens.</p>
 
-# Enable TCP SYN cookie protection
-net.ipv4.tcp_syncookies = 1
+        <p>This article is the server and infrastructure layer of an ecommerce security programme, written for a Magento-style stack: Linux, Nginx, PHP-FPM, MySQL or MariaDB, Redis, OpenSearch, Varnish. It is the layer beneath the operational checklist — the accounts, patching cadence, backups and incident process live in the <a href="/blog/secure-ecommerce-checklist/">ecommerce security checklist</a>, and the response headers you set at the edge are covered in the <a href="/blog/secure-http-headers/">HTTP security headers guide</a>. What follows is the box itself: what runs on it, as whom, reachable from where, and able to read which files.</p>
 
-# Ignore bogus ICMP errors
-net.ipv4.icmp_ignore_bogus_error_responses = 1
+        <p>Two caveats before the detail. First, if you are on Shopify or a fully managed platform, most of this is not yours and you should not spend time on it. Second, if you are on managed hosting, some of it is theirs and some of it is yours, and the single most useful hour you can spend is establishing in writing which is which. I have seen both parties assume the other patched the kernel.</p>
 
-# Do not accept ICMP redirects (prevent MITM routing attacks)
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv6.conf.all.accept_redirects = 0
+        <h2>2. The Shape of the Problem</h2>
 
-# Enable reverse path filtering to verify source IP addresses
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
+        <p>Server hardening has a bad reputation because it is usually taught as a list of two hundred settings, most of which do not matter for a web application, and because the CIS benchmarks — which are genuinely good documents — are long enough that teams read the first section and give up.</p>
 
-# Log packets with impossible addresses
-net.ipv4.conf.all.log_martians = 1</code></pre>
-        <p>Applying these settings with <code>sysctl -p</code> immediately hardens the TCP/IP stack. Securing SSH access is also critical. Relocating the SSH daemon to an unprivileged port and disabling password authentication eliminates brute-force attempts. In <code>/etc/ssh/sshd_config</code>, ensure <code>PermitRootLogin no</code> and <code>PasswordAuthentication no</code> are explicitly defined.</p>
-        <p>Furthermore, consider implementing port knocking or an overlay network to entirely remove the SSH port from the public internet.</p>
+        <p>The useful mental model is narrower. For an ecommerce stack, almost everything comes down to four questions.</p>
 
-        <hr />
+        <p><strong>What can reach this machine, and on which ports?</strong> Nearly every serious infrastructure finding I have made in the last five years reduces to a service being reachable from somewhere it should not be.</p>
 
-        <h2>2. File System Permission Masks for Magento 2</h2>
-        <p>Improper permissions are the primary vector for local privilege escalation in PHP apps. Setting directories to <code>777</code> allows any system user to modify application source code. The deployment user must own the files, while the web server group requires read-only access to the core codebase.</p>
-        <p>The standard permission mask for Magento 2 dictates directories at <code>750</code> and files at <code>640</code>. The <code>app/etc/env.php</code> file must be restricted to <code>600</code>.</p>
-        <p>This deployment script automates permission application. Integrate it directly into your automated deployment pipeline.</p>
+        <p><strong>What runs as which user?</strong> If the web server, PHP, the deployment process and cron all run as the same account, and that account can write to the application directory, then a single file-write bug becomes remote code execution that persists across restarts.</p>
+
+        <p><strong>Which files can that user read and write?</strong> The interesting files on a Magento box are <code>app/etc/env.php</code>, the media directory, and anything under <code>var/</code>. Getting the permissions on those three right removes a large fraction of the realistic attack paths.</p>
+
+        <p><strong>Where do credentials live?</strong> Database passwords, the Magento encryption key, API keys for payment and shipping providers. On most self-hosted estates these sit in a file on disk that far more processes can read than need to.</p>
+
+        <p>Work through those four properly and you have done eighty per cent of the value. The rest of this article is the specifics.</p>
+
+        <h2>3. Start From a Base You Can Rebuild</h2>
+
+        <p>Before any individual setting, one architectural decision determines how much of this stays true: can you rebuild the server from scratch?</p>
+
+        <p>A machine that has been patched, tweaked and debugged by hand for three years accumulates state nobody can account for. A stray sudoers entry, a firewall rule added during an incident, a package installed to test something. There is no way to audit it comprehensively, and there is no way to be confident that a rebuild would produce the same thing.</p>
+
+        <p>The alternative is that the server's configuration lives in a repository — Ansible, Terraform plus a configuration tool, a Packer image, a Dockerfile, whatever you like — and the running machine is a product of that repository. Then hardening is a code review problem rather than an archaeology problem, drift is detectable, and the answer to "is this setting applied on all four web nodes" is a grep rather than four SSH sessions.</p>
+
+        <p>I would put this above almost every individual control in this article in terms of long-term value. It is also the item most often skipped because it does not feel like security work.</p>
+
+        <p>If you have inherited a hand-built machine and cannot rebuild it yet, the intermediate step that helps is to capture its current state so at least you know what you have:</p>
 
         <pre><code class="language-bash">#!/usr/bin/env bash
-# Magento 2 Production Linux File Permissions Hardening Script
-# Execute this script as the deployment user (e.g., magento_user)
+# snapshot-host.sh — capture the state of a hand-built box before you touch it.
+# Commit the output. Re-run monthly and diff.
+set -euo pipefail
+OUT="host-$(hostname -s)-$(date +%F)"
+mkdir -p "$OUT"
 
-MAGENTO_ROOT="/var/www/html/magento2"
-WEB_GROUP="www-data"
+dpkg -l                              &gt; "$OUT/packages.txt"     2&gt;/dev/null || rpm -qa &gt; "$OUT/packages.txt"
+systemctl list-unit-files --state=enabled &gt; "$OUT/services.txt"
+ss -tulpn                            &gt; "$OUT/listening.txt"
+iptables-save 2&gt;/dev/null            &gt; "$OUT/iptables.txt" || true
+nft list ruleset 2&gt;/dev/null         &gt; "$OUT/nftables.txt" || true
+getent passwd                        &gt; "$OUT/users.txt"
+cat /etc/sudoers /etc/sudoers.d/*    &gt; "$OUT/sudoers.txt" 2&gt;/dev/null || true
+crontab -l -u root 2&gt;/dev/null       &gt; "$OUT/root-cron.txt" || true
+ls -la /etc/cron.d/                  &gt; "$OUT/cron-d.txt"
+sshd -T                              &gt; "$OUT/sshd-effective.txt"
 
-echo "Applying strict permission masks to Magento root: ${MAGENTO_ROOT}"
-cd "${MAGENTO_ROOT}" || exit 1
+echo "wrote $OUT"</code></pre>
 
-# Reset all ownership to the deployment user and web server group
-chown -R $(whoami):${WEB_GROUP} .
+        <p>The <code>sshd -T</code> line is worth knowing on its own: it prints the effective configuration after all includes and defaults, which is frequently not what the config file appears to say.</p>
 
-# Set all directories to 750 (rwxr-x---) and files to 640 (rw-r-----)
-find . -type d -exec chmod 750 {} +
-find . -type f -exec chmod 640 {} +
+        <h2>4. SSH, Which Is the Front Door</h2>
 
-# Secure the environment configuration file containing database credentials
-chmod 600 app/etc/env.php
+        <p>SSH is where I start on any machine, because it is the control plane for everything else and because the defaults on most distributions are permissive in ways people assume they are not.</p>
 
-# Grant the web server group write access to generated and variable directories
-# The sticky bit (chmod g+s) ensures newly created files inherit the group ownership
-for DIR in var generated pub/static pub/media app/etc; do
-    if [ -d "${DIR}" ]; then
-        chmod -R g+w "${DIR}"
-        chmod g+s "${DIR}"
-    fi
-done
+        <p><strong>Keys only, no passwords.</strong> Non-negotiable. Password authentication over SSH against an internet-facing host will be attacked continuously and will eventually succeed against somebody's weak passphrase.</p>
 
-# Secure the Magento executable binary
-chmod 750 bin/magento
+        <p><strong>No direct root login.</strong> Named accounts with sudo, so actions are attributable.</p>
 
-echo "Permission hardening complete. The environment is now strictly enforced."</code></pre>
+        <p><strong>Restrict who may log in at all.</strong> An explicit <code>AllowGroups</code> is a better control than assuming only the right accounts exist, because it fails safe when someone creates a service account with a shell by mistake.</p>
 
-        <p>This script guarantees the web server process cannot modify PHP scripts or overwrite core system files, neutralizing persistent web shell threats.</p>
+        <p><strong>Reachable from where?</strong> Ideally not the public internet. A bastion, a VPN, or a provider's session-manager service removes SSH from the exposed surface entirely. If you must expose it, restrict by source address at the network layer rather than relying on the daemon.</p>
 
-        <hr />
+        <pre><code class="language-ini"># /etc/ssh/sshd_config.d/10-hardening.conf
+# Distribution defaults vary; setting these explicitly means the box behaves
+# the same after an OS upgrade rewrites the main config file.
 
-        <h2>3. Customizing the Magento 2 Admin URI</h2>
-        <p>Automated vulnerability scanners rely on predictable administrative paths. Leaving the backend accessible via <code>/admin</code> subjects your app to continuous dictionary attacks. Obfuscating this URI is highly effective.</p>
-        <p>Utilize the Magento command-line interface to update <code>env.php</code> directly. Generate a complex string for authentication.</p>
-        <pre><code class="language-bash"># Change the admin URI to a randomized cryptographic string
-php bin/magento setup:config:set --backend-frontname="admin_$(openssl rand -hex 12)"</code></pre>
-        <p>After executing this command, flush the configuration cache (<code>php bin/magento cache:clean config</code>). While this drops noisy bot traffic, dedicated attackers must still be blocked by network-level rules.</p>
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
 
-        <hr />
+# Only these groups may authenticate at all.
+AllowGroups sshusers deploy
 
-        <h2>4. Nginx Admin Location Blocking and Rate Limiting</h2>
-        <p>The web server configuration should enforce strict IP whitelisting and request rate limiting on backend authentication routes. Configuring Nginx to reject connections from unauthorized IP ranges eliminates remote exploitation attempts.</p>
-        <p>Below is a Nginx configuration snippet demonstrating how to isolate the administrative path and throttle excessive requests.</p>
+# Agent and X11 forwarding are rarely needed on a web node and are a lateral
+# movement aid if a key is compromised.
+AllowAgentForwarding no
+X11Forwarding no
 
-        <pre><code class="language-nginx"># /etc/nginx/conf.d/magento_admin.conf
-# Define a rate limiting zone for admin login attempts (1 request per second)
-limit_req_zone $binary_remote_addr zone=admin_login_limit:10m rate=1r/s;
+# Cheap anti-noise: drop unauthenticated connections quickly.
+LoginGraceTime 20
+MaxAuthTries 3
+MaxSessions 4
+MaxStartups 10:30:60
+
+# Idle sessions die rather than sitting open on an unlocked laptop.
+ClientAliveInterval 300
+ClientAliveCountMax 2</code></pre>
+
+        <p>After editing, validate before restarting. Locking yourself out of a production box because of a typo in a config file is an experience you only need once:</p>
+
+        <pre><code class="language-bash"># Validate syntax, then confirm the effective values are what you meant
+sshd -t
+sshd -T | grep -Ei 'permitrootlogin|passwordauth|allowgroups|maxauthtries'
+
+# Keep an existing session open while you restart in another one.
+sudo systemctl restart ssh</code></pre>
+
+        <p>One thing I would push back on: the advice to move SSH to a non-standard port. It reduces log noise and does nothing else, and it occasionally causes real problems by landing in the ephemeral port range or confusing monitoring. If your logs are noisy, the answer is source-address restriction, not obscurity. I have stopped bothering with it.</p>
+
+        <p><strong>Key hygiene matters more than key algorithm.</strong> Ed25519 over RSA-2048 is a fine default, but the more common failure is an <code>authorized_keys</code> file containing five keys, two of which belong to people who left. Manage that file from configuration rather than by hand, and audit it with the same quarterly reconciliation that covers application accounts.</p>
+
+        <h2>5. The Firewall, and What Segmentation Means Here</h2>
+
+        <p>The distributor's problem was not the absence of a firewall. It was a firewall whose rules had accreted.</p>
+
+        <p>The principle is deny by default and permit by exception, with each exception carrying a comment saying why it exists and, ideally, who asked for it. An allow-by-default network with some deny rules is not segmentation; it is an aspiration with a config file.</p>
+
+        <p>For an ecommerce stack the tiers are usually obvious:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Tier</th><th>Accepts from</th><th>Ports</th><th>Never accepts from</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Load balancer / CDN edge</td><td>Internet</td><td>443, 80 (redirect only)</td><td>n/a</td></tr>
+            <tr><td>Web nodes</td><td>Load balancer only</td><td>443 or 8080</td><td>Internet directly</td></tr>
+            <tr><td>Database</td><td>Web nodes, admin nodes</td><td>3306</td><td>Internet, CI, laptops</td></tr>
+            <tr><td>Redis</td><td>Web nodes, cron node</td><td>6379</td><td>Anything else</td></tr>
+            <tr><td>OpenSearch</td><td>Web nodes, cron node</td><td>9200</td><td>Anything else</td></tr>
+            <tr><td>SSH</td><td>Bastion or VPN range</td><td>22</td><td>Internet</td></tr>
+          </tbody>
+        </table>
+
+        <p>The row people get wrong is the second. Web nodes are frequently reachable directly on the internet as well as through the load balancer, usually because the origin address is in DNS or was left in a health-check configuration. That defeats every control you have placed at the edge — the WAF, the rate limiting, the bot management — because an attacker who finds the origin address simply goes around them.</p>
+
+        <p>Check it directly:</p>
+
+        <pre><code class="language-bash"># From a machine outside your network. Substitute your real origin address.
+ORIGIN=203.0.113.42
+HOST=shop.example.com
+
+# If this returns your storefront rather than a timeout or a 403,
+# your edge protections are optional from an attacker's point of view.
+curl -sk --max-time 10 -H "Host: $HOST" "https://$ORIGIN/" -o /dev/null -w '%{http_code}\n'
+
+# Check for the classic leaks of an origin address
+dig +short "$HOST" any
+dig +short "direct.$HOST" "origin.$HOST" "old.$HOST" 2&gt;/dev/null
+curl -sI "https://$HOST/" | grep -iE 'x-served-by|x-backend|server'</code></pre>
+
+        <p>The fix is a firewall rule permitting only your CDN's published address ranges, plus a shared secret header that the edge sets and the origin requires. Address ranges alone are weaker than they look, because anyone else can also be a customer of the same CDN and their traffic comes from the same ranges.</p>
+
+        <pre><code class="language-nginx"># On the origin: reject anything that did not come through our edge.
+# The value lives in the secrets manager and is rotated on a schedule.
+map $http_x_edge_auth $edge_ok {
+    default        0;
+    "s3cr3t-value" 1;
+}
 
 server {
-    listen 443 ssl http2;
-    server_name production.modracx.com;
-    set $MAGE_ROOT /var/www/html/magento2;
-    
-    # Include standard Magento Nginx configuration
-    include /var/www/html/magento2/nginx.conf.sample;
+    listen 443 ssl;
+    server_name shop.example.com;
 
-    # Secure the customized admin path
-    # Replace 'admin_8f9a2b3c4d5e' with the exact frontName generated earlier
-    location ~* ^/admin_8f9a2b3c4d5e/admin/auth/login {
-        # Apply the rate limit zone, permitting bursts up to 3 requests
-        limit_req zone=admin_login_limit burst=3 nodelay;
-
-        # Whitelist corporate IP addresses
-        allow 192.0.2.50;    # Primary Office VPN Gateway
-        allow 198.51.100.25; # Secondary Office VPN Gateway
-        deny all;            # Reject all other external IP addresses
-
-        # Forward the authorized request to PHP-FPM
-        try_files $uri $uri/ /index.php$is_args$args;
-        fastcgi_pass fastcgi_backend;
-        fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        include fastcgi_params;
+    if ($edge_ok = 0) {
+        return 403;
     }
+    # ... rest of the server block
 }</code></pre>
-        <p>Any HTTP request attempting to access the login route from an unapproved IP will immediately receive an HTTP 403 Forbidden response. For more firewall strategies, review <a href="/blog/waf-implementation/">WAF Implementation</a>.</p>
 
-        <hr />
+        <p>I am aware that <code>if</code> inside a server block is discouraged in Nginx. For a plain return it is one of the documented-safe uses, and the alternative constructions are harder to read. Use the map so the secret appears in exactly one place.</p>
 
-        <h2>5. Fail2ban: Mitigating SSH and Admin Brute Force Attacks</h2>
-        <p>Fail2ban identifies and bans malicious actors dynamically by monitoring server log files for repeated authentication failures, updating iptables rules to block offending IP addresses.</p>
-        <p>First, configure a standard jail for the SSH daemon to handle brute-force attempts on the server itself.</p>
+        <h3>Host firewall as well as network firewall</h3>
 
-        <pre><code class="language-ini"># /etc/fail2ban/jail.local
-[sshd]
-enabled = true
-port = 49152
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 3
-findtime = 600
-bantime = 3600</code></pre>
-        <p>Next, create a custom filter tailored for Magento 2 to parse <code>var/log/system.log</code> and ban IP addresses that repeatedly fail to authenticate.</p>
+        <p>Cloud security groups are the primary control. A host firewall underneath them is worth the twenty minutes because it survives a misconfiguration at the cloud layer, and because it is the thing that saves you when someone attaches a new security group to debug something at 23:00.</p>
 
-        <pre><code class="language-ini"># /etc/fail2ban/filter.d/magento2-admin.conf
-[Definition]
-# Matches the precise log output generated by Magento 2 during a failed admin login
-failregex = ^.*Security user authorization failed for user '.*' from IP <HOST>.*$
-ignoreregex =</code></pre>
+        <pre><code class="language-bash"># nftables on a web node. Deny by default; permit by exception, with reasons.
+sudo tee /etc/nftables.conf &gt;/dev/null &lt;&lt;'EOF'
+table inet filter {
+  set lb_nodes   { type ipv4_addr; elements = { 10.0.1.10, 10.0.1.11 } }
+  set bastion    { type ipv4_addr; elements = { 10.0.9.5 } }
 
-        <pre><code class="language-ini"># /etc/fail2ban/jail.local (Appended for Magento 2)
-[magento2-admin]
-enabled = true
-port = http,https
-filter = magento2-admin
-logpath = /var/www/html/magento2/var/log/system.log
-maxretry = 5
-findtime = 300
-bantime = 86400 # Enforce a strict 24-hour ban for repeat offenders</code></pre>
-        <p>This automated, closed-loop response mechanism significantly decreases the likelihood of a successful dictionary attack.</p>
+  chain input {
+    type filter hook input priority 0; policy drop;
 
-        <hr />
+    ct state established,related accept
+    iif lo accept
+    ip protocol icmp icmp type echo-request limit rate 5/second accept
 
-        <h2>6. Enforcing Two-Factor Authentication (2FA)</h2>
-        <p>Compromised credentials remain a severe threat. Two-Factor Authentication (2FA) is a mandatory requirement for PCI-DSS compliance. Administrators should utilize Time-based One-Time Password (TOTP) applications, such as Google Authenticator, rather than insecure SMS-based delivery mechanisms.</p>
-        <p>Configuration of the 2FA module is managed directly via the Magento CLI. To enforce Google Authenticator globally, execute:</p>
+    # HTTP only from the load balancers
+    ip saddr @lb_nodes tcp dport 8080 accept
 
-        <pre><code class="language-bash"># Set Google Authenticator as the enforced 2FA provider
-php bin/magento config:set twofactorauth/general/force_providers google
+    # SSH only from the bastion
+    ip saddr @bastion tcp dport 22 accept
 
-# Ensure the core security module is active and properly compiled
-php bin/magento module:enable Magento_TwoFactorAuth
-php bin/magento setup:upgrade
-php bin/magento setup:di:compile
-php bin/magento cache:flush</code></pre>
-        <p>Regularly audit the user list to ensure API endpoints and integration tokens are not inadvertently bypassing 2FA requirements.</p>
+    # Everything else is dropped, and logged at a rate that will not fill the disk
+    limit rate 10/minute log prefix "nft-drop " level info
+  }
 
-        <hr />
+  chain forward { type filter hook forward priority 0; policy drop; }
+  chain output  { type filter hook output priority 0; policy accept; }
+}
+EOF
+sudo nft -c -f /etc/nftables.conf   # syntax check before applying
+sudo systemctl enable --now nftables</code></pre>
 
-        <h2>7. Database Encryption and Crypt Key Rotation</h2>
-        <p>Data at rest must be heavily encrypted to protect sensitive customer information. Magento utilizes an internal crypt key in <code>app/etc/env.php</code> to encrypt sensitive configuration values within the database tables.</p>
-        <pre><code class="language-php">// Snippet from app/etc/env.php highlighting the crypt node
-return [
-    'crypt' => [
-        'key' => 'd41d8cd98f00b204e9800998ecf8427e' // This key must remain absolutely secret
-    ],
-    // ...
-];</code></pre>
-        <p>To rotate the Magento crypt key securely, utilize the built-in setup command during a scheduled maintenance window.</p>
-        <pre><code class="language-bash"># Safely rotate the Magento crypt key and re-encrypt database values
-php bin/magento setup:config:set --crypt-key=$(openssl rand -hex 16)</code></pre>
-        <p>Beyond application-level encryption, employ Transparent Data Encryption (TDE) for MySQL or MariaDB.</p>
-        <pre><code class="language-ini"># /etc/mysql/mariadb.conf.d/50-server.cnf
-[mysqld]
-# Enable the File Key Management Plugin for secure key loading
-plugin_load_add = file_key_management
-file_key_management_filename = /etc/mysql/encryption/keyfile.enc
-file_key_management_filekey = FILE:/etc/mysql/encryption/keyfile.key
-file_key_management_encryption_algorithm = AES_CTR
+        <p>The output chain is left permissive here, which is the pragmatic default. Restricting egress is genuinely valuable — it is one of the few controls that limits an attacker after they are already in — but it breaks package updates, API calls to payment providers, and webhook deliveries in ways that take real effort to enumerate. If you do it, do it on the database tier first, where the legitimate egress list is short.</p>
 
-# Enable strict InnoDB tablespace encryption globally
-innodb_encrypt_tables = FORCE
-innodb_encrypt_log = ON
-innodb_encryption_threads = 4
-innodb_encryption_rotate_key_age = 1</code></pre>
-        <p>With TDE explicitly enforced, the files cannot be read without precise encryption keys, satisfying regulatory requirements for PII.</p>
+        <h2>6. Users, Groups and the Deploy Account</h2>
 
-        <hr />
+        <p>This is the section that produces the most argument and the most benefit.</p>
 
-        <h2>8. PHP-FPM Process Isolation and Security</h2>
-        <p>Running PHP processes securely requires isolating them and ensuring they run with minimum privileges. The PHP-FPM pool configuration file must explicitly define the user and group context, typically <code>www-data</code>.</p>
-        <pre><code class="language-ini"># /etc/php/8.2/fpm/pool.d/magento.conf
-[magento]
+        <p>On a badly configured Magento box, PHP-FPM runs as the same user that owns the files, which is also the user that deploys, which sometimes also has sudo. A file upload bug in an extension then lets an attacker write a PHP file into the web root and execute it, and that shell persists through every deployment because the deployment does not replace files it does not know about.</p>
+
+        <p>The arrangement I use:</p>
+
+        <p><strong>A <code>deploy</code> user owns the application files.</strong> It has a shell and an SSH key. It cannot run sudo except for one or two specific commands, listed explicitly — reloading PHP-FPM, for instance.</p>
+
+        <p><strong>PHP-FPM runs as a separate <code>www-data</code> user</strong> which is a member of a group the deploy user also belongs to. It reads the application files; it does not own them.</p>
+
+        <p><strong>Nginx runs as its own user</strong> and reads static files only.</p>
+
+        <p>The result is that PHP can read the code and cannot rewrite it. This is the single most effective host-level control against persistence on a PHP application, and it costs an afternoon.</p>
+
+        <pre><code class="language-bash"># Users and groups
+sudo groupadd -f magento
+sudo useradd -m -g magento -s /bin/bash deploy
+sudo usermod -a -G magento www-data
+
+# Ownership: deploy owns, www-data reads through the group
+sudo chown -R deploy:magento /var/www/shop
+
+# Directories 750, files 640 — group can read, nobody else can see anything
+sudo find /var/www/shop -type d -exec chmod 750 {} \;
+sudo find /var/www/shop -type f -exec chmod 640 {} \;
+
+# The specific paths Magento writes to at runtime need group write
+sudo find /var/www/shop/var /var/www/shop/pub/static /var/www/shop/pub/media \
+     /var/www/shop/generated -type d -exec chmod 2770 {} \;
+sudo find /var/www/shop/var /var/www/shop/pub/static /var/www/shop/pub/media \
+     /var/www/shop/generated -type f -exec chmod 660 {} \;
+
+# The setgid bit (the 2 above) makes new files inherit the magento group,
+# which is what stops permissions drifting after the next deployment.
+sudo chmod +x /var/www/shop/bin/magento</code></pre>
+
+        <p>A limited sudoers entry for the deploy account, rather than blanket rights:</p>
+
+        <pre><code class="language-bash"># /etc/sudoers.d/deploy — validate with visudo -c before saving
+deploy ALL=(root) NOPASSWD: /bin/systemctl reload php8.3-fpm
+deploy ALL=(root) NOPASSWD: /bin/systemctl reload nginx
+deploy ALL=(root) NOPASSWD: /usr/sbin/nginx -t
+
+# Deliberately absent: anything that takes an argument the deploy user controls.
+# A rule like "NOPASSWD: /bin/systemctl *" is equivalent to full root.</code></pre>
+
+        <p>That last comment is the mistake I see most often in sudoers files. A wildcard on a command that can start arbitrary units, or on anything that can invoke an editor or a shell, is root access with extra steps.</p>
+
+        <h3>Where I have been wrong about this</h3>
+
+        <p>I once implemented the read-only-code arrangement on a client's estate without checking which extensions wrote into the application tree at runtime. Two did — one wrote a generated CSS file into a module directory, and one wrote a cache into its own folder rather than <code>var/</code>. The deployment went out on a Thursday evening and the site threw write errors on a page nobody tested for three hours.</p>
+
+        <p>The lesson is not that the control is wrong. It is that you must find the writers first. An hour with the filesystem audit log on a staging environment under realistic traffic tells you exactly which paths need to be writable, and then you grant those specific paths and nothing else.</p>
+
+        <h2>7. PHP-FPM: Pools and Privileges</h2>
+
+        <p>PHP is where application-layer compromise becomes system-layer compromise, so the settings here have unusually high leverage.</p>
+
+        <pre><code class="language-ini">; /etc/php/8.3/fpm/pool.d/shop.conf
+[shop]
 user = www-data
-group = www-data
-listen = /run/php/php8.2-fpm.sock
+group = magento
+listen = /run/php/shop.sock
 listen.owner = www-data
-listen.group = www-data
+listen.group = nginx
 listen.mode = 0660
 
-# Restrict PHP execution via disabled functions
-php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source
-php_admin_flag[allow_url_fopen] = off
-php_admin_flag[expose_php] = off</code></pre>
-        <p>The <code>disable_functions</code> directive is critical to prevent attackers from executing operating system commands if they exploit a module vulnerability.</p>
+pm = dynamic
+pm.max_children = 40
+pm.start_servers = 8
+pm.min_spare_servers = 4
+pm.max_spare_servers = 12
 
-        <hr />
+; Confine PHP to the paths it legitimately needs. This is the setting that
+; turns a local file inclusion bug from "read /etc/passwd" into an error.
+php_admin_value[open_basedir] = /var/www/shop:/tmp:/usr/share/php
 
-        <h2>9. Redis and Session Store Security</h2>
-        <p>Redis is universally employed for session storage but lacks robust out-of-the-box security. Exposing Redis to the public internet without authentication is a critical vulnerability.</p>
-        <p>Redis must be bound strictly to the localhost interface (<code>127.0.0.1</code>) and password authentication enabled in <code>redis.conf</code>.</p>
+; Functions that exist almost exclusively to be useful to a web shell.
+; Check your extensions first — a few build tools genuinely use proc_open.
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,dl
+
+; Do not tell an attacker which version they are attacking, and never render
+; a stack trace to a customer.
+php_admin_flag[expose_php] = off
+php_admin_flag[display_errors] = off
+php_admin_value[error_log] = /var/log/php/shop-error.log
+
+; Uploaded files land here, and this path is not inside the web root.
+php_admin_value[upload_tmp_dir] = /var/www/shop/var/uploads
+php_admin_value[session.save_path] = /var/www/shop/var/session</code></pre>
+
+        <p>Two notes on <code>disable_functions</code>. It is not a security boundary — a determined attacker with code execution has other routes — but it raises the cost meaningfully, and the overwhelming majority of commodity web shells simply stop working. And <code>bin/magento</code> on the command line runs under a different PHP configuration than FPM, so disabling these functions for the web pool does not break your deployment tooling. That distinction trips people up.</p>
+
+        <p>The <code>open_basedir</code> line is the one I would fight for hardest. Path traversal and local file inclusion bugs turn up in extensions with depressing regularity, and this setting is what makes them boring.</p>
+
+        <h2>8. Nginx: What Should Never Be Reachable</h2>
+
+        <p>Magento ships with a reasonable <code>nginx.conf.sample</code> and most estates use it. The things that go wrong are almost always additions made afterwards.</p>
+
+        <pre><code class="language-nginx"># Serve only from pub/. If your root is the repository root, an attacker can
+# request app/etc/env.php directly, and yes, I have found this in production.
+root /var/www/shop/pub;
+
+# Deny access to anything sensitive that ends up under pub/ by accident.
+location ~* ^/(app|bin|dev|generated|lib|phpserver|setup|update|var|vendor)/ {
+    deny all;
+}
+
+location ~* \.(env|git|svn|sql|bak|old|orig|save|swp|log|ini|yml|yaml)$ {
+    deny all;
+}
+
+location ~ /\. {
+    deny all;   # .git, .env, .htaccess, editor droppings
+}
+
+# Only the two front controllers may execute PHP. Everything else is static.
+location ~ ^/(index|get|static|errors/report|errors/404|errors/503)\.php$ {
+    fastcgi_pass  unix:/run/php/shop.sock;
+    fastcgi_index index.php;
+    fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+    include       fastcgi_params;
+    fastcgi_read_timeout 600s;
+}
+
+# Anything else claiming to be PHP is not ours.
+location ~ \.php$ {
+    deny all;
+}
+
+# The media directory holds customer-uploaded and admin-uploaded files.
+# It must never execute anything.
+location ^~ /media/ {
+    location ~ \.(php|phtml|phar|pl|py|cgi|sh)$ { deny all; }
+    add_header X-Content-Type-Options "nosniff" always;
+    try_files $uri $uri/ /get.php$is_args$args;
+}</code></pre>
+
+        <p>The <code>\.php$ { deny all; }</code> catch-all at the end is the part I would not skip. Magento's own sample config allows only the named front controllers, but a surprising number of estates have had a rule loosened during a migration to make an old script work, and the loosened rule never gets tightened again. Being explicit about the default costs one block.</p>
+
+        <p>Also worth knowing: the media rule matters more than it appears. The standard Magecart persistence trick on a compromised Magento box is not to modify a template — those get overwritten on deploy — but to drop a file into <code>pub/media/</code>, which is preserved across deployments precisely because it holds customer data.</p>
+
+        <p>Rate limiting belongs here too, and it should be applied per-endpoint rather than globally:</p>
+
+        <pre><code class="language-nginx">limit_req_zone $binary_remote_addr zone=login:10m  rate=5r/m;
+limit_req_zone $binary_remote_addr zone=admin:10m  rate=30r/m;
+limit_req_zone $binary_remote_addr zone=general:10m rate=60r/s;
+
+location = /customer/account/loginPost/ {
+    limit_req zone=login burst=3 nodelay;
+    limit_req_status 429;
+    try_files $uri /index.php$is_args$args;
+}
+
+# The admin path — yours will differ, which is one small benefit of moving it.
+location ^~ /backoffice-9f2c/ {
+    limit_req zone=admin burst=10 nodelay;
+    # If your staff work from known networks, this is stronger than everything
+    # else on this page combined.
+    allow 198.51.100.0/24;
+    allow 203.0.113.7;
+    deny  all;
+    try_files $uri /index.php$is_args$args;
+}</code></pre>
+
+        <h2>9. The Database Tier</h2>
+
+        <p>MySQL or MariaDB on an ecommerce estate holds every order, every customer address, and — encrypted, if you have done it right — payment configuration.</p>
+
+        <p><strong>Bind to a private interface, never <code>0.0.0.0</code>.</strong> The distributor's finding at the top of this article. Check with <code>ss -tulpn</code> rather than reading the config file, because the config file may not be the file that is loaded.</p>
+
+        <p><strong>One database user per application, with only the grants it needs.</strong> The Magento application user needs data manipulation rights on its own schema. It does not need <code>FILE</code>, it does not need <code>SUPER</code>, it does not need <code>GRANT OPTION</code>, and it does not need access to <code>mysql.*</code>. The <code>FILE</code> privilege in particular converts a SQL injection into arbitrary file read and, in some configurations, file write.</p>
+
+        <p><strong>Separate users for separate jobs.</strong> The reporting tool and the backup job should have their own credentials with read-only rights, so a leak from your BI vendor does not become a write path into orders.</p>
+
+        <pre><code class="language-sql">-- Application user: exactly what Magento needs, from the web tier only.
+CREATE USER 'magento_app'@'10.0.1.%' IDENTIFIED BY 'from-the-secrets-manager';
+GRANT SELECT, INSERT, UPDATE, DELETE,
+      CREATE, DROP, INDEX, ALTER,
+      CREATE TEMPORARY TABLES, LOCK TABLES,
+      EXECUTE, CREATE VIEW, SHOW VIEW,
+      CREATE ROUTINE, ALTER ROUTINE, TRIGGER
+  ON magento.* TO 'magento_app'@'10.0.1.%';
+
+-- Read-only user for reporting. Note the different host restriction.
+CREATE USER 'reporting_ro'@'10.0.3.%' IDENTIFIED BY 'different-secret';
+GRANT SELECT ON magento.* TO 'reporting_ro'@'10.0.3.%';
+
+-- Backups need a little more than SELECT, and still nowhere near SUPER.
+CREATE USER 'backup'@'10.0.4.%' IDENTIFIED BY 'another-secret';
+GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER,
+      RELOAD, PROCESS, REPLICATION CLIENT
+  ON *.* TO 'backup'@'10.0.4.%';
+
+FLUSH PRIVILEGES;
+
+-- Audit what already exists. Run this on every estate you inherit;
+-- the output is frequently alarming.
+SELECT user, host FROM mysql.user WHERE host IN ('%', '0.0.0.0');
+SHOW GRANTS FOR 'magento_app'@'10.0.1.%';</code></pre>
+
+        <p>That first audit query — users permitted from any host — is a thirty-second check that has found something on more than half the inherited estates I have looked at.</p>
+
+        <p><strong>Encryption in transit and at rest.</strong> Require TLS for database connections if the traffic crosses anything you do not fully control. Encryption at rest is usually a checkbox at the provider level and protects mainly against physical media disposal and snapshot leakage, which are real but narrow threats. Do not let an "encrypted at rest" tick convince anybody that the credentials problem is solved; a compromised application user reads the data decrypted, as designed.</p>
+
+        <h2>10. Redis, OpenSearch, Varnish: The Services Nobody Locks Down</h2>
+
+        <p>These three share a characteristic: they were designed for trusted networks, they default to no authentication, and the documentation for getting started tells you to bind them to a port and move on.</p>
+
+        <p><strong>Redis.</strong> Bind to a private address, require a password, and rename or disable the administrative commands. On a Magento install Redis holds sessions and cache, which means it holds admin session tokens and can hold personal data.</p>
+
         <pre><code class="language-ini"># /etc/redis/redis.conf
-# Bind to localhost only to prevent external access
-bind 127.0.0.1 -::1
+bind 10.0.2.20 127.0.0.1
+protected-mode yes
 port 6379
+requirepass a-long-random-string-from-the-secrets-manager
 
-# Enforce a strong cryptographic password for access
-requirepass a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
-
-# Rename dangerous commands to prevent malicious execution
+# Commands that let a connected client rewrite the dataset, read the config,
+# or in some historical exploits write a file to disk.
+rename-command CONFIG   ""
 rename-command FLUSHALL ""
-rename-command FLUSHDB ""
-rename-command CONFIG ""</code></pre>
-        <p>Renaming commands like <code>FLUSHALL</code> disables them, preventing attackers from wiping the cache or altering database structure.</p>
+rename-command FLUSHDB  ""
+rename-command DEBUG    ""
+rename-command MODULE   ""
 
-        <hr />
+# Sessions should not be silently evicted; that logs customers out mid-checkout.
+maxmemory 2gb
+maxmemory-policy volatile-lru</code></pre>
 
-        <h2>10. Content Security Policy (CSP) and Asset Integrity</h2>
-        <p>Cross-Site Scripting (XSS) and Magecart attacks are mitigated by a Content Security Policy (CSP), a strict whitelist dictating permitted domains for executing scripts.</p>
-        <p>When deployed in <code>restrict</code> mode, unauthorized scripts are blocked by the browser. Refer to <a href="/blog/csp-implementation/">Content Security Policy Implementation</a>.</p>
-        <p>Subresource Integrity (SRI) hashes should be utilized when loading external scripts from CDNs to reject modified malicious files.</p>
+        <p>That last pair is not a security setting but it is the one that causes production incidents. A Redis instance shared between cache and sessions, with <code>allkeys-lru</code>, will evict session keys under cache pressure and customers will lose their baskets. Use separate databases or separate instances, with different eviction policies.</p>
 
-        <hr />
+        <p><strong>OpenSearch or Elasticsearch.</strong> Enable the security plugin, use a dedicated user for the application, and never expose the HTTP interface beyond the web tier. An unauthenticated search cluster is a full read of your catalogue and, depending on what you index, of customer data. It is also a well-known ransom target — there is an entire genre of attack that consists of finding an open cluster, dropping the indices, and leaving a note.</p>
 
-        <h2>11. Log Monitoring and File Integrity Management</h2>
-        <p>File Integrity Monitoring (FIM) systems monitor for unauthorized modifications. A baseline snapshot is generated, and the agent periodically compares cryptographic hashes.</p>
-        <p>These logs, alongside Nginx and Magento logs, should be ingested into a SIEM platform for automated analysis.</p>
-        
-        <hr />
+        <p><strong>Varnish.</strong> The admin interface listens on 6082 by default with a secret file. Bind it to localhost. And check the ban and purge access control list, because the sample Magento VCL includes an ACL that people often widen and forget — a permissive purge ACL lets anyone flush your cache repeatedly, which is a denial of service against your origin.</p>
 
-        <h2>12. Elasticsearch and OpenSearch Network Security</h2>
-        <p>If a search engine node binds to a public network interface without authentication, attackers can extract the product catalog.</p>
-        <p>The <code>elasticsearch.yml</code> configuration must strictly bind the service to the local loopback interface.</p>
-        <pre><code class="language-yaml"># /etc/elasticsearch/elasticsearch.yml
-cluster.name: magento-production-cluster
-node.name: node-1
-network.host: 127.0.0.1
-http.port: 9200
+        <pre><code class="language-bash"># The check that covers all three at once. Run it from outside the network,
+# then again from a web node, and compare.
+for host in 10.0.2.20 10.0.2.21 10.0.2.22; do
+  echo "== $host"
+  nmap -Pn -p 3306,6379,6082,9200,9300,11211,5432 --open "$host"
+done
 
-# Enable security features (X-Pack) for authentication
-xpack.security.enabled: true
-xpack.security.transport.ssl.enabled: true
-xpack.security.transport.ssl.verification_mode: certificate
-xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
-xpack.security.transport.ssl.truststore.path: elastic-certificates.p12</code></pre>
-        <p>Update Magento to authenticate with the newly secured search cluster.</p>
-        <pre><code class="language-bash"># Configure Magento to use Elasticsearch authentication
-php bin/magento config:set catalog/search/elasticsearch7_server_hostname localhost
-php bin/magento config:set catalog/search/elasticsearch7_server_port 9200
-php bin/magento config:set catalog/search/elasticsearch7_enable_auth 1
-php bin/magento config:set catalog/search/elasticsearch7_username elastic
-php bin/magento config:set catalog/search/elasticsearch7_password 'YourSecurePasswordHere'</code></pre>
+# Redis specifically: does it answer without a password?
+redis-cli -h 10.0.2.20 ping 2&gt;&amp;1 | head -1   # want NOAUTH, not PONG
 
-        <hr />
+# OpenSearch specifically
+curl -s --max-time 5 "http://10.0.2.22:9200/_cat/indices" | head -3</code></pre>
 
-        <h2>13. RabbitMQ Authentication and Virtual Hosts</h2>
-        <p>RabbitMQ must be locked down to prevent unauthorized message injection. Create a dedicated administrative user and a specific virtual host for Magento's usage.</p>
-        <pre><code class="language-bash"># Configure RabbitMQ securely for Magento 2
-# Create a dedicated virtual host
-rabbitmqctl add_vhost /magento_prod
+        <p>Memcached is on that port list deliberately. It appears on estates that migrated to Redis years ago and left the old daemon running, and an exposed memcached is both a data leak and a well-known UDP amplification vector that will get you an abuse notice from your provider.</p>
 
-# Create a dedicated user with a strong password
-rabbitmqctl add_user magento_admin 'StrongCryptographicPassword'
+        <h2>11. Secrets on Disk</h2>
 
-# Assign permissions to the user for the specific vhost
-rabbitmqctl set_permissions -p /magento_prod magento_admin ".*" ".*" ".*"
+        <p>On a self-hosted Magento install, <code>app/etc/env.php</code> contains the database password, the Redis password, the cache and session configuration, and the encryption key that protects payment configuration in the database.</p>
 
-# Delete the default guest user
-rabbitmqctl delete_user guest</code></pre>
-        <p>Update Magento's <code>env.php</code> to reflect these new credentials.</p>
+        <p>Three rules.</p>
 
-        <hr />
+        <p><strong>It is not in the repository.</strong> Ever, including in a private repository, including with the values replaced by placeholders that someone will eventually fill in on a branch.</p>
 
-        <h2>14. Automated Vulnerability Scanning and Penetration Testing</h2>
-        <p>Automated vulnerability scanning must be integrated into the CI/CD pipeline to analyze source code for CVEs and outdated dependencies.</p>
-        <p>Engage certified security professionals to conduct regular white-box penetration testing to identify complex business logic flaws.</p>
+        <p><strong>Its permissions are as tight as the application allows.</strong> Owned by the deploy user, readable by the group PHP runs as, and nothing else. Not world-readable, which is the default state I most often find it in.</p>
 
-        <hr />
+        <p><strong>It is generated at deploy time from a secrets manager</strong> rather than edited on the server. That gives you rotation, an audit trail of access, and a definitive answer to "which environments hold this credential".</p>
+
+        <pre><code class="language-bash"># Check the current state — takes ten seconds
+stat -c '%A %U:%G %n' /var/www/shop/app/etc/env.php
+# want: -rw-r----- deploy:magento
+
+# Find every other place a credential might be sitting readable
+sudo find /var/www/shop -maxdepth 3 -name '*.php' -perm -o+r \
+     -exec grep -l 'password\|crypt\|api_key' {} \; 2&gt;/dev/null
+
+# And the ones outside the app tree that people forget
+sudo ls -la /home/*/.my.cnf /root/.my.cnf 2&gt;/dev/null
+sudo ls -la /var/www/shop/.env /var/www/shop/*.sql 2&gt;/dev/null</code></pre>
+
+        <p>The <code>.my.cnf</code> check is worth its own mention. It is a convenience file holding a MySQL password in plaintext, created by whoever got tired of typing it, and it usually belongs to an account several people can access.</p>
+
+        <p>If the encryption key has ever been exposed — committed, pasted into a ticket, included in a database dump shared with an agency — rotating it is a real operation. It re-encrypts stored values across the install, it needs a maintenance window, and it needs your payment configuration re-entered afterwards on some setups. It is still the right call, and the reasoning for why an exposed key plus a database dump is much worse than either alone is set out in the scope discussion in the <a href="/blog/pci-dss-compliance/">PCI DSS blueprint</a>.</p>
+
+        <h2>12. Cron, Queue Consumers and Background Privilege</h2>
+
+        <p>Background processes are where privilege quietly escapes the model you designed.</p>
+
+        <p>Magento's cron runs as a user, and on a lot of estates that user is root because someone was fixing a permissions error at the time. Every cron job then runs as root, including any code an extension registers. That is a full privilege escalation available to anyone who can install an extension or modify a file the cron reads.</p>
+
+        <p>Run cron as the same unprivileged user that owns the application, and check what is actually scheduled:</p>
+
+        <pre><code class="language-bash"># What is scheduled, for every user on the box
+for u in $(cut -f1 -d: /etc/passwd); do
+  out=$(sudo crontab -l -u "$u" 2&gt;/dev/null) &amp;&amp; echo "== $u" &amp;&amp; echo "$out"
+done
+sudo ls -la /etc/cron.d/ /etc/cron.daily/ /etc/cron.hourly/
+
+# Systemd timers, which people forget are also cron
+systemctl list-timers --all</code></pre>
+
+        <p>Queue consumers deserve the same treatment. On a Magento estate they are usually run by supervisor or systemd, and the unit files are a good place to add the cheap systemd confinement directives, which cost nothing and remove several escalation routes:</p>
+
+        <pre><code class="language-ini"># /etc/systemd/system/magento-consumer@.service
+[Unit]
+Description=Magento queue consumer %i
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=magento
+WorkingDirectory=/var/www/shop
+ExecStart=/usr/bin/php bin/magento queue:consumers:start %i --max-messages=10000
+Restart=always
+RestartSec=5
+
+# Confinement. Each of these removes a class of escalation for free.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+ReadWritePaths=/var/www/shop/var /var/www/shop/pub/media /var/www/shop/generated
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+        <p><code>ProtectSystem=strict</code> plus an explicit <code>ReadWritePaths</code> gives you a read-only filesystem for that process with three exceptions. It is the systemd equivalent of the file permission work above and it takes ten minutes per unit.</p>
+
+        <h2>13. The Host Itself</h2>
+
+        <p>A short list, because most kernel hardening guidance is aimed at threat models that a web server does not have.</p>
+
+        <p><strong>Automatic security updates, on.</strong> The argument against them is that an update might break something. The argument for is that the alternative is a machine three months behind because everyone was busy. I turn them on for security updates only, with a reboot window, and accept the small risk. If you cannot accept it, then you owe the estate a real patching cadence with a named owner, and in my experience the teams that refuse automatic updates are rarely the teams that have one.</p>
+
+        <pre><code class="language-bash"># Debian/Ubuntu
+sudo apt install -y unattended-upgrades
+sudo tee /etc/apt/apt.conf.d/52security &gt;/dev/null &lt;&lt;'EOF'
+Unattended-Upgrade::Allowed-Origins { "${distro_id}:${distro_codename}-security"; };
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+Unattended-Upgrade::Mail "ops@example.com";
+Unattended-Upgrade::MailReport "on-change";
+EOF
+sudo unattended-upgrade --dry-run --debug | tail -20</code></pre>
+
+        <p><strong>Remove what you do not run.</strong> Every installed package is attack surface and patching obligation. A web node does not need a compiler, a mail transfer agent listening externally, an FTP server, or the desktop libraries that came with a generic image.</p>
+
+        <p><strong>Keep the auth log and actually ship it somewhere.</strong> Logs on a compromised host are logs an attacker can edit. Forwarding to a collector the web nodes cannot delete from is what makes them evidence.</p>
+
+        <p><strong>Audit the sensitive paths.</strong> The Linux audit subsystem is heavy if you enable everything and cheap if you enable four rules:</p>
+
+        <pre><code class="language-bash"># /etc/audit/rules.d/shop.rules
+-w /etc/passwd    -p wa -k identity
+-w /etc/shadow    -p wa -k identity
+-w /etc/sudoers   -p wa -k privilege
+-w /etc/sudoers.d -p wa -k privilege
+-w /var/www/shop/app/etc/env.php -p rwa -k secrets
+-w /var/www/shop/app/code        -p wa  -k code_change
+
+# Then: who read env.php today?
+sudo ausearch -k secrets -ts today | head -40</code></pre>
+
+        <p>That last query is one of the more useful things on this page. On a healthy box, <code>env.php</code> is read by PHP-FPM at startup and by essentially nothing else. Anything else reading it is a question worth asking.</p>
+
+        <p><strong>SELinux or AppArmor.</strong> The honest position: enforcing mode is a real improvement and it is a real project, and a lot of teams set it to permissive during an install problem and never go back. If you are not going to run it enforcing, say so explicitly and rely on the file permission and systemd confinement work instead, which gets you a decent fraction of the benefit for much less effort. What I would not do is leave it in permissive mode while telling an assessor it is enabled.</p>
+
+        <h2>14. If You Run Containers</h2>
+
+        <p>Containers change the nouns rather than the principles, and they introduce a few failure modes of their own.</p>
+
+        <p>The application should not run as root inside the container. This is the default in a distressing number of published images, and it matters because a container escape from root is a much shorter journey than one from an unprivileged user.</p>
+
+        <p>The filesystem should be read-only with explicit writable mounts, which is the same idea as <code>ProtectSystem=strict</code> above. The container should not have the Docker socket mounted into it, which is a pattern that appears in CI configurations and is exactly equivalent to giving that container root on the host.</p>
+
+        <pre><code class="language-yaml"># docker-compose fragment for a PHP-FPM service
+services:
+  php:
+    image: ghcr.io/example/shop-php:2.4.7-p3
+    user: "1001:1001"          # not root
+    read_only: true            # code is immutable at runtime
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - media:/var/www/shop/pub/media
+      - var:/var/www/shop/var
+    cap_drop: [ALL]            # a PHP process needs none of them
+    security_opt:
+      - no-new-privileges:true
+    # Deliberately absent: /var/run/docker.sock</code></pre>
+
+        <p>Pin image tags to a digest or at least a patch version rather than <code>latest</code>. A moving tag means the thing you tested is not necessarily the thing that is running, and it makes an incident timeline impossible to reconstruct.</p>
+
+        <h2>15. TLS at the Origin, and Private Key Hygiene</h2>
+
+        <p>Almost every article about TLS on an ecommerce site is about the customer-facing certificate and the header that goes with it — that ground is covered in the <a href="/blog/hsts-secure-seo/">HSTS guide</a>. What gets neglected is the half of TLS that lives on the infrastructure side: where the private keys are, who can read them, and what happens between your CDN and your origin.</p>
+
+        <p><strong>The edge-to-origin hop is frequently plaintext.</strong> The customer sees a padlock because the CDN terminates TLS. Behind it, a surprising number of estates run HTTP from the edge to the web nodes, on the reasoning that the connection is "internal". It is internal to a cloud provider's network, which is not the same thing as internal to you, and it means every request including admin sessions and order data crosses a network you do not own in the clear. Terminate TLS at the origin as well. If certificate management on the origin is the objection, use the CDN's origin certificate feature, which issues a long-lived certificate valid only for that pairing.</p>
+
+        <p><strong>Mutual TLS is better than a shared secret header.</strong> The shared header trick shown earlier is fine and it is what most teams implement, but mutual TLS between edge and origin is stronger and no harder to operate once set up, because the credential cannot be replayed from a leaked log or a stray request dump.</p>
+
+        <pre><code class="language-nginx"># Origin requires a client certificate issued by the CDN's origin-pull CA.
+server {
+    listen 443 ssl;
+    server_name shop.example.com;
+
+    ssl_certificate     /etc/ssl/shop/fullchain.pem;
+    ssl_certificate_key /etc/ssl/shop/privkey.pem;
+
+    # Only the edge holds a certificate signed by this CA.
+    ssl_client_certificate /etc/ssl/shop/origin-pull-ca.pem;
+    ssl_verify_client on;
+
+    # Modern protocol floor. TLS 1.0 and 1.1 have been unacceptable for years
+    # and 1.2 is the practical minimum; 1.3 only breaks very old clients.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_tickets off;   # tickets weaken forward secrecy unless rotated
+}</code></pre>
+
+        <p><strong>Private keys should be readable by one user and no others.</strong> Mode 600, owned by root, with Nginx reading them before it drops privileges. I regularly find key files at 644, and occasionally find them checked into a deployment repository "temporarily".</p>
+
+        <pre><code class="language-bash"># Every private key on the box, with its permissions
+sudo find /etc /opt /var/www -name '*.key' -o -name 'privkey*.pem' 2&gt;/dev/null \
+  | xargs -r sudo stat -c '%a %U:%G %n'
+
+# Expiry dates for everything you serve, including the ones you forgot
+for d in shop.example.com admin.example.com api.example.com; do
+  echo -n "$d "
+  echo | openssl s_client -connect "$d:443" -servername "$d" 2&gt;/dev/null \
+    | openssl x509 -noout -enddate
+done</code></pre>
+
+        <p><strong>Automate renewal and alert on expiry independently of the automation.</strong> The failure I have seen twice is an ACME client that silently stopped renewing — once because a validation path was blocked by a firewall rule added for unrelated reasons — and nobody noticed until the certificate expired. The renewal job and the expiry alert should be separate systems, because a monitor that depends on the thing it monitors is not a monitor.</p>
+
+        <p><strong>Set a CAA record.</strong> One DNS line that says which certificate authorities may issue for your domain. It does not stop an attacker who controls your DNS, but it does stop the mis-issuance case, and it takes two minutes.</p>
+
+        <h2>16. DNS and the Domain, Which Sit Above Everything</h2>
+
+        <p>Every control in this article assumes traffic arrives at your servers. Someone who controls your DNS makes that assumption false, and they do it without touching a single machine you own. I treat the registrar as the highest-value account in the estate, ahead of the hosting console.</p>
+
+        <p><strong>Registrar lock, on.</strong> Both the client transfer prohibition and, if your registrar offers it, a registry-level lock requiring out-of-band confirmation for changes. Domain hijacking is rarer than it was and the consequences remain total.</p>
+
+        <p><strong>Second factor on the registrar account</strong> — mentioned in the operational checklist too, and worth repeating because it is the account people most often forget exists. If the domain is registered to an individual's personal account, which happens more than you would like on businesses that grew organically, fix that before anything else.</p>
+
+        <p><strong>Know what your zone contains.</strong> Stale records are a genuine attack surface. A CNAME pointing at a cloud service you stopped using is a subdomain takeover waiting for someone to reclaim that bucket or app name, and the resulting page is served from your domain, with your cookies in scope if they were set on a wildcard.</p>
+
+        <pre><code class="language-bash"># Dump the zone and look for records pointing at things you no longer own.
+# The dangerous pattern is a CNAME whose target does not resolve.
+for name in $(cat subdomains.txt); do
+  target=$(dig +short CNAME "$name.example.com")
+  if [ -n "$target" ]; then
+    if ! dig +short "$target" | grep -q .; then
+      echo "DANGLING: $name.example.com -&gt; $target"
+    fi
+  fi
+done</code></pre>
+
+        <p><strong>Email authentication is infrastructure too.</strong> SPF, DKIM and a DMARC policy at <code>p=reject</code> stop someone sending order confirmations and password resets that appear to come from you. For an ecommerce brand this is a direct customer-fraud control, not just a deliverability one. The path is the usual one — monitor at <code>p=none</code>, work through the reports until every legitimate sender is aligned, then move to quarantine and then reject. Budget a couple of months, because you will discover senders nobody remembered: the review platform, the returns portal, the marketing tool from a campaign in 2022.</p>
+
+        <p>One trap specific to ecommerce: transactional mail is often sent by three or four different systems, and the one that breaks when you tighten SPF is invariably the one that sends dispatch notifications, which generates support tickets immediately. Enumerate senders from your DMARC aggregate reports before changing the policy, not after.</p>
+
+        <h2>17. A Worked Hardening: Four Weeks on the Distributor</h2>
+
+        <p>Back to the environment from the opening. Two web nodes, one database, one shared services box running Redis and OpenSearch, roughly 900 orders a day, Magento 2.4.6.</p>
+
+        <p><strong>Week one — exposure.</strong> The port scan and the origin-reachability check. Findings: MySQL, Redis and OpenSearch reachable from the internet; both web nodes reachable directly on their public addresses, bypassing the CDN; SSH open to the world with password authentication enabled but, mercifully, no accounts with weak passwords that we could find. Closing the three data ports took forty minutes and broke one thing — a reporting tool at their head office connected directly to MySQL over the internet, which is how it had been set up in 2019. We gave it a read-only user through a VPN, which took a week to arrange and was the correct outcome.</p>
+
+        <p><strong>Week two — identity and permissions.</strong> SSH moved behind a bastion, keys only, <code>AllowGroups</code> set. The file permission work: PHP-FPM had been running as the file owner, and separating them found the two runtime writers I mentioned earlier. Redis got a password, which required a coordinated restart because the application config had to change at the same moment, and we scheduled it at 04:00 and it still logged out every signed-in customer, which we should have flagged to their support team in advance and did not.</p>
+
+        <p><strong>Week three — services and secrets.</strong> OpenSearch security plugin enabled with a dedicated application user. <code>env.php</code> permissions corrected from 644 to 640 and moved to deploy-time generation from the provider's secrets manager. A secret scan over the repository found the database password in a docker-compose file committed in 2021 and the encryption key in a wiki page. Both rotated. The encryption key rotation took a two-hour maintenance window on a Sunday and one payment method had to be reconfigured afterwards.</p>
+
+        <p><strong>Week four — durability.</strong> Everything above expressed in Ansible so it could be reapplied and verified. Auditd rules, log forwarding to a collector the web nodes could write to but not read or delete, and a weekly job that runs the port scan and the permission checks and posts the diff into a channel.</p>
+
+        <p>The measurable outcome after four weeks: exposed services went from five to zero, the number of accounts able to reach the database went from eleven to four, and the estate could be rebuilt from source in about ninety minutes, which had previously been an unanswerable question.</p>
+
+        <p>What we did not finish: SELinux stayed permissive, egress filtering was scoped and not implemented, and the WAF ruleset at the CDN remained something nobody could explain. Those went on a register with dates. Two of the three were still open a year later, which is honest and typical.</p>
+
+        <h2>18. Verifying That It Stayed Hardened</h2>
+
+        <p>Every setting in this article can be undone by one person in one afternoon, usually for a good reason and usually without telling anybody. The controls that persist are the ones with a check attached.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# harden-check.sh — run weekly from a machine outside the app tier.
+# Prints failures only. Exit non-zero if anything fails.
+set -uo pipefail
+fail=0
+check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
+
+# Nothing sensitive answers from outside
+check "mysql not public"     '! nc -z -w3 203.0.113.50 3306'
+check "redis not public"     '! nc -z -w3 203.0.113.51 6379'
+check "opensearch not public" '! nc -z -w3 203.0.113.51 9200'
+
+# Origin refuses direct traffic
+code=$(curl -sk --max-time 8 -H 'Host: shop.example.com' https://203.0.113.42/ -o /dev/null -w '%{http_code}')
+check "origin rejects direct" "[ \"$code\" = 403 ]"
+
+# SSH policy is what we think it is
+check "no ssh passwords" 'ssh -o BatchMode=yes -o ConnectTimeout=5 bastion "sshd -T | grep -qx \"passwordauthentication no\""'
+
+# Secrets file permissions
+check "env.php is 640" 'ssh web1 "stat -c %a /var/www/shop/app/etc/env.php" | grep -qx 640'
+
+# PHP cannot write its own code
+check "code not writable by php" 'ssh web1 "sudo -u www-data test ! -w /var/www/shop/app/code"'
+
+exit $fail</code></pre>
+
+        <p>Run that on a schedule and route failures somewhere a human reads. It is perhaps sixty lines by the time you have covered your own estate, and it converts every item above from a thing you did once into a thing that is currently true.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"Our host says the servers are managed and hardened. Is that enough?"</strong> Ask them for the specifics: which of the items above they own, when the last kernel patch was applied, what their firewall default policy is, and whether they will run a port scan for you or let you run one. A good managed host answers all four immediately. The unsatisfactory answers are usually vague rather than negative, and vagueness is the finding.</p>
+
+        <p><strong>"Should I bother with a host firewall if I have cloud security groups?"</strong> Yes, and it takes twenty minutes. Security groups are edited by people under pressure, and a host-level default-deny is what catches the temporary rule that was never removed. It has saved two of my clients from exactly the scenario at the top of this article.</p>
+
+        <p><strong>"Is <code>disable_functions</code> actually worth it given it can be bypassed?"</strong> It is not a boundary and it is worth it. It stops essentially every off-the-shelf web shell, which is what you will actually encounter. The bypass techniques exist and require a level of effort that most opportunistic attacks do not bring. Do it, and do not describe it to anyone as a boundary.</p>
+
+        <p><strong>"How do I harden a Magento box I cannot take offline?"</strong> In this order, because it is roughly ascending risk of breaking something: network exposure first — closing a port that should never have been open breaks only the things that should not have been doing it, and you will find those quickly. Then SSH policy. Then service authentication, with a maintenance window for Redis because it will drop sessions. Then file permissions, which need a staging rehearsal because of the runtime-writer problem. Leave secrets rotation until last; it needs a window and a rollback plan.</p>
+
+        <p><strong>"Do I need to change the admin URL if I have IP restrictions?"</strong> No. The IP restriction is the real control and the URL change adds nothing on top of it except quieter logs. If you cannot do IP restriction, then the URL change is worth having for exactly that reason — it makes your authentication logs meaningful, because after the change every failed login on the real path is signal rather than background scanning.</p>
+
+        <p><strong>"What about a WAF?"</strong> Useful, and it sits above everything on this page rather than replacing any of it. The failure mode I see is a WAF in front of an origin that is also directly reachable, which is the check in the firewall section. A WAF you can walk around is decoration.</p>
+
+        <p><strong>"How much does all of this slow the site down?"</strong> Essentially nothing measurable. The only settings with a real performance cost are auditd if you enable broad rules — which is why the rule set above is four lines — and full egress filtering if it adds a hop. Rate limiting, file permissions, systemd confinement and firewall rules do not show up in a percentile you care about.</p>
+
+        <p><strong>"We are moving to a managed platform next year. Is this worth doing now?"</strong> Do the exposure work and the secrets work, skip the rest. Closing open ports and rotating leaked credentials protects you between now and the migration, and neither is wasted effort. Spending three weeks on systemd unit confinement for a stack you are retiring is not a good use of a quarter.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>Scan your own addresses from outside your network. All of them, including the ones you think are internal, including the load balancer and every web node. This takes fifteen minutes and it is the highest-yield thing in this article — if something answers on 3306, 6379 or 9200, stop reading and go and fix that.</p>
+
+        <p>Check whether your origin servers are reachable directly, bypassing your CDN. Same fifteen minutes, same category of finding.</p>
+
+        <p>Run <code>sshd -T</code> on each host and confirm that password authentication is off, root login is off, and only the groups you expect may log in. Then look at every <code>authorized_keys</code> file and remove the keys you cannot attribute to a current person.</p>
+
+        <p>Run <code>stat</code> on <code>app/etc/env.php</code>. If it is world-readable, fix it now. Then check whether the user PHP runs as can write to <code>app/code</code>. If it can, plan the separation, rehearse it on staging to find the runtime writers, and do it.</p>
+
+        <p>Then the audit queries: MySQL users permitted from any host, and the grants on your application user. Both are a minute each and both tend to produce something.</p>
+
+        <p>After that, the durable work: get the configuration into a repository so this is reviewable, write the weekly verification script, and put the findings somewhere a person sees them. The individual settings in this article are not difficult and most of them take under an hour. What is difficult is keeping them true through eighteen months of debugging sessions, migrations, urgent fixes and staff changes, and the only thing I have found that achieves that is a check that runs on a timer and complains.</p>
+
+        <p>The distributor's environment was not badly built. It was built correctly in 2021 and then lived through two years of ordinary operational pressure with nothing watching. That is the normal way infrastructure becomes insecure, and it is why the last section of this article matters more than any single setting in the ones before it.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva on securing and scaling e-commerce platforms:</p>
           <ul>
             <li>
@@ -557,7 +1007,6 @@ rabbitmqctl delete_user guest</code></pre>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -591,6 +1040,6 @@ rabbitmqctl delete_user guest</code></pre>
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

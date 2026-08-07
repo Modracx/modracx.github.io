@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Headless Shopify Development with Hydrogen & Remix | MODRACX</title>
-  <meta name="description" content="Technical guide on building custom Shopify Plus storefronts using Shopify Hydrogen 2.0 framework, Remix routes, Oxygen edge hosting, and Storefront GraphQL API." />
+  <meta name="description" content="Building a Shopify storefront on Hydrogen and Oxygen: Storefront API limits, the cart handler, caching that actually works, checkout you cannot render, and what you lose versus a Liquid theme." />
   <meta property="og:title" content="Headless Shopify Development with Hydrogen & Remix | MODRACX" />
   <meta property="og:description" content="Technical guide on building custom Shopify Plus storefronts by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Headless Shopify Development with Hydrogen & Remix</h1>
-        <p class="lede">Shopify Hydrogen 2.0 built on Remix enables sub-second page loads on Oxygen edge servers while preserving Shopify Admin management for merchants.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Headless Shopify Development with Hydrogen &amp; Remix</h1>
+        <p class="lede">Six weeks into a Hydrogen build the client asked when the checkout upsell was moving across. It was not. What Hydrogen and Oxygen give you, what the Storefront API will not do, and what a Liquid theme was quietly doing all along.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 37 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,26 +205,569 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Hydrogen 2.0 Remix Loader Query</h2>
+        <h2>1. The Meeting Where Checkout Stopped Being Ours</h2>
 
-        <pre><code class="language-typescript">// Shopify Hydrogen 2.0 Remix Route Loader Function
-import { json, type LoaderFunctionArgs } from '@shopify/remix-oxygen';
+        <p>Six weeks into a Hydrogen build for a UK supplements brand, the client's head of ecommerce asked when we would be moving the trust badges and the subscription upsell into the checkout. It was a reasonable question. Their Liquid theme had both, added by an app, and they converted well enough that removing them was not on the table.</p>
 
-export async function loader({ context, params }: LoaderFunctionArgs) {
-  const { handle } = params;
-  const { product } = await context.storefront.query(PRODUCT_QUERY, {
-    variables: { handle },
-  });
+        <p>The answer was that we could not. Not "it is difficult" — we could not. Shopify checkout is served by Shopify, from <code>checkout.shopify.com</code> or a shop-owned checkout domain, rendered by Shopify's own code. Hydrogen hands off a cart and the customer leaves your application. On Shopify Plus you get checkout UI extensions, which let you place approved components in defined slots, and Shopify Functions, which let you change discount, delivery and payment logic. You do not get to render checkout.</p>
 
-  if (!product) throw new Response('Not Found', { status: 404 });
-  return json({ product });
+        <p>They were on Plus, so the trust badges became a checkout UI extension and the subscription upsell became a different app that supported extensions. It took three weeks and it looked different from the mockup. Had they not been on Plus, the answer would have been "you lose both".</p>
+
+        <p>I have had a version of that conversation on every Hydrogen project. It is not a criticism of Hydrogen — the boundary is a Shopify product decision and it is defensible, since owning checkout is how Shopify keeps conversion rates and PCI scope under control. But it is the single most important thing to establish before anyone writes a line of code, and it is routinely discovered in week six.</p>
+
+        <p>This article is the Shopify-specific build: what Hydrogen and Oxygen actually are, how the Storefront API constrains you, how cart and customer state work across the boundary, and an honest accounting of what a Liquid theme does that a Hydrogen app does not. The wider question of whether to decouple at all is in <a href="/blog/headless-architecture/">the headless architecture decision piece</a>, and I would read that first if the decision is still open.</p>
+
+        <h2>2. What Hydrogen Actually Is</h2>
+
+        <p>Hydrogen is a React framework for Shopify storefronts. Since Hydrogen 2.0, released March 2023, it is built on Remix rather than on the bespoke React Server Components runtime that Hydrogen 1 used, and as Remix folded into React Router 7 during 2024 the framework moved with it. If you are reading a Hydrogen tutorial written before mid-2023 it describes a framework that no longer exists.</p>
+
+        <p>What you get in the box is narrower than people expect, and that is a feature.</p>
+
+        <p><strong>A Remix application scaffold</strong> with routing, loaders, actions and forms, deployed as a worker rather than a Node server.</p>
+
+        <p><strong>A typed Storefront API client</strong> with a caching layer wired into the request lifecycle, which is the genuinely valuable part.</p>
+
+        <p><strong>Cart handling</strong> as a first-class primitive — a cart handler on the request context, form actions for the standard mutations, and optimistic UI helpers.</p>
+
+        <p><strong>A component library</strong> that is smaller every release. <code>Image</code>, <code>Money</code>, <code>Analytics</code>, <code>CartForm</code>, <code>Pagination</code>. Hydrogen deliberately shed the larger UI components it shipped in 2022; the current position is that Shopify provides data primitives and you provide the interface.</p>
+
+        <p>What you do not get: a design system, a theme editor, a page builder, an app ecosystem, or checkout. Four of those five have direct Liquid equivalents that merchants use daily, which is the substance of the trade.</p>
+
+        <pre><code class="language-bash"># The scaffold. The demo store is worth generating once even if you throw it
+# away — it is the most current reference for the framework's own conventions,
+# which move faster than the documentation.
+npm create @shopify/hydrogen@latest -- --template demo-store
+
+cd my-store
+npm run dev            # local worker runtime via MiniOxygen, not plain Node
+
+# Codegen against your shop's actual Storefront API version. Do this on every
+# API version bump; it is how you find out a field was removed at build time
+# rather than at 3am from a customer.
+npx shopify hydrogen codegen</code></pre>
+
+        <h2>3. Oxygen, and Whether You Have To Use It</h2>
+
+        <p>Oxygen is Shopify's hosting for Hydrogen. Workers running on Shopify's edge network, deployed from GitHub, free of charge on Shopify plans that include it, with environments that map to git branches and a preview URL per pull request.</p>
+
+        <p>The things I actually like about it. Deployment is a push, and preview environments per branch are genuinely useful for getting merchandising to look at something before it ships. Storefront API calls from Oxygen are internal — they do not leave Shopify's network — which reliably saves 30–80ms per subrequest compared with calling the same API from Vercel or Cloudflare. And there is no bill, which on a 200,000-session-a-month store is not nothing.</p>
+
+        <p>The things that constrain you. It is a worker runtime, so no Node built-ins beyond what is polyfilled, no filesystem, no long-running processes, no background jobs. There is a request-duration ceiling. The observability is thin — you get logs and basic metrics, and if you want traces or real APM you are shipping data out yourself. And environment variable handling is per-environment through the CLI or admin, which is fine until you want a secret manager.</p>
+
+        <p>You are not obliged to use it. Hydrogen deploys to Cloudflare Workers, Netlify, or Node, and I have run one on Cloudflare because the client already had their WAF, their image pipeline and their existing marketing site there and did not want a second edge vendor. That cost about 50ms per page in extra Storefront API latency and bought consistency of operations, which was the right trade for them and would not be for most.</p>
+
+        <p>Default to Oxygen. Move off it when you have a specific reason you can name, not because a worker runtime feels limiting in the abstract.</p>
+
+        <pre><code class="language-yaml"># .github/workflows/oxygen.yml — the CLI does the work; the value of owning
+# the workflow file is being able to gate on tests and Lighthouse before deploy.
+name: Deploy to Oxygen
+on: [push]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run test
+      - run: npx shopify hydrogen build
+      - run: npx shopify hydrogen deploy
+        env:
+          # Branch-to-environment mapping is resolved by the CLI from the
+          # linked storefront, so one token covers every environment.
+          SHOPIFY_HYDROGEN_DEPLOYMENT_TOKEN: ${{ secrets.OXYGEN_TOKEN }}</code></pre>
+
+        <h2>4. The Storefront API Is Your Entire Surface</h2>
+
+        <p>Everything the storefront can know comes through the Storefront API, a GraphQL endpoint versioned quarterly with a twelve-month support window per version. What it exposes is deliberately public-safe: products, collections, cart, customer with a token, content from metaobjects, search, localisation, blogs. What it does not expose is anything an admin would use — inventory levels beyond a coarse availability flag, order editing, customer lists, fulfilment detail, cost prices.</p>
+
+        <p>This trips people up in specific, predictable ways.</p>
+
+        <p><strong>Inventory quantity is not generally available.</strong> You get <code>availableForSale</code>, and <code>quantityAvailable</code> only when the product's inventory policy and the shop's settings permit it. If your merchandising plan says "show exact stock counts to drive urgency", check this in week one, not in UAT.</p>
+
+        <p><strong>Collection filtering is Shopify's, not yours.</strong> Storefront filters come from the collection's configured filters and product metafields, and the available filter set is returned with the collection. You cannot invent a filter dimension the platform does not know about. For anything richer — numeric range facets across multiple attributes, typo tolerance, merchandised ranking — you are adding Algolia or Searchspring, which is another vendor, another index to keep in sync, and another £8k–£30k a year.</p>
+
+        <p><strong>Rate limits are cost-based, not request-based.</strong> The Storefront API uses a leaky bucket scored on query complexity. Requesting 250 products with all variants and all metafields on each is an expensive query and will throttle you well before you hit any request-count intuition.</p>
+
+        <pre><code class="language-graphql"># Ask for the fields you render. This query costs roughly a fifth of the
+# naive version that requests all variants and all metafields per product,
+# and it produces a payload small enough to hydrate cheaply.
+query CollectionPage($handle: String!, $first: Int!, $cursor: String) {
+  collection(handle: $handle) {
+    id
+    title
+    seo { title description }
+    products(first: $first, after: $cursor) {
+      nodes {
+        id
+        handle
+        title
+        featuredImage { url(transform: {maxWidth: 600}) altText width height }
+        priceRange { minVariantPrice { amount currencyCode } }
+        # One variant, not all of them. A 12-variant product returned in full
+        # is about 4KB; this is about 300 bytes.
+        variants(first: 1) { nodes { id availableForSale } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
 }</code></pre>
 
-        <hr />
+        <p>The <code>url(transform:)</code> argument is worth calling out because it is free performance most builds leave on the floor. Shopify's CDN resizes on the fly, and asking for a 600px variant instead of the 2048px original on a card that renders at 300px is the difference between a 40KB image and a 380KB one, forty-eight times over on a collection page.</p>
+
+        <h2>5. Caching, Which Is Where Hydrogen Earns Its Money</h2>
+
+        <p>Hydrogen's caching model is the part of the framework I would miss most if I moved to a bare Remix app. Two layers: a subrequest cache in front of each Storefront API call, and a full-page cache at the edge for responses you mark cacheable.</p>
+
+        <p>The subrequest cache is per-query and configured at the call site, which is exactly right — freshness is a property of the data, not of the page.</p>
+
+        <pre><code class="language-typescript">// app/routes/collections.$handle.tsx
+import {json} from '@shopify/remix-oxygen';
+import {CacheLong, CacheShort} from '@shopify/hydrogen';
+
+export async function loader({params, context, request}) {
+  const {storefront} = context;
+
+  // Two queries, two freshness policies, one round trip's worth of wall time
+  // because they run concurrently. Sequential awaits here are the single most
+  // common performance bug I find in Hydrogen code review.
+  const [collection, nav] = await Promise.all([
+    storefront.query(COLLECTION_QUERY, {
+      variables: {handle: params.handle, first: 24},
+      // 60s fresh, then serve stale for an hour while revalidating in the
+      // background. Price changes land within a minute; nobody waits.
+      cache: storefront.CacheCustom({
+        mode: 'public',
+        maxAge: 60,
+        staleWhileRevalidate: 60 * 60,
+      }),
+    }),
+    storefront.query(NAV_QUERY, {cache: CacheLong()}),
+  ]);
+
+  if (!collection) throw new Response('Not found', {status: 404});
+
+  return json(
+    {collection, nav},
+    {
+      // Full-page cache. Safe here because nothing on this route varies by
+      // customer — the cart lives in a separate request.
+      headers: {'Cache-Control': 'public, max-age=60, stale-while-revalidate=3600'},
+    },
+  );
+}</code></pre>
+
+        <p>The rule that keeps this honest: a route is page-cacheable only if its HTML is identical for every visitor. The moment you server-render the cart count, or a customer's name, or a B2B price, the whole document becomes private and you have thrown away the edge cache for a header badge. Fetch those in a separate, uncached request after hydration.</p>
+
+        <p>I audited a Hydrogen store in late 2024 whose product pages had a 4% edge hit rate. The cause was one component in the root layout rendering "Hi, Sarah" server-side. Moving that to a client fetch took the hit rate to 88% and median TTFB from 310ms to 45ms. One component.</p>
+
+        <h3>What is not cached, and cannot be</h3>
+
+        <p>Cart mutations, customer account routes, and anything behind the Customer Account API. Accept it and design so those are small, infrequent, and off the critical path of a first page view.</p>
+
+        <h2>6. Cart: The Part Hydrogen Does Genuinely Well</h2>
+
+        <p>The cart lives in Shopify. Hydrogen holds a cart ID in a cookie and every mutation is a Storefront API call that returns the updated cart. Do not build a client-side cart model; the platform's cart is the one checkout will read, and any divergence is a bug waiting to be discovered at the worst moment.</p>
+
+        <p>The cart handler is attached to the request context in the server entry file, and route actions go through <code>CartForm</code>, which means cart operations work without JavaScript and get optimistic UI when JavaScript is available.</p>
+
+        <pre><code class="language-typescript">// server.ts — one cart handler per request, shared by every route.
+import {createCartHandler, cartGetIdDefault, cartSetIdDefault} from '@shopify/hydrogen';
+
+const cart = createCartHandler({
+  storefront,
+  getCartId: cartGetIdDefault(request.headers),
+  setCartId: cartSetIdDefault({
+    maxage: 60 * 60 * 24 * 30,  // 30 days; shorter and you lose recovery email revenue
+    sameSite: 'lax',            // must survive the return from checkout
+    secure: true,
+  }),
+  // Attach attributes on every cart the app creates. Doing it here rather
+  // than at each call site means nothing can forget.
+  cartMutateFragment: CART_FRAGMENT,
+});</code></pre>
+
+        <pre><code class="language-typescript">// app/routes/cart.tsx — one action handles every cart mutation.
+import {CartForm} from '@shopify/hydrogen';
+
+export async function action({request, context}) {
+  const formData = await request.formData();
+  const {action: cartAction, inputs} = CartForm.getFormInput(formData);
+
+  let result;
+  switch (cartAction) {
+    case CartForm.ACTIONS.LinesAdd:
+      result = await context.cart.addLines(inputs.lines);
+      break;
+    case CartForm.ACTIONS.LinesUpdate:
+      result = await context.cart.updateLines(inputs.lines);
+      break;
+    case CartForm.ACTIONS.DiscountCodesUpdate:
+      result = await context.cart.updateDiscountCodes(inputs.discountCodes);
+      break;
+    default:
+      throw new Error(`Unhandled cart action: ${cartAction}`);
+  }
+
+  // userErrors is not an exception. A sold-out variant or an invalid discount
+  // code comes back here with a 200, and ignoring it produces the bug where
+  // the button spins and nothing happens.
+  return json({cart: result.cart, errors: result.userErrors});
+}</code></pre>
+
+        <p>Two things to get right that are easy to miss.</p>
+
+        <p><strong>Handle <code>userErrors</code> visibly.</strong> Shopify returns business-rule failures as data. An invalid discount code returns a successful HTTP response with a populated <code>userErrors</code> array, and a build that only checks for thrown exceptions silently swallows it.</p>
+
+        <p><strong>Set cart attributes for whatever downstream systems need.</strong> Delivery date preferences, gift messages, the referring campaign — cart attributes and note fields are the only channel by which storefront context reaches the order, because you cannot inject anything into checkout. Decide what the ERP and the fulfilment team need at the start, because retrofitting an attribute onto orders that have already been placed is not possible.</p>
+
+        <h2>7. Customer Accounts, Which Changed Underneath Everyone</h2>
+
+        <p>The old model was <code>customerAccessTokenCreate</code> on the Storefront API — email and password, you own the login form, you store the token. Shopify's Customer Account API replaced it with an OAuth flow against Shopify-hosted login using one-time codes rather than passwords, and the classic flow has been on a deprecation path since 2024.</p>
+
+        <p>Practically this means login is a redirect out to Shopify and back, the same shape as checkout. You do not own the login form. Customers get passwordless email codes, which reduces password-reset support volume noticeably and which some clients dislike on principle until they see the support numbers.</p>
+
+        <pre><code class="language-typescript">// app/routes/account.$.tsx — every account route sits behind this check.
+export async function loader({context}) {
+  const {customerAccount} = context;
+
+  // Throws a redirect to Shopify's hosted login when there is no valid
+  // session, and returns here afterwards. Do not try to render a login form.
+  await customerAccount.handleAuthStatus();
+
+  const {data} = await customerAccount.query(CUSTOMER_ORDERS_QUERY, {
+    variables: {first: 20},
+  });
+
+  return json(
+    {customer: data.customer},
+    // Never cache an account route. Stating it explicitly stops a future
+    // refactor from inheriting a cache header from a shared helper.
+    {headers: {'Cache-Control': 'no-store'}},
+  );
+}</code></pre>
+
+        <p>The migration cost on an existing headless store is real: new OAuth configuration, a different session shape, and any B2B logic that read customer tags needs revisiting because the two APIs do not expose identical customer data. Budget a fortnight, not an afternoon.</p>
+
+        <h2>8. Checkout: What You Actually Get</h2>
+
+        <p>The honest inventory, because this is the section people need and rarely get straight.</p>
+
+        <p><strong>You cannot render checkout.</strong> Not on any plan. Hydrogen produces a <code>checkoutUrl</code> from the cart and you send the customer there.</p>
+
+        <p><strong>Checkout UI extensions</strong> place React components into defined slots — after the contact section, near the shipping method, in the order summary. Available on Plus for most useful targets. They run in a sandboxed worker with a restricted API and a component library you must use; you cannot ship arbitrary CSS or arbitrary DOM.</p>
+
+        <p><strong>Shopify Functions</strong> change logic rather than presentation: discount rules, delivery option filtering, payment method filtering, cart transforms. WebAssembly modules, usually Rust or JavaScript compiled to Wasm, with a strict execution budget. This is where genuinely custom commercial logic lives now, and it is more capable than most teams realise — bundle pricing, volume breaks and B2B contract discounts are all Functions work.</p>
+
+        <p><strong>Branding</strong> through the checkout branding API and the admin editor: colours, fonts, logo, corner radii, a couple of layout choices. Not a design system.</p>
+
+        <p><strong>checkout.liquid is gone.</strong> The deprecation completed for the information, shipping and payment steps in August 2024 and for the order status page in August 2025. Any advice you find that involves editing it is dead, and any app that relied on it has either migrated to extensions or stopped working.</p>
+
+        <pre><code class="language-javascript">// A Shopify Function: volume discount by line quantity. This is the shape
+// that replaces the "custom checkout logic" people expect to write in React.
+export function run(input) {
+  const discounts = input.cart.lines
+    .filter((line) =&gt; line.quantity &gt;= 6)
+    .map((line) =&gt; ({
+      targets: [{cartLine: {id: line.id}}],
+      value: {percentage: {value: line.quantity &gt;= 12 ? '15.0' : '10.0'}},
+      message: line.quantity &gt;= 12 ? '15% bulk discount' : '10% bulk discount',
+    }));
+
+  // Returning an empty discounts array is valid and cheap. Throwing is not —
+  // a Function that errors is skipped silently and the customer sees full price.
+  return {
+    discounts,
+    discountApplicationStrategy: 'MAXIMUM',
+  };
+}</code></pre>
+
+        <p>The planning consequence: audit your checkout apps before you commit to Hydrogen. On the supplements project the audit found five apps touching checkout, of which two had extension versions, one had a Function equivalent, one was replaceable, and one — a bespoke gift-wrap flow built by a previous agency — simply died. That last one had been worth about £40k a year in attach revenue. Finding that out in week six rather than week zero cost a difficult meeting and a scope change.</p>
+
+        <h2>9. What You Give Up Versus a Liquid Theme</h2>
+
+        <p>A modern Online Store 2.0 theme is a much better product than the 2018 version people are usually comparing against, and the gap is worth stating plainly.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Capability</th><th>Liquid theme (OS 2.0)</th><th>Hydrogen</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Theme editor for merchandisers</td><td>Full, per-template sections</td><td>None; build it or use metaobjects</td></tr>
+            <tr><td>App front-end injection</td><td>App blocks and embeds, minutes</td><td>Not supported; rebuild it</td></tr>
+            <tr><td>Theme preview and rollback</td><td>Built in, per theme</td><td>Git branches and Oxygen previews</td></tr>
+            <tr><td>Time to launch</td><td>4–10 weeks</td><td>4–8 months</td></tr>
+            <tr><td>Ongoing engineering</td><td>0.5 FTE or an agency day rate</td><td>2 FTE, realistically</td></tr>
+            <tr><td>Rendering control</td><td>Server-rendered Liquid, fixed</td><td>Complete</td></tr>
+            <tr><td>Third-party data on the page</td><td>Awkward, usually client-side</td><td>Native, server-side, cached</td></tr>
+            <tr><td>Checkout</td><td>Shopify's</td><td>Shopify's — identical</td></tr>
+          </tbody>
+        </table>
+
+        <p>The theme editor row is the one that decides projects. On a Liquid theme, a merchandiser rearranges a homepage, adds a promotional banner to three collection pages and schedules it for Friday, without a developer. On Hydrogen, that is a deployment unless you have built a content system behind it — which you can, with metaobjects or an external CMS, and which is four to eight weeks of work that belongs in the estimate.</p>
+
+        <p>I have never seen that work estimated correctly at proposal stage. It is always discovered when the marketing team realises they cannot change the hero image.</p>
+
+        <h2>10. Metaobjects as the Content Layer</h2>
+
+        <p>Before adding a third CMS vendor, look hard at metaobjects. They are Shopify-native structured content: you define a type with typed fields in the admin, editors create entries with a reasonable editing interface, and the Storefront API returns them. No extra vendor, no extra bill, no sync problem, and content lives next to the products it describes.</p>
+
+        <pre><code class="language-graphql"># A merchandiser-editable homepage hero, defined once in the admin as a
+# metaobject type and queried like anything else.
+query Hero($handle: String!) {
+  metaobject(handle: {type: "hero_banner", handle: $handle}) {
+    heading: field(key: "heading") { value }
+    body: field(key: "body") { value }
+    cta: field(key: "cta_url") { value }
+    image: field(key: "image") {
+      reference {
+        ... on MediaImage {
+          image { url(transform: {maxWidth: 1600}) altText width height }
+        }
+      }
+    }
+    # A metaobject can reference real products, so a curated row stays correct
+    # when a product goes out of stock rather than being a hardcoded list.
+    featured: field(key: "featured_products") {
+      references(first: 8) {
+        nodes { ... on Product { handle title featuredImage { url } } }
+      }
+    }
+  }
+}</code></pre>
+
+        <p>Where metaobjects run out: editorial workflow. There is no draft-versus-published state with an approval step, no scheduled publishing without an app, no side-by-side preview of an unpublished change, and no meaningful revision history. A brand publishing two campaign pages a month is fine. A publisher-style operation with four editors and a legal review step needs a real CMS, and the modelling, preview and revalidation patterns for that are in <a href="/blog/headless-cms-seo-performance/">the headless CMS piece</a>.</p>
+
+        <p>My rule: metaobjects until an editor asks for preview or approval, then reconsider. Starting with Sanity or Contentful on a store that publishes a landing page a quarter is £15k a year and an integration you did not need.</p>
+
+        <h2>11. Search and Faceting, Where You Will Probably Add a Vendor</h2>
+
+        <p>Search is the capability most likely to force a second vendor into a Hydrogen build, and the decision usually gets made late because the demo catalogue has forty products and everything looks fine.</p>
+
+        <p>What the Storefront API gives you natively is a <code>search</code> query with prefix matching and predictive search, plus collection filters derived from what Shopify knows: product type, vendor, availability, price range, variant options, and any metafield you have explicitly exposed as a filter. The filter set comes back with the collection, and Hydrogen's job is to render it and put the selections into the URL.</p>
+
+        <pre><code class="language-typescript">// Filters go in the URL as query params so a filtered view is linkable,
+// shareable and back-button-safe. Building this in component state is the
+// most common Hydrogen mistake I see and it breaks every one of those.
+function filtersFromSearchParams(searchParams: URLSearchParams) {
+  const filters = [];
+
+  for (const [key, value] of searchParams.entries()) {
+    if (key === 'available') filters.push({available: value === 'true'});
+    if (key === 'productType') filters.push({productType: value});
+    if (key.startsWith('option.')) {
+      // e.g. option.Size=Large -&gt; {variantOption: {name: 'Size', value: 'Large'}}
+      filters.push({variantOption: {name: key.slice(7), value}});
+    }
+  }
+
+  const min = searchParams.get('priceMin');
+  const max = searchParams.get('priceMax');
+  if (min || max) {
+    filters.push({price: {min: Number(min) || 0, max: Number(max) || undefined}});
+  }
+  return filters;
+}</code></pre>
+
+        <p>Where this runs out is specific and predictable. There is no typo tolerance, so "protien" returns nothing. There is no synonym handling, so a customer searching "vitamin d3" does not find a product titled "cholecalciferol". Relevance ranking is not merchandisable — you cannot boost a margin-rich line to the top of results for a query. And numeric range faceting across custom attributes is limited to price.</p>
+
+        <p>For a 400-SKU brand none of that matters much. For a 20,000-SKU catalogue it matters enormously, and you end up with Algolia, Searchspring or Klevu. That is another index to keep synchronised with the catalogue, another failure mode on a critical route, another £8k–£30k a year, and a design question about what the page does when the search vendor is down. Answer that last one deliberately: my default is to fall back to the Storefront API's native search with a quiet degradation notice rather than showing an error, because a mediocre result set converts and an error page does not.</p>
+
+        <p>Whichever you choose, keep the search route server-rendered and the query in the URL. Client-only search means no indexable results pages, no shareable filtered views, and a blank screen for anyone on a slow connection while the bundle loads.</p>
+
+        <h2>12. B2B, Company Accounts and the Practitioner Case</h2>
+
+        <p>Shopify's B2B features — company accounts, locations, catalogs with per-company price lists, payment terms, and quantity rules — are Plus-only and reachable from the Storefront API through the buyer identity on the cart. This is the mechanism behind anything resembling trade pricing, and it is a much better answer than the old approach of tagging customers and computing discounts in your own code.</p>
+
+        <pre><code class="language-typescript">// Attach the company location to the cart's buyer identity. Everything
+// downstream — catalog visibility, price list, quantity rules, payment terms
+// — is resolved by Shopify from this one association.
+await context.cart.updateBuyerIdentity({
+  customerAccessToken: token,
+  companyLocationId: location.id,
+});
+
+// Queries must then run in the buyer's context or you will render retail
+// prices to a trade customer, which is the kind of bug that ends up in
+// an email from a purchasing manager.
+const {collection} = await storefront.query(COLLECTION_QUERY, {
+  variables: {handle, buyer: {companyLocationId: location.id, customerAccessToken: token}},
+});</code></pre>
+
+        <p>Three things to plan for. A customer may belong to several company locations, so there is a location-picker interaction that has no equivalent in a retail storefront and that most designs forget. Quantity rules — minimums, increments, maximums per line — are enforced by Shopify and returned as <code>userErrors</code>, so the product form has to surface them rather than letting a customer add three units of something that ships in cases of ten. And catalog scoping means a product may be entirely invisible to one company and visible to another, which makes 404 handling on product routes a real design question rather than an afterthought.</p>
+
+        <p>The practitioner portal on the supplements project was exactly this: a company catalog with its own price list, plus an approvals flow that lived outside Shopify. Modelling it as B2B rather than as customer tags and bespoke pricing logic saved us from reimplementing price rules, which is a job that never finishes.</p>
+
+        <h2>13. Local Development, Testing, and the Bits That Bite</h2>
+
+        <p>Hydrogen runs locally under MiniOxygen, a worker runtime rather than Node, which is deliberate — it means the code that works on your laptop is running against the same API surface it will have in production. It also means a dependency that quietly requires <code>fs</code> or a Node stream works in your unit tests and fails at deploy.</p>
+
+        <pre><code class="language-bash"># Pull environment variables from the linked storefront rather than keeping a
+# .env that drifts. The mismatch between local and Oxygen env vars is the most
+# common "works on my machine" cause on these projects.
+npx shopify hydrogen env pull
+
+# Run against a real shop's data. Testing a collection route against six
+# seeded products tells you nothing about payload size or query cost.
+npm run dev -- --env staging</code></pre>
+
+        <p>What I test, in order of how often it has saved me. Cart mutations, including the failure paths — sold-out variant, invalid discount code, quantity rule violation — because those are the ones that come back as data rather than exceptions and get silently swallowed. Loader cache headers, asserted in a test, so nobody makes a route private by accident. And the GraphQL queries themselves through codegen in CI, which turns an API version change from a runtime error into a red build.</p>
+
+        <p>Two operational details worth knowing before launch. Oxygen environments map to git branches, so a long-lived staging branch drifts from main in ways that make preview deploys misleading; prefer short branches and preview-per-pull-request. And there is no built-in way to run a scheduled job, so anything periodic — reindexing search, refreshing a redirect map, warming a cache — needs an external scheduler hitting an authenticated route. Plan for that rather than discovering it when the redirect map needs a nightly refresh.</p>
+
+        <h2>14. Markets, Currency and Localisation</h2>
+
+        <p>Shopify Markets handles pricing, currency, duties and domain or path routing per market. Hydrogen consumes it through the <code>country</code> and <code>language</code> arguments on the <code>@inContext</code> directive, and every Storefront query needs them or you will silently serve GBP prices to a Canadian customer.</p>
+
+        <pre><code class="language-typescript">// The i18n object is derived from the URL prefix and attached to the
+// storefront client at request time, so every query carries it automatically.
+export function getLocaleFromRequest(request: Request) {
+  const url = new URL(request.url);
+  const [, prefix] = url.pathname.split('/');
+
+  const supported = {
+    'en-ca': {language: 'EN', country: 'CA', pathPrefix: '/en-ca'},
+    'fr-ca': {language: 'FR', country: 'CA', pathPrefix: '/fr-ca'},
+    'en-au': {language: 'EN', country: 'AU', pathPrefix: '/en-au'},
+  };
+
+  // Default market has no prefix. Getting this wrong produces duplicate
+  // content at both / and /en-gb, which is an entirely avoidable SEO problem.
+  return supported[prefix?.toLowerCase()] ?? {language: 'EN', country: 'GB', pathPrefix: ''};
+}</code></pre>
+
+        <p>Two failure modes I have watched happen. First, the cart is created in one market's context and the customer switches market mid-session; prices in the cart do not follow, and checkout then shows something different from the cart. Recreate or update the cart's buyer identity on market change, and test it deliberately. Second, hreflang. Nothing generates it for you. A three-market store needs reciprocal hreflang on every localised URL plus an x-default, and hand-rolled implementations are wrong about as often as they are right.</p>
+
+        <h2>15. SEO Parity Is the Migration's Real Risk</h2>
+
+        <p>Every Shopify theme gives you canonical tags, a sitemap at <code>/sitemap.xml</code>, product structured data, and redirects managed in the admin under URL redirects. A Hydrogen app gives you none of it until you write it, and the failure is silent for weeks.</p>
+
+        <p>The redirect one is the most dangerous because Shopify's admin redirect list is not applied to your storefront. It exists in the platform, the platform is no longer serving your pages, and every redirect a previous agency added over six years quietly stops working the day you launch.</p>
+
+        <pre><code class="language-typescript">// app/lib/redirects.server.ts
+// Consume the admin's own redirect list rather than maintaining a second one.
+// The Storefront API exposes urlRedirects; page through it into edge KV on a
+// schedule, then look up in a single ~2ms read.
+const URL_REDIRECTS_QUERY = `#graphql
+  query Redirects($first: Int!, $cursor: String) {
+    urlRedirects(first: $first, after: $cursor) {
+      nodes { id path target }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+export async function handleRedirect(request: Request, context) {
+  const url = new URL(request.url);
+  const hit = await context.env.REDIRECTS.get(url.pathname);
+  if (!hit) return null;
+
+  // 301, because these are permanent moves and the whole point is passing
+  // link equity. Preserve the query string; campaign tags live there.
+  return new Response(null, {
+    status: 301,
+    headers: {location: hit + url.search},
+  });
+}</code></pre>
+
+        <p>The rest of the parity checklist, none of which is difficult and all of which has to be somebody's task: a sitemap route that paginates products, collections, pages and articles and splits above 45,000 entries; a robots route; canonical tags on every route with filtered and sorted collection URLs pointing at the clean path; Product and BreadcrumbList JSON-LD; and 404 handling that returns an actual 404 status rather than a 200 with a "not found" component, which is a mistake I find on roughly half the Hydrogen sites I audit.</p>
+
+        <h2>16. Analytics and Consent Across Two Domains</h2>
+
+        <p>Your storefront is a React app on your domain. Checkout is Shopify's, on a different origin. Stitching a session across that boundary is not automatic and the numbers are wrong in a specific direction — checkout traffic attributed to a referral from your own domain, which inflates direct and deflates every paid channel.</p>
+
+        <p>Hydrogen's <code>Analytics</code> provider emits the standard storefront events and wires into Shopify's own pixel infrastructure, so customer events fire in checkout with the session context carried across. Use it rather than hand-rolling. If you are running GA4 or Meta directly, install them as custom pixels in the Shopify admin as well, so they fire on both sides of the boundary.</p>
+
+        <pre><code class="language-typescript">// app/root.tsx — the provider is what carries session identity into checkout.
+import {Analytics, getShopAnalytics} from '@shopify/hydrogen';
+
+export async function loader({context}) {
+  return defer({
+    shop: getShopAnalytics({
+      storefront: context.storefront,
+      publicStorefrontId: context.env.PUBLIC_STOREFRONT_ID,
+    }),
+    consent: {
+      checkoutDomain: context.env.PUBLIC_CHECKOUT_DOMAIN,
+      storefrontAccessToken: context.env.PUBLIC_STOREFRONT_API_TOKEN,
+      // Withhold until consent is recorded. This is the setting that makes
+      // the difference between a compliant deployment and a fine.
+      withPrivacyBanner: false,
+    },
+  });
+}</code></pre>
+
+        <p>The consent detail matters more than it used to. Since Shopify enforced its customer privacy API for apps, and with the EU's consent requirements, tracking that fires before consent is recorded is a genuine liability rather than a theoretical one. Fire your marketing tags from the consent callback, not from the root layout.</p>
+
+        <h2>17. Performance: What Actually Moves the Numbers</h2>
+
+        <p>Hydrogen sites are not automatically fast. The framework removes the ceiling; it does not do the work. Across the builds I have measured, four things account for nearly all the difference between a fast Hydrogen store and a slow one.</p>
+
+        <p><strong>Page-level cacheability.</strong> Discussed above and worth repeating because it dominates everything else. A cacheable collection route serves in 40ms; the same route made private by one personalised component serves in 300ms plus. This is the single biggest lever.</p>
+
+        <p><strong>Image transform parameters.</strong> Shopify's CDN will hand you a 2048px original if you ask for the bare URL, and most builds do on at least one component. Request explicit widths and set <code>sizes</code> honestly.</p>
+
+        <p><strong>Payload narrowing in the GraphQL query.</strong> Everything the loader returns is serialised into the HTML for hydration. A collection query that pulls all variants and all metafields on 24 products can add 200KB to the document, which the browser then parses on the main thread.</p>
+
+        <p><strong>Third-party scripts.</strong> Unchanged from Liquid, and still usually the largest single problem. A Hydrogen store with a 40ms TTFB and six synchronous marketing tags is a slow site. The framework cannot save you from that.</p>
+
+        <p>What matters much less than people expect: which React version, whether you use streaming defer, and micro-optimisation of component rendering. I have never seen those move a field metric on a commerce storefront.</p>
+
+        <h2>18. A Worked Example, With the Parts That Went Wrong</h2>
+
+        <p>The supplements brand from the opening. About 400 SKUs, £6.5m online revenue, Shopify Plus, subscriptions through a third-party app, three markets, and a genuine reason to decouple: they were launching a practitioner portal with different pricing, different content and a separate approvals flow, and their theme could not carry it.</p>
+
+        <p><strong>Shape.</strong> Hydrogen on Oxygen. Metaobjects for editorial and campaign content. Storefront API for everything commerce. Checkout on Shopify with two UI extensions and one Function for practitioner tier pricing. The practitioner portal as routes in the same app behind the Customer Account API.</p>
+
+        <p><strong>Timeline.</strong> Sixteen weeks estimated, twenty-six weeks actual. The overrun was three things: the checkout app audit, the content editing tooling nobody had scoped, and hreflang plus market routing being harder than the estimate assumed.</p>
+
+        <p><strong>Numbers, three months live.</strong> Mobile LCP on collection pages 3.1s to 1.4s. TTFB median 620ms to 48ms. JavaScript shipped went up, not down — 190KB compressed against the theme's 140KB, which surprised the client and is a normal outcome, because a React storefront ships a framework the Liquid theme did not. Conversion rate up 6% over the following quarter, which I would call directionally real and not precisely attributable.</p>
+
+        <p><strong>What went wrong, item one.</strong> The gift-wrap app died with no replacement, costing roughly £40k a year in attach revenue until we built a cart-attribute version four months later. Audit checkout apps first. This is the most repeatable lesson on this whole page.</p>
+
+        <p><strong>What went wrong, item two.</strong> We shipped with the cart badge server-rendered in the header. Edge hit rate was 6% for eleven days before anyone looked at it, and the client's first impression of the new site's speed was formed during those eleven days. Add an edge hit rate check to launch-day monitoring; it takes ten minutes and would have caught it in an hour.</p>
+
+        <p><strong>What went wrong, item three.</strong> Subscription management. The app had a Liquid-based customer portal that did not exist on Hydrogen, so subscribers could not pause or skip a delivery. We had to link out to a hosted portal on a different domain for six weeks. Support volume roughly doubled in that period.</p>
+
+        <p><strong>What I would do differently.</strong> Run the app audit and the content-editing scope before signing the estimate, not after. Both overruns were foreseeable in a two-day discovery exercise. And launch by route behind Shopify's own domain routing rather than as a single cutover, which would have contained the cart-badge problem to a fraction of traffic.</p>
+
+        <h2>19. Questions That Come Up</h2>
+
+        <p><strong>"Can we customise checkout at all?"</strong> Slots and logic, not layout. Checkout UI extensions for components in defined positions, Shopify Functions for discount, delivery and payment rules, the branding API for colours and type. Most of it is Plus-only. If a specific checkout customisation is load-bearing for revenue, verify it is achievable before you commit to the project.</p>
+
+        <p><strong>"Is Hydrogen faster than a good Liquid theme?"</strong> On TTFB, substantially — 40ms against 500–700ms is typical, because you are serving cached HTML from the edge rather than rendering Liquid on Shopify's origin. On LCP and INP, only if you do the work; a badly-built Hydrogen store is comfortably slower than Dawn. And you will ship more JavaScript than a Liquid theme does, not less.</p>
+
+        <p><strong>"Do we have to use Oxygen?"</strong> No. Cloudflare, Netlify and Node all work. Oxygen is free, integrated, and closest to the Storefront API, so it is the default unless you have a specific operational reason to be elsewhere.</p>
+
+        <p><strong>"What happens to our apps?"</strong> Backend-only apps — ERP connectors, fulfilment, tax, email platforms reading order webhooks — are unaffected. Anything that injects storefront UI through app blocks or script tags is gone, and anything with a Liquid-based customer portal is gone. Make the list first.</p>
+
+        <p><strong>"Can merchandisers still edit pages?"</strong> Only what you build. Metaobjects plus a small set of well-modelled types covers most brands. If they need drafts, scheduling, approvals and preview, that is a real CMS and a real integration.</p>
+
+        <p><strong>"How big does a store need to be to justify this?"</strong> I would not do it under about £3m online revenue unless there is a specific structural requirement — a second consumer of the data, a portal, a marketplace, something a theme genuinely cannot express. Below that, the ongoing two-engineer cost eats the benefit.</p>
+
+        <p><strong>"Hydrogen or Next.js against the Storefront API?"</strong> Hydrogen, unless you have a strong existing reason to be on Next. The caching integration, the cart handler, the analytics wiring and the Customer Account API integration are perhaps six weeks of work you would otherwise write and then maintain against a quarterly-versioned API.</p>
+
+        <p><strong>"What about the quarterly API versions?"</strong> Each version is supported for twelve months, so you must upgrade at least annually. Run codegen in CI against the pinned version and the upgrade becomes a build failure with a clear message rather than a runtime surprise. Budget two days a year; teams that skip it for three years budget three weeks.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>In this order, before writing any code:</p>
+
+        <p>Audit the apps. Every app on the store, split into backend-only, storefront-injecting, and checkout-touching. For each storefront or checkout app, establish whether an extension or Function equivalent exists, what rebuilding it costs, and what it earns. This single exercise prevents the most expensive surprise in the entire project.</p>
+
+        <p>Establish the checkout requirements in writing. What must appear in checkout, what logic must run, and whether the plan supports it. Get a yes or no on each item from someone who has actually built a checkout UI extension.</p>
+
+        <p>Scope the content editing story. Who edits what, how often, and whether they need drafts, scheduling or preview. Then decide metaobjects or a CMS, and put the resulting weeks in the estimate rather than discovering them in month four.</p>
+
+        <p>Export the admin's URL redirect list and plan how it will be served. Alongside a full crawl of the current site so you have a URL inventory to diff against at launch.</p>
+
+        <p>Then build one route — a collection page — deployed to Oxygen, cacheable, with the edge hit rate on a dashboard. Confirm the cache behaves before building thirty more routes on top of assumptions.</p>
+
+        <p>Hydrogen is a good framework and the caching model in particular is better than what most teams would build themselves. But the framework is the easy part. The project is the apps you lose, the checkout you do not control, and the editing tools somebody has to build for a team that used to have a theme editor. Cost those three honestly and a Hydrogen build is a predictable eight months. Skip them and it is the same eight months, spent arguing about scope.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -230,12 +775,11 @@ export async function loader({ context, params }: LoaderFunctionArgs) {
               <p>GraphQL Admin API integrations with Remix.</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>Comparison between monolithic and headless storefronts.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -269,6 +813,6 @@ export async function loader({ context, params }: LoaderFunctionArgs) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

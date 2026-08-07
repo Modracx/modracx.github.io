@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Zoho CRM Integration with Magento 2 & Shopify Plus | MODRACX</title>
-  <meta name="description" content="Technical guide on integrating Zoho CRM REST API v2.1 with Magento 2 and Shopify Plus. Covers OAuth 2.0 token refresh, lead mapping, and webhooks." />
+  <meta name="description" content="One Zoho CRM across Magento 2 and Shopify Plus: cross-storefront identity, Leads versus Contacts, Sales Orders, OAuth data centres and API credit budgeting." />
   <meta property="og:title" content="Zoho CRM Integration with Magento 2 & Shopify Plus | MODRACX" />
   <meta property="og:description" content="Technical guide on integrating Zoho CRM by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Zoho CRM Integration with Magento 2 & Shopify Plus</h1>
-        <p class="lede">Syncing customer leads and order histories between your e-commerce storefront and Zoho CRM provides sales teams with 360-degree buyer context.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Zoho CRM Integration with Magento 2 &amp; Shopify Plus</h1>
+        <p class="lede">A sales rep rang a customer to ask why their orders had dried up. They hadn't — the spend was on the other storefront, in a Zoho record nobody had joined up.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations & Systems</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,37 +205,508 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Zoho CRM REST API v2.1 Python Sync Script</h2>
+        <h2>1. Two Storefronts, One Sales Team, One Bad Phone Call</h2>
 
-        <pre><code class="language-python"># Python Zoho CRM API v2.1 Lead Ingestion
-import requests
+        <p>A sales rep at a building supplies distributor rang a customer in October to ask why their order volume had dropped off. It hadn't. The customer had spent about £41,000 that quarter — just not on the storefront the rep was looking at.</p>
 
-def push_lead_to_zoho(access_token, customer_data):
-    url = "https://www.zohoapis.com/crm/v2.1/Leads"
-    headers = {
-        "Authorization": f"Zoho-oauthtoken {access_token}",
-        "Content-Type": "application/json"
+        <p>The distributor ran two shops. A Magento 2 B2B site for trade accounts, with account-specific pricing, credit terms and purchase order numbers. And a Shopify Plus site, launched eighteen months earlier, selling the same catalogue at list price to anyone with a card, aimed at small builders who did not want a trade account. Both fed Zoho CRM. Neither knew the other existed.</p>
+
+        <p>The customer in question, a mid-sized contractor, had a trade account on Magento used by their buying office and had also been buying paint and consumables on the Shopify site with a company card because it was faster than raising a requisition. In Zoho they were two records: an Account with three Contacts and a stack of Sales Orders, and a bare Contact with an email address and a lot of small orders that had been created by the Shopify sync and associated with nothing.</p>
+
+        <p>The rep saw the first record. The revenue was in the second.</p>
+
+        <p>That call cost them nothing directly. What it exposed was that every number the sales team worked from — account value, order frequency, share of wallet, the list of accounts at risk — was computed over one of two overlapping datasets, and nobody could say which customers were double-counted, which were split, and which were fine.</p>
+
+        <p>This article is about that problem specifically: one CRM, two storefronts that model a customer differently, and the parts of Zoho's API that make the joining harder than it looks. The generic integration mechanics — idempotency keys, bounded retries, dead-letter queues, scheduled reconciliation — I covered at length in the piece on <a href="/blog/sap-commerce-cloud-erp-sync/">SAP Commerce Cloud and S/4HANA synchronisation</a>. Assume all of it applies. What follows is the part that only shows up when you have more than one source.</p>
+
+        <h2>2. The Question Nobody Asks Until It Is Expensive</h2>
+
+        <p>Before any of the API detail, there is a commercial decision that determines the whole architecture, and it is not an engineering decision at all.</p>
+
+        <p>Are the two storefronts serving the same customers or different ones?</p>
+
+        <p>Three answers are common, and each produces a different design.</p>
+
+        <p><strong>Genuinely different audiences.</strong> A B2B site for trade accounts and a consumer brand site under a different name, sold to people who would never have a trade account. In that case, keep them separate in the CRM. Two record sets, two pipelines, possibly two Zoho layouts. The integration is two integrations that happen to share credentials, and trying to unify identity across them is work with no payoff.</p>
+
+        <p><strong>The same customers, deliberately.</strong> The distributor above. A trade buyer who also uses the self-serve site. Here the CRM must join them, and the join is the entire project.</p>
+
+        <p><strong>The same customers, accidentally.</strong> The most common and the worst. Nobody intended overlap; the Shopify site was meant for a different segment; and then 8% of the trade base started using it because it was quicker. You get the requirements of the second case with the architecture of the first.</p>
+
+        <p>Ask the commercial team directly, and then check. On the distributor, the answer we were given was "they are completely different customers", and the answer we measured was that 8.4% of Shopify buyers matched a trade account by email domain and another 3% matched by phone. That measurement took an afternoon and changed the shape of the build.</p>
+
+        <p>So: run the overlap query before you design anything. Export the customer email addresses from both platforms, normalise them, compare on exact match and on domain, and put a percentage in front of whoever is paying for the work. It is a short conversation once there is a number.</p>
+
+        <h2>3. How Magento And Shopify Disagree About A Customer</h2>
+
+        <p>The two platforms do not model a buyer the same way, and the mismatch is structural rather than a matter of field names.</p>
+
+        <p>Magento 2, especially with B2B, models a <em>company</em> as a first-class entity. A company has an admin, a set of users arranged in a team hierarchy, a shared credit limit, a payment-on-account method, assigned shared catalogues and negotiable quotes. A customer entity belongs to a company. The customer entity ID is a stable integer that survives email changes. Guest orders exist and have no customer entity at all — just an email string on the order.</p>
+
+        <p>Shopify models a <em>customer</em> and nothing above it. There is no company object outside Shopify's B2B features, and even there the model is a company with locations and contacts that is newer and thinner than Magento's. A customer has a numeric ID that is stable, an email that the merchant can change in admin, and tags, which is where most stores end up encoding everything the data model does not support. Guest orders create a customer record, which is more helpful than Magento's behaviour.</p>
+
+        <p>Two consequences follow directly.</p>
+
+        <p>First, the natural CRM shape differs per storefront. Magento's company maps cleanly onto a Zoho Account with Contacts beneath it. Shopify's customer maps onto a Zoho Contact with no Account, unless you invent one. If you sync both naively you get a CRM where half the records sit in a hierarchy and half float free, which is exactly what the distributor had.</p>
+
+        <p>Second, the identity anchor differs. On Magento the customer entity ID is trustworthy and email is not. On Shopify both are reasonably stable, but the email can be edited by a merchant with no event carrying the old value. Neither platform's ID means anything in the other's namespace, and both start at low integers, so customer 1042 exists in both and refers to two different people.</p>
+
+        <p>That last point sounds obvious written down. It has still bitten me. On an early build I stored <code>external_id</code> as the raw platform ID, and the first collision produced a Zoho contact whose email came from Shopify and whose order history came from Magento. The fix is trivial and the diagnosis was not.</p>
+
+        <h2>4. Leads Or Contacts: Zoho's Fork In The Road</h2>
+
+        <p>Zoho CRM, unlike HubSpot, keeps Leads and Contacts as separate modules with separate records. A Lead is an unqualified individual; converting it produces a Contact, optionally an Account, and optionally a Deal, and the Lead record is then closed out. The conversion is one-directional and you cannot un-convert.</p>
+
+        <p>This matters for a commerce integration more than it first appears, because somebody has to decide which module a storefront customer lands in, and getting it wrong is expensive to undo across tens of thousands of records.</p>
+
+        <p>My rule: <strong>anyone who has paid you money is a Contact, never a Lead.</strong> A completed order is qualification. Putting buyers into Leads means your sales team works a list that includes existing customers, your conversion reporting counts a purchase as a lead conversion, and every Lead you convert later spawns a duplicate Contact if one already exists.</p>
+
+        <p>Where Leads are genuinely right: newsletter signups, quote requests from an unregistered visitor, trade account applications pending approval, and abandoned registrations. Those are people who have expressed interest without transacting, and Zoho's lead scoring and conversion flow is built for exactly that.</p>
+
+        <p>The awkward middle case is the trade account application. On Magento B2B, a company registration sits in a pending state until someone approves it. That is a Lead — arguably the clearest Lead in the whole system. On approval, it converts to an Account plus a Contact. Modelling that conversion in the integration, rather than letting a human do it in the CRM, is worth the effort because it is the one place where the CRM's own workflow language matches the commerce platform's state machine exactly.</p>
+
+        <pre><code class="language-python"># Zoho conversion is a dedicated endpoint, not a module update.
+# Passing an existing Accounts id prevents Zoho creating a duplicate Account
+# for a company that already exists — the single most common conversion bug.
+def convert_lead(client, lead_id, account_id=None, owner_id=None):
+    payload = {"data": [{
+        "overwrite": True,
+        "notify_lead_owner": False,
+        "notify_new_entity_owner": False,
+        "Accounts": account_id,          # None lets Zoho create one
+        "assign_to": owner_id,
+    }]}
+    r = client.post(f"/crm/v6/Leads/{lead_id}/actions/convert", json=payload)
+    body = r.json()["data"][0]
+    if body["code"] != "SUCCESS":
+        raise ZohoError(body)
+    # The response carries the new record ids; store all three or you
+    # will not be able to reconcile this lead later.
+    return body["details"]     # {"Contacts": "...", "Accounts": "...", "Deals": "..."}</code></pre>
+
+        <h2>5. Designing The Key Before Writing Any Code</h2>
+
+        <p>With two sources, a single external ID field does not work. You need three things on every Contact: which storefront it came from, the platform's own ID, and a cross-storefront identity that you control.</p>
+
+        <p>The layout I now build:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Zoho field (API name)</th><th>Contents</th><th>Unique?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Magento_Customer_ID</code></td><td>Magento entity ID, blank if none</td><td>Yes</td></tr>
+            <tr><td><code>Shopify_Customer_ID</code></td><td>Shopify numeric ID, blank if none</td><td>Yes</td></tr>
+            <tr><td><code>Buyer_Key</code></td><td>Your canonical identity, e.g. <code>BK-000184213</code></td><td>No</td></tr>
+            <tr><td><code>Primary_Storefront</code></td><td>Picklist: Magento, Shopify, Both</td><td>No</td></tr>
+            <tr><td><code>Email</code></td><td>Best known address</td><td>Zoho-enforced</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two separate unique platform ID fields rather than one composite string. It costs a field and it means the upsert from each storefront can use its own <code>duplicate_check_fields</code> without either sync needing to know about the other. A single <code>external_id</code> of the form <code>shopify:1042</code> also works and is what I used to do; the separate-fields version is easier to query and much easier to explain to whoever inherits it.</p>
+
+        <p><code>Buyer_Key</code> is deliberately not unique, because two Contacts can legitimately share one — a company where two named buyers both order, or a person whose two storefront accounts you have identified as the same human but have not merged. It is the field your reporting groups by.</p>
+
+        <p>Zoho's upsert honours the module's unique fields plus whatever you name in <code>duplicate_check_fields</code>:</p>
+
+        <pre><code class="language-http">POST /crm/v6/Contacts/upsert
+Authorization: Zoho-oauthtoken 1000.xxxxxxxx
+Content-Type: application/json
+
+{
+  "duplicate_check_fields": ["Shopify_Customer_ID"],
+  "data": [
+    {
+      "Shopify_Customer_ID": "7418302947",
+      "Buyer_Key": "BK-000184213",
+      "Primary_Storefront": "Shopify",
+      "Last_Name": "Hollis",
+      "First_Name": "Rachael",
+      "Email": "rachael@example.com",
+      "Lifetime_Value_Shopify": 482.10,
+      "Last_Order_Shopify": "2026-03-11"
     }
-    payload = {
-        "data": [{
-            "Last_Name": customer_data['last_name'],
-            "First_Name": customer_data['first_name'],
-            "Email": customer_data['email'],
-            "Lead_Source": "Magento Storefront"
-        }]
-    }
-    response = requests.post(url, json=payload, headers=headers)
-    return response.json()</code></pre>
+  ]
+}</code></pre>
 
-        <hr />
+        <p>The response tells you per record whether it was inserted or updated, in <code>details.Modified_Time</code> and an <code>action</code> field. Read it. A sync that reports success without distinguishing insert from update cannot tell you that it has started creating duplicates, and that ratio is the single most useful health metric on this kind of integration.</p>
+
+        <p>One Zoho behaviour to know: if <code>duplicate_check_fields</code> matches more than one existing record, the upsert fails for that record with a duplicate data error rather than picking one. That is correct and it is also the signal that your data already has duplicates, so handle the error by writing to a review queue rather than by logging and moving on.</p>
+
+        <h2>6. Modelling Orders: Sales Orders, Deals, Or Neither</h2>
+
+        <p>Zoho CRM ships with an inventory-flavoured set of modules — Products, Price Books, Quotes, Sales Orders, Invoices — that most implementations ignore and most commerce integrations should not.</p>
+
+        <p>The three options and where each belongs:</p>
+
+        <p><strong>Deals.</strong> Right for the Magento B2B side, where a negotiable quote genuinely is a deal with a rep, a value, a close date and a probability. Wrong for high-volume self-serve orders, for the same reason it is wrong in any CRM: a rep opening an account should not scroll past 300 completed £40 transactions to find the one live opportunity.</p>
+
+        <p><strong>Sales Orders.</strong> The module actually designed for this. It has line items, a status picklist, a linked Account and Contact, and it does not pollute pipeline reporting. If the client is on an edition that includes it, this is where storefront orders belong.</p>
+
+        <p><strong>Neither.</strong> Rolled-up fields on the Contact and the Account — order count, lifetime value, first and last order date, average order value, per storefront — plus a deep link to the order in the relevant admin. For a consumer storefront doing thousands of orders a month, this is very often enough, and it is dramatically cheaper in API credits.</p>
+
+        <p>On the distributor we used all three, split by storefront, which sounds inconsistent and was the right call: Magento negotiable quotes became Deals, Magento confirmed orders became Sales Orders, and Shopify orders became rolled-up fields plus a nightly aggregate. Sales cared about trade orders individually and about self-serve orders only in aggregate, and building to that saved roughly 90% of the write volume.</p>
+
+        <p>If you do write Sales Orders, write line items too or do not bother. A Sales Order with a total and no products is worse than a rolled-up number, because it looks like detail and cannot answer any question about what was bought.</p>
+
+        <pre><code class="language-python"># Sales Order with line items. Product_Details entries must reference an
+# existing Products record id — Zoho will not create products implicitly,
+# and a missing SKU fails the whole record, not just the line.
+def build_sales_order(order, product_ids, account_id, contact_id):
+    lines = []
+    for item in order["line_items"]:
+        pid = product_ids.get(item["sku"])
+        if not pid:
+            # Missing product: raise rather than silently dropping the line,
+            # or the order total will not match the sum of its parts.
+            raise MissingProduct(item["sku"])
+        lines.append({
+            "product": {"id": pid},
+            "quantity": item["quantity"],
+            "list_price": item["price"],
+            "Discount": item.get("discount", 0),
+        })
+    return {
+        "Subject": f"{order['storefront'].upper()}-{order['number']}",
+        "Account_Name": {"id": account_id},
+        "Contact_Name": {"id": contact_id},
+        "Status": ZOHO_STATUS[order["status"]],
+        "Grand_Total": order["total"],
+        "Product_Details": lines,
+        "Storefront": order["storefront"],
+        "External_Order_Ref": f"{order['storefront']}:{order['number']}",
+    }</code></pre>
+
+        <h2>7. Accounts, And What The Shopify Side Does To Them</h2>
+
+        <p>A Zoho Contact has a single <code>Account_Name</code> lookup. One contact, one account. That constraint is fine for the Magento B2B side, where a customer entity belongs to exactly one company, and awkward for the real world, where a quantity surveyor can buy on behalf of three different sites.</p>
+
+        <p>The Shopify side has no account concept at all, so you must decide what to do with a self-serve buyer who is obviously a business.</p>
+
+        <p>Three approaches, in descending order of how much I like them.</p>
+
+        <p>Leave the Contact unassociated and let a human associate it. Honest, no false data, and it puts the judgement where the judgement belongs. The cost is that unassociated contacts pile up and nobody works the pile.</p>
+
+        <p>Associate on an explicit match only — the Shopify customer's email matches a known contact on a trade account, or their company name field matches an Account name exactly after normalisation. Conservative, catches most of the genuine overlap, and produces very few wrong joins. This is what I use.</p>
+
+        <p>Associate on email domain. Tempting and wrong for consumer-facing storefronts, because it will build an Account for every employer whose staff bought a tin of paint on a work address. It is defensible on a pure B2B storefront where every buyer is transacting on behalf of an employer, and even then you need a free-email-domain exclusion list and a manual override.</p>
+
+        <p>There is a fourth thing people try, which is creating an Account for every Shopify customer so the data model is uniform. Do not. An Account per individual buyer destroys account-level reporting, inflates your Accounts module by a factor of a hundred, and makes territory assignment meaningless.</p>
+
+        <p>For a genuine many-to-many need — a buyer purchasing for several sites — Zoho's answer is a custom multi-select lookup or a junction module, and both are more work than they sound. Ask how many customers actually need it before building it. On the distributor the answer was fourteen, and fourteen was handled by a note in the record and a rep who knew.</p>
+
+        <h2>8. OAuth, Data Centres, And The Token Mistakes</h2>
+
+        <p>Zoho's OAuth implementation is standard in shape and has three specifics that will each cost you an afternoon if you meet them cold.</p>
+
+        <p><strong>Data centres are not interchangeable.</strong> Zoho runs separate regional deployments — <code>.com</code>, <code>.eu</code>, <code>.in</code>, <code>.com.au</code>, <code>.jp</code>, <code>.ca</code> — and an org lives in exactly one. Tokens issued by <code>accounts.zoho.eu</code> do not work against <code>www.zohoapis.com</code>, and the error you get back is a generic invalid token rather than anything mentioning regions. The token response includes an <code>api_domain</code> field. Store it alongside the token and build every request URL from it rather than from a constant. Hard-coding the API host is the single most common cause of an integration that works in one environment and fails in another.</p>
+
+        <p><strong>Refresh tokens are limited per client.</strong> Zoho caps the number of live refresh tokens per user per client — the practical limit is twenty, and generating the twenty-first silently revokes the oldest. On a project with several developers each generating tokens from a self-client during testing, this quietly kills production. Generate production credentials once, store them in a secret manager, and never let a developer's local run share the client ID.</p>
+
+        <p><strong>Access tokens last an hour</strong> and refreshing is rate limited, so refresh on expiry or on a 401 rather than before every call. A worker pool that each refreshes independently will burn through the refresh limit at start-up.</p>
+
+        <pre><code class="language-python">import threading, time
+
+class ZohoAuth:
+    """One refresh at a time across the process; api_domain comes from Zoho,
+    never from a constant, because it differs per data centre."""
+
+    def __init__(self, client_id, client_secret, refresh_token, accounts_host):
+        self._lock = threading.Lock()
+        self._token = None
+        self._expires_at = 0
+        self.api_domain = None
+        self._cfg = (client_id, client_secret, refresh_token, accounts_host)
+
+    def token(self):
+        if self._token and time.time() &lt; self._expires_at - 120:
+            return self._token
+        with self._lock:
+            # Re-check inside the lock: another thread may have refreshed
+            # while this one was waiting, and a double refresh burns quota.
+            if self._token and time.time() &lt; self._expires_at - 120:
+                return self._token
+            cid, secret, refresh, host = self._cfg
+            r = requests.post(f"https://{host}/oauth/v2/token", data={
+                "grant_type": "refresh_token",
+                "client_id": cid,
+                "client_secret": secret,
+                "refresh_token": refresh,
+            }, timeout=15)
+            body = r.json()
+            if "access_token" not in body:
+                raise ZohoAuthError(body)
+            self._token = body["access_token"]
+            self._expires_at = time.time() + int(body.get("expires_in", 3600))
+            self.api_domain = body.get("api_domain", self.api_domain)
+            return self._token</code></pre>
+
+        <p>One more thing, less about Zoho and more about running two storefronts: use separate OAuth clients for the Magento sync and the Shopify sync. Shared credentials mean that revoking one revokes both, and a bug in one consumes the other's concurrency headroom. The isolation is worth the extra setup, and it maps onto the general argument for keeping integration credentials narrow that I would apply to <a href="/blog/secure-api-gateways/">any outbound API surface</a>.</p>
+
+        <h2>9. API Credits Are A Budget, Spend Them Deliberately</h2>
+
+        <p>Zoho moved from a simple daily call count to a credit system, and the shift matters because operations no longer cost the same as each other. A single record fetch costs one credit. A bulk read job costs substantially more per call but covers up to 200,000 records. A COQL query costs one credit and returns a page. Your org's allocation depends on edition and user licences, and you can see the real number and today's consumption under the API dashboard in the developer settings.</p>
+
+        <p>The practical effect is that the naive design — fetch, compare, write, per record — is not just slow, it is expensive in a currency that runs out at three in the afternoon and stops your integration for the rest of the day.</p>
+
+        <p>Four habits that keep consumption sane.</p>
+
+        <p><strong>Never read to decide whether to write.</strong> Upsert unconditionally. A no-op update costs the same as a meaningful one and half as much as a read plus a conditional write.</p>
+
+        <p><strong>Batch to 100.</strong> Zoho's insert, update and upsert endpoints take up to 100 records per call and charge accordingly. A sync writing one record per call is spending a hundred times what it needs to.</p>
+
+        <p><strong>Use COQL instead of module GETs with filters.</strong> The query API lets you express a real condition and select only the fields you need, which reduces both credits and payload size.</p>
+
+        <pre><code class="language-sql">-- COQL: find contacts touched by one storefront but never joined to the other.
+-- Selecting only the fields you need matters; SELECT of every field on a
+-- large module is slow and the response size is the real cost.
+SELECT id, Email, Buyer_Key, Magento_Customer_ID, Shopify_Customer_ID
+FROM Contacts
+WHERE (Shopify_Customer_ID is not null)
+  and (Magento_Customer_ID is null)
+  and (Modified_Time &gt;= '2026-03-01T00:00:00+00:00')
+ORDER BY Modified_Time ASC
+LIMIT 200</code></pre>
+
+        <p><strong>Move backfills to bulk.</strong> The Bulk Read API runs asynchronously, returns a job ID, and hands back a zipped CSV. The Bulk Write API takes an uploaded CSV and processes it out of band. Both cost more per call and vastly less per record, and neither competes with your live sync for concurrency.</p>
+
+        <p>Concurrency is a separate ceiling from credits, incidentally, and it is low — in the region of ten to twenty-five simultaneous calls depending on edition. Two storefront syncs running fifteen workers each will hit it and start getting throttled responses that look like intermittent failures. Cap your own concurrency below the org limit and share the budget between the two syncs explicitly rather than letting them compete.</p>
+
+        <h2>10. Getting Events Out Of Two Platforms</h2>
+
+        <p>The two storefronts have very different event stories, and the integration has to absorb the difference rather than pretending they are alike.</p>
+
+        <h3>Shopify</h3>
+
+        <p>Webhooks are good. They are signed with an HMAC over the raw body using the app's shared secret, they retry on failure for up to 48 hours with backoff, and the payloads are complete enough that a follow-up API call is usually unnecessary. Verify the HMAC against the raw request body before parsing — a JSON round-trip changes the bytes and the signature will not match.</p>
+
+        <p>What Shopify does not guarantee is order. An <code>orders/updated</code> can arrive before the <code>orders/create</code> it follows, and a retry of an old event can land after a newer one. Use the <code>updated_at</code> field on the payload as a version and discard anything older than what you have already applied.</p>
+
+        <pre><code class="language-python">import hmac, hashlib, base64
+
+def verify_shopify(raw_body: bytes, header_hmac: str, secret: str) -> bool:
+    digest = hmac.new(secret.encode(), raw_body, hashlib.sha256).digest()
+    computed = base64.b64encode(digest).decode()
+    # compare_digest, not ==, to avoid leaking timing information
+    return hmac.compare_digest(computed, header_hmac)
+
+def apply_order_event(store, payload):
+    seen = store.last_updated_at(payload["id"])
+    if seen and payload["updated_at"] &lt;= seen:
+        return "stale"          # out-of-order retry; drop it
+    store.apply(payload)
+    return "applied"</code></pre>
+
+        <h3>Magento 2</h3>
+
+        <p>No webhooks in the core. You have observers, plugins, and the message queue infrastructure, and you deploy code into the shop to use any of them. The pattern I use is an observer that writes an outbox row inside the same database transaction as the order, and a consumer that drains the outbox — which gives you exactly-once semantics against the shop's own database rather than hoping an HTTP call succeeds at the moment of order placement.</p>
+
+        <pre><code class="language-php">&lt;?php
+// Outbox pattern: the event row is written in the same transaction as the
+// order. If the order rolls back, so does the notification. An observer that
+// calls Zoho directly will occasionally announce orders that never existed.
+namespace Vendor\ZohoSync\Observer;
+
+use Magento\Framework\Event\Observer;
+use Magento\Framework\Event\ObserverInterface;
+use Magento\Framework\App\ResourceConnection;
+
+class QueueOrderForCrm implements ObserverInterface
+{
+    public function __construct(private ResourceConnection $resource) {}
+
+    public function execute(Observer $observer): void
+    {
+        $order = $observer->getEvent()->getOrder();
+        $conn = $this->resource->getConnection();
+        $conn->insert($this->resource->getTableName('zohosync_outbox'), [
+            'entity_type' => 'order',
+            'entity_id'   => (int) $order->getId(),
+            'payload_ref' => $order->getIncrementId(),
+            'created_at'  => new \Zend_Db_Expr('NOW()'),
+            'attempts'    => 0,
+        ]);
+    }
+}</code></pre>
+
+        <p>The failure specific to Magento here is the consumer process itself. Cron-run consumers die quietly, and the symptom is an outbox that grows while every health check reports green because the web application is fine. Alert on outbox depth and on the age of the oldest unprocessed row, not on HTTP errors.</p>
+
+        <h3>Zoho back to the storefronts</h3>
+
+        <p>Zoho's instant notifications let you subscribe a callback URL to module changes. They are useful and they expire — channel subscriptions have a limited lifetime and must be renewed on a schedule, and a renewal job that fails silently gives you an integration that stops receiving updates with no error anywhere. Put the renewal on the same alerting as the sync itself.</p>
+
+        <p>In most builds, though, the Zoho-to-storefront direction should be very narrow. Sales editing a shipping address in the CRM and expecting it to reach Magento is a requirement worth resisting, for the reasons any two-way field sync is worth resisting. Keep the CRM's writes to fields the CRM owns.</p>
+
+        <h2>11. Mapping Two Schemas Onto One</h2>
+
+        <p>With two sources you will be tempted to write two mappers and be done. That works until a field means slightly different things on each side, at which point the CRM contains a column that is sometimes one thing and sometimes another.</p>
+
+        <p>The specific collisions I have hit:</p>
+
+        <p><strong>Order status.</strong> Magento's <code>processing</code> and Shopify's <code>fulfillment_status: null</code> with a paid financial status describe roughly the same state and are spelled entirely differently. Do not put raw platform statuses into a shared picklist. Map both into a canonical set you define — Placed, Paid, Partially Shipped, Shipped, Cancelled, Refunded — and keep the raw value in a separate per-storefront text field for debugging.</p>
+
+        <p><strong>Totals and tax.</strong> Magento B2B commonly displays and stores prices excluding tax; Shopify consumer stores commonly include it. A lifetime value field fed by both is meaningless. Normalise to one basis — I use tax-exclusive — and store the basis in the field label so nobody has to guess.</p>
+
+        <p><strong>Currency.</strong> If the two storefronts sell in different currencies, Zoho's multi-currency support handles it, but only if you actually enable it and set the exchange rate source. Otherwise you get a lifetime value that adds pounds to euros. This is the kind of error that survives for a year because the number looks plausible.</p>
+
+        <p><strong>Names.</strong> Magento B2B often has a company in the last name field because that is what the buyer typed at registration. Shopify has first and last from a card. A CRM sorted by last name then contains a mixture of surnames and company names. Validate on write and quarantine anything that looks wrong rather than fixing it after it is in.</p>
+
+        <p><strong>Phone.</strong> Normalise to E.164 on both sides before writing. This is the field you will later use for duplicate detection across storefronts, and it is worthless if one source stores <code>07700 900123</code> and the other <code>+447700900123</code>.</p>
+
+        <h2>12. Products And Price Books Across Two Catalogues</h2>
+
+        <p>If you write Sales Orders with line items, you need a Products module populated, and now you have a second identity problem underneath the first one. The same physical item exists as a Magento product with one SKU and a Shopify variant with a different one, because at some point somebody set the Shopify catalogue up by hand from a spreadsheet.</p>
+
+        <p>Check this before assuming. On the distributor, about 82% of SKUs matched exactly, 11% matched after stripping a legacy prefix, and 7% did not match at all — a mixture of Shopify-only bundles, Magento-only trade pack sizes, and roughly forty items where somebody had typed the SKU wrong two years earlier and nobody had noticed because the two systems never spoke.</p>
+
+        <p>The resolution is unglamorous. Pick one platform as the product master — almost always the one with the deeper catalogue data, which was Magento here — and treat the other's SKU as an alias stored on the product record. Load Zoho's Products module from the master, with an alias field for the second storefront, and resolve line items through the alias when the order comes from that side.</p>
+
+        <pre><code class="language-python"># Resolve a storefront SKU to a Zoho product id. Cache the whole map in
+# memory at start-up: it changes daily at most and looking it up per line
+# item is the fastest way to exhaust an API credit allocation.
+class ProductResolver:
+    def __init__(self, zoho):
+        self.by_sku = {}
+        for page in zoho.coql_pages(
+            "SELECT id, Product_Code, Shopify_SKU_Alias FROM Products "
+            "WHERE Product_Active = true"
+        ):
+            for row in page:
+                if row.get("Product_Code"):
+                    self.by_sku[row["Product_Code"].strip().upper()] = row["id"]
+                if row.get("Shopify_SKU_Alias"):
+                    self.by_sku[row["Shopify_SKU_Alias"].strip().upper()] = row["id"]
+
+    def resolve(self, sku):
+        # Unknown SKUs are a data problem, not a runtime error to swallow.
+        # Raise, queue the order, and let someone map it.
+        key = (sku or "").strip().upper()
+        if key not in self.by_sku:
+            raise MissingProduct(sku)
+        return self.by_sku[key]</code></pre>
+
+        <p>Price Books are the other half. Zoho's Price Books model list price with volume discounts, which maps reasonably onto Magento's tier pricing and not at all onto Shopify's variant-level pricing plus discount codes. My honest advice is to not replicate pricing into the CRM at all unless quotes are being produced there. The order carries the price that was actually charged; that is the number sales needs. Replicating a pricing engine into a CRM is the same mistake as replicating an ERP's pricing logic into a storefront, and it drifts on the same timescale.</p>
+
+        <p>The exception is the Magento B2B negotiable quote flow, where a rep genuinely does construct a price. There, a Price Book reflecting the account's tier is useful, and it should be pushed from Magento rather than maintained by hand.</p>
+
+        <h2>13. Owners, Territories And Who Gets The Self-Serve Buyer</h2>
+
+        <p>The organisational question that derails these projects late: when a Shopify customer turns out to belong to a trade account, whose customer are they?</p>
+
+        <p>It sounds like a data question. It is a compensation question, and the sales team will treat it as one. On the distributor, a self-serve buyer joined to an existing account meant that account's revenue figure went up, which mattered to the rep who owned it. Nobody objected. Had the join gone the other way — self-serve revenue being reassigned away from a house account into a named rep's territory — I am fairly sure the matching rules would have been litigated line by line.</p>
+
+        <p>Zoho's territory management can assign records automatically by rule, and assignment rules can fire on creation. Both are useful and both are dangerous during a backfill, as the 11,000-record incident above demonstrates. The safer sequence is to create records with no owner, run the assignment as a deliberate bulk operation once the data is verified, and keep the automatic rules switched off until steady state.</p>
+
+        <p>One design detail worth adopting: keep ownership on the Account and leave individual self-serve Contacts unowned. A rep works accounts, not individuals, and an owned Contact under an unowned Account produces reporting that double-counts. It also means the join operation changes one field on one record rather than reassigning a pile of contacts.</p>
+
+        <h2>14. What The Sales Team Actually Needs To See</h2>
+
+        <p>An integration is judged by whether a rep opening a record understands the customer. Everything above is in service of that, and it is worth designing the view before designing the sync.</p>
+
+        <p>On the distributor, what the reps asked for reduced to five things: total spend across both storefronts for the last twelve months, the split between them, the date of the last order on each, whether the customer had a trade account, and whether their self-serve spending was growing while their trade spending fell. That last one was the reason for the whole project — a trade customer shifting volume to the self-serve site at list price is either an opportunity or a symptom of something being wrong with their account terms, and either way somebody should call them.</p>
+
+        <p>None of those need order-level detail in the CRM. All of them are computed fields on the Account, refreshed nightly. Which meant the expensive part of the build — Sales Orders with line items for the Magento side — served a much narrower purpose than we initially assumed, and the cheap part served the actual requirement.</p>
+
+        <p>I would ask that question first on any similar project. Not "what data do you want in the CRM" but "what will you do differently as a result of seeing it". The first question produces a field list. The second produces a much shorter field list and a clearer sync.</p>
+
+        <h2>15. Worked Example: The Building Supplies Distributor</h2>
+
+        <p>About 3,400 trade accounts on Magento 2 with B2B, around 11,000 individual buyers on Shopify Plus, Zoho CRM Enterprise with 22 sales licences. The overlap measurement I mentioned came out at 8.4% matching by email and 3.1% more by normalised phone.</p>
+
+        <p><strong>What we built.</strong> Magento companies became Accounts, keyed on the company entity ID in a unique field. Magento customers became Contacts under them. Shopify customers became Contacts, unassociated by default, with an explicit-match rule that joined them to an Account when the email matched an existing trade Contact or the Shopify customer had used a trade email domain from a curated list. Orders: Magento negotiable quotes to Deals, Magento orders to Sales Orders with line items, Shopify orders to rolled-up fields on the Contact and Account. A nightly job recomputed the twelve-month figures and the trade-versus-self-serve split.</p>
+
+        <p><strong>What the numbers looked like.</strong> The first full run identified 289 Shopify contacts that belonged to an existing trade account, representing about £310,000 of annual spend that had not been visible against any account. Forty-one of those accounts showed the pattern the sales director had guessed at — trade volume down, self-serve volume up — and eleven turned out to have a credit hold or a pricing dispute the rep had not known about.</p>
+
+        <p><strong>Credit consumption.</strong> The initial backfill through the record APIs would have taken roughly four days at the org's allocation. Moving it to Bulk Write brought it to one overnight run. Steady-state consumption settled at around 14% of the daily allocation, which left headroom for the reconciliation queries and for a bad day.</p>
+
+        <p><strong>What went wrong.</strong> The email-match join was too aggressive in one respect we had not anticipated: several trade accounts used a shared generic address like <code>orders@buildersyard.co.uk</code> as the Magento contact email, and three different Shopify individuals had used the same address. The rule joined all of them to the trade account and then the upsert started failing with duplicate-match errors, because <code>duplicate_check_fields</code> on email matched multiple records. It surfaced as a stalled sync rather than as wrong data, which was lucky. We added a rule excluding role-based local parts — <code>orders@</code>, <code>accounts@</code>, <code>info@</code>, <code>purchasing@</code> — from the matching logic entirely, and routed those to the review queue.</p>
+
+        <p><strong>The other thing that went wrong.</strong> We enabled Zoho's workflow rules for new Contact creation without checking what the existing rules did, and the backfill assigned 11,000 Shopify contacts to sales owners via a round-robin assignment rule that had been sitting dormant. Twenty-two reps each acquired about 500 records they had no interest in overnight. Disabling the rule did not unassign them; that took a bulk update and an apology. Same lesson as any large import into a CRM: enumerate the active automation before you write a single record.</p>
+
+        <p><strong>What I would do differently.</strong> Build the overlap report as a permanent thing rather than a one-off analysis. We ran it once to justify the project and then rebuilt it as a reconciliation query three months later. It should have been the first artefact, running weekly, from day one — because the number it produces is both the business case and the health check.</p>
+
+        <h2>16. Reconciling Across Three Systems</h2>
+
+        <p>Two sources and one destination gives you three pairwise comparisons, and each catches a different failure.</p>
+
+        <p><strong>Magento against Zoho.</strong> Orders placed in the last seven days with no matching Sales Order. This catches a dead consumer or an outbox that has stopped draining. Run it hourly.</p>
+
+        <p><strong>Shopify against Zoho.</strong> Customers created in the last seven days with no Contact carrying their ID. This catches webhook delivery problems and HMAC failures, which otherwise look like nothing at all.</p>
+
+        <p><strong>Zoho against itself.</strong> Contacts sharing a normalised phone number or a non-role email across different <code>Buyer_Key</code> values. This is the cross-storefront duplicate check, and it is the one that produces the number the business cares about.</p>
+
+        <pre><code class="language-sql">-- Run against a warehouse copy of both storefronts plus a Zoho bulk export.
+-- Anything here is a Shopify buyer who is almost certainly a trade customer.
+SELECT s.email,
+       s.customer_id       AS shopify_id,
+       m.entity_id         AS magento_id,
+       s.total_spent       AS shopify_spend,
+       m.company_name
+FROM shopify_customers s
+JOIN magento_customers m
+  ON lower(trim(s.email)) = lower(trim(m.email))
+LEFT JOIN zoho_contacts z
+  ON z.shopify_customer_id = s.customer_id
+WHERE z.magento_customer_id IS NULL          -- not yet joined in the CRM
+  AND s.total_spent &gt; 250
+  AND split_part(s.email, '@', 1) NOT IN
+      ('orders','accounts','info','purchasing','sales','admin')
+ORDER BY s.total_spent DESC;</code></pre>
+
+        <p>Publish all three counts on one page, refreshed daily, including on the days they are zero. The reasoning is the same as for any integration dashboard: a number people are used to seeing is a number whose change gets noticed.</p>
+
+        <h2>17. Failure Modes Particular To Two Sources</h2>
+
+        <p><strong>The ping-pong write.</strong> Both syncs write <code>Email</code> on the same Contact from their own source of truth, and the two sources disagree. The field flips on each run and every flip triggers Zoho's modified-time, which triggers your change detection, which triggers another write. I have seen this consume a day's credits by lunchtime. Fix it by naming one storefront the owner of each shared field per record — <code>Primary_Storefront</code> exists for this — and having the non-owner write only to its own namespaced fields.</p>
+
+        <p><strong>ID collision.</strong> Both platforms number from one. Never store a bare platform ID in a shared field.</p>
+
+        <p><strong>Divergent deletes.</strong> A customer deleted in Shopify under a GDPR request still exists in Magento and in Zoho. Erasure has to be modelled as a cross-system operation with an explicit suppression record, otherwise the next sync recreates what you deleted. This is worth writing down as a procedure before you need it, alongside whatever else sits in your <a href="/blog/cybersecurity-best-practices-ecommerce/">data handling documentation</a>.</p>
+
+        <p><strong>Currency and tax basis drift.</strong> Discussed above and worth repeating because it produces plausible wrong numbers rather than errors.</p>
+
+        <p><strong>One sync starving the other.</strong> Shared concurrency and shared credits mean a Shopify flash sale can consume the budget the Magento order sync needs. Give each a cap and alert when either exceeds its share.</p>
+
+        <p><strong>Sandbox drift.</strong> Zoho sandboxes do not carry over every configuration change automatically, and custom field API names can differ if a field was created separately in each. Create fields in the sandbox and deploy them, rather than creating them twice.</p>
+
+        <h2>18. Questions That Come Up</h2>
+
+        <p><strong>"Should we just use the marketplace connector?"</strong> Zoho's own and third-party connectors for both platforms exist and are reasonable for a single storefront with default requirements. Neither handles two storefronts sharing an identity, which is the entire problem this article is about. If your overlap measurement comes back near zero, a connector each is a legitimate answer and you should take it.</p>
+
+        <p><strong>"Can we make Zoho the master for customer data?"</strong> You can, and it usually goes badly. The storefronts need customer records to function and cannot wait on a CRM to be available; the CRM is where humans edit things inconsistently. Commerce owns the transactional identity, the CRM owns the relationship. Point the arrows accordingly.</p>
+
+        <p><strong>"What about Zoho Books and inventory?"</strong> Different problem, different article — the accounting side has its own reconciliation demands and I have written about them separately under <a href="/blog/zoho-books-inventory-accounting-sync/">inventory and accounting synchronisation</a>. Do not try to solve both in one integration; the cadences and the correctness requirements differ.</p>
+
+        <p><strong>"How real time does this need to be?"</strong> Order events, minutes. Customer creation, minutes. Rolled-up lifetime values and cross-storefront joins, nightly. Building everything at the fastest cadence is how you exhaust an API credit allocation for no benefit — nobody makes a decision on a lifetime value that is eleven hours old versus eleven minutes old.</p>
+
+        <p><strong>"We are adding a third storefront next year. Does this scale?"</strong> The two-unique-fields-plus-buyer-key design does not scale to five sources gracefully; at that point you want a proper identity table outside the CRM, with the CRM holding a single resolved key. If a third is genuinely coming, build the identity resolution externally from the start and let Zoho be a consumer of it. That is a bigger project and it is the right one.</p>
+
+        <p><strong>"How do we test the matching rules?"</strong> On a copy of production data, offline, before any of it touches the CRM. Produce a spreadsheet of proposed joins with the evidence for each, and have someone from the sales team read a sample. On the distributor that review caught the shared <code>orders@</code> address problem in principle, and we still shipped it, because we did not apply the finding to the code. Reviews only help if the outcome changes something.</p>
+
+        <h2>19. What I Would Do First</h2>
+
+        <p>In order, if you are starting this tomorrow.</p>
+
+        <p>Measure the overlap. Export emails and normalised phones from both platforms and count the matches. Everything else depends on that number, and it takes an afternoon.</p>
+
+        <p>Decide the module question. Leads or Contacts, Deals or Sales Orders or rolled-up fields, per storefront. Write it down and get the sales lead to agree in writing, because reversing it later means touching every record.</p>
+
+        <p>Add the fields before you write any sync code. Two unique platform ID fields, a buyer key, a storefront picklist, and namespaced per-storefront metrics. Deploy them through the sandbox so both environments agree.</p>
+
+        <p>Enumerate every active workflow, assignment rule and blueprint in the Zoho org, and turn off anything that would fire on the records you are about to create. Then turn them back on deliberately, one at a time.</p>
+
+        <p>Backfill through Bulk Write, not the record APIs. Then build the three reconciliation queries and put them on a page somebody looks at.</p>
+
+        <p>Only after all that, build the live syncs — and build the Magento outbox before the Shopify webhooks, because the outbox is the harder one and finding out it does not work in week six is worse than finding out in week one.</p>
+
+        <p>The rep who made that phone call did nothing wrong. He looked at the record in front of him and it was incomplete in a way the system gave him no way to notice. Two storefronts is not twice the integration work; it is the same work plus one question about identity that has to be answered before anything else is worth building.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/zoho-books-inventory-accounting-sync/">Zoho Books Inventory & Accounting Synchronization</a></strong>
+              <strong><a href="/blog/zoho-books-inventory-accounting-sync/">Zoho Books Inventory &amp; Accounting Synchronization</a></strong>
               <p>Automating invoice creation and stock reconciliation.</p>
             </li>
             <li>
@@ -242,7 +715,6 @@ def push_lead_to_zoho(access_token, customer_data):
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -276,6 +748,6 @@ def push_lead_to_zoho(access_token, customer_data):
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

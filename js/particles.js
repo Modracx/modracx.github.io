@@ -12,11 +12,38 @@
 
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  var PALETTE = [
-    [240, 192, 96],
-    [167, 139, 250],
-    [240, 244, 255]
-  ];
+  /* Motes are lit points against a night sky, and ink flecks against a day
+     one — so the palette (and the constellation link colour) swaps with the
+     chart. Values mirror the accents in css/tokens.css. */
+  var PALETTES = {
+    dark: {
+      motes: [[240, 192, 96], [167, 139, 250], [240, 244, 255]],
+      link: [150, 140, 235],
+      linkLit: [240, 192, 235],
+      burst: [240, 192, 96],
+      spriteAlpha: 0.55,
+      linkAlpha: 1
+    },
+    light: {
+      motes: [[176, 124, 24], [92, 66, 200], [64, 70, 110]],
+      link: [96, 104, 168],
+      linkLit: [122, 84, 16],
+      burst: [150, 104, 16],
+      spriteAlpha: 0.34,
+      linkAlpha: 1.5
+    }
+  };
+
+  function themeName() {
+    var t = document.documentElement.getAttribute("data-theme");
+    if (t === "light" || t === "dark") return t;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
+  }
+
+  var TONE = PALETTES[themeName()];
+  var PALETTE = TONE.motes;
 
   var SPRITES = [];
   function createSprites(dpr) {
@@ -29,7 +56,7 @@
       var r = size / 2;
       var rgb = c[0] + "," + c[1] + "," + c[2];
       var g = octx.createRadialGradient(r, r, 0, r, r, r);
-      g.addColorStop(0, "rgba(" + rgb + ",0.55)");
+      g.addColorStop(0, "rgba(" + rgb + "," + TONE.spriteAlpha + ")");
       g.addColorStop(1, "rgba(" + rgb + ",0)");
       octx.fillStyle = g;
       octx.beginPath();
@@ -261,8 +288,13 @@
                 var mx = (a.x + b.x) * 0.5 - pt.x;
                 var my = (a.y + b.y) * 0.5 - pt.y;
                 var near = pt.inside ? Math.max(0, 1 - Math.sqrt(mx * mx + my * my) / 300) : 0;
-                ctx.strokeStyle = "rgba(" + (150 + near * 90) + "," + (140 + near * 52) + ",235," +
-                  (t * (0.07 + near * 0.3)).toFixed(3) + ")";
+                var lk = TONE.link;
+                var lt = TONE.linkLit;
+                ctx.strokeStyle = "rgba(" +
+                  Math.round(lk[0] + (lt[0] - lk[0]) * near) + "," +
+                  Math.round(lk[1] + (lt[1] - lk[1]) * near) + "," +
+                  Math.round(lk[2] + (lt[2] - lk[2]) * near) + "," +
+                  (t * (0.07 + near * 0.3) * TONE.linkAlpha).toFixed(3) + ")";
                 ctx.beginPath();
                 ctx.moveTo(a.x, a.y);
                 ctx.lineTo(b.x, b.y);
@@ -296,7 +328,8 @@
 
     for (var b2 = 0; b2 < this.bursts.length; b2++) {
       var burst = this.bursts[b2];
-      ctx.strokeStyle = "rgba(240,192,96," + (burst.life * 0.5).toFixed(3) + ")";
+      ctx.strokeStyle = "rgba(" + TONE.burst.join(",") + "," +
+        (burst.life * 0.5).toFixed(3) + ")";
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.arc(burst.x, burst.y, burst.r, 0, 6.283);
@@ -334,6 +367,19 @@
   } else {
     system.start();
   }
+
+  /* Repaint the whole system when the chart changes */
+  document.addEventListener("themechange", function (e) {
+    var next = PALETTES[e.detail.theme] || PALETTES.dark;
+    if (next === TONE) return;
+    TONE = next;
+    PALETTE = TONE.motes;
+    createSprites(system.dpr);
+    for (var i = 0; i < system.particles.length; i++) {
+      var p = system.particles[i];
+      p.tone = PALETTE[p.toneIdx];
+    }
+  });
 
   window.RealmParticles = system;
 })();

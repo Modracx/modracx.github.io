@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>PWA for Ecommerce: Native Experience on Web | MODRACX</title>
-  <meta name="description" content="An exhaustive technical engineering guide to Progressive Web Apps (PWAs) in e-commerce, Web App Manifests, Service Worker caching strategies, and web push notifications." />
+  <meta name="description" content="The business and UX case for an ecommerce PWA: when to fire the install prompt, what standalone mode breaks, push permission economics, and when not to build one." />
   <meta property="og:title" content="PWA for Ecommerce: Native Experience on Web | MODRACX" />
   <meta property="og:description" content="PWA for e-commerce technical guide by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -194,17 +196,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>PWA for Ecommerce: Native Experience on Web</h1>
-        <p class="lede">The technical implementation manual for Progressive Web Applications in e-commerce: Web App Manifests, Service Worker CacheStorage APIs, and offline catalog fallback state machines.</p>
+        <p class="lede">A retailer spent £74,000 on a native app that reached 4,100 installs. The PWA that replaced it cost a week and did better — for reasons that had almost nothing to do with the technology.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 29 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -229,276 +231,517 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>1. The Native App vs. Progressive Web App Paradigm</h2>
-        <p>Building separate native iOS (Swift) and Android (Kotlin) applications for e-commerce incurs immense development overhead and engineering friction. Users must visit an application store, download a heavy package often exceeding 100 megabytes, grant broad OS permissions, and complete a lengthy installation process before initiating a purchase. Progressive Web Apps (PWAs) deliver native application functionality, including home screen installation, web push notifications, hardware acceleration, and robust offline caching, directly inside the modern web browser engine with zero download friction. This architecture substantially lowers customer acquisition costs while dramatically elevating the conversion funnel.</p>
-        <p>In contemporary systems engineering, a PWA is not merely a responsive website; it is an installable, network-resilient application shell capable of intercepting HTTP requests via proxy layers. This provides the architectural foundation necessary to deliver sub-second paint times even on unstable 3G networks. When transitioning from monolithic platforms to modern <a href="/blog/headless-architecture/">headless architecture</a>, the PWA serves as the ideal decoupled presentation layer. The engineering complexity shifts from rendering HTML templates on the server to managing localized state and network topologies asynchronously in the browser.</p>
+        <h2>1. The App Nobody Downloaded</h2>
 
-        <h2>2. Web App Manifest Configuration</h2>
-        <p>The Web App Manifest is a JSON-formatted specification file that informs the mobile operating system how the application should behave when installed on the user's home screen. The manifest dictates the application identity, standalone display mode, background splash screen color, orientation constraints, and high-resolution maskable iconography. Without a correctly formatted manifest, the browser will not trigger the native "Add to Home Screen" prompt.</p>
+        <p>A toy retailer I worked with in 2023 had spent roughly £74,000 on a native iOS and Android app the year before. Eighteen months after launch it had 4,100 installs against a mobile audience of about 190,000 monthly visitors, and around 900 of those installs were still active. The app accounted for 1.6% of revenue. The marketing director wanted to know whether a PWA would fix it.</p>
+
+        <p>My honest first answer was that nothing would fix it, because the problem was not the delivery mechanism. People do not install an app to buy cushions twice a year. The install was a five-step commitment — tap, store, download, open, sign in — placed in front of a purchase worth about £48. The friction exceeded the value on offer and no amount of engineering changes that arithmetic.</p>
+
+        <p>What we built instead was a progressive web app on the existing storefront: a manifest, a service worker with conservative caching, and an install prompt that fired only for people who had already come back a second time and put something in a basket. Six months later there were 11,300 installed instances. Those users converted at 3.8% against 1.9% for the mobile web average, and their repeat purchase rate over the following quarter was roughly double.</p>
+
+        <p>That sounds like a triumph and it mostly is not, which is the honest part. Those numbers are heavily contaminated by selection: we deliberately only asked people who were already engaged, so of course they converted better. The genuine, defensible win was smaller and more boring. The install cost nothing to build beyond a week of work, the app store submission process disappeared, and the retailer was able to sunset the native app and reclaim about £30,000 a year in maintenance and agency retainer.</p>
+
+        <p>This article is about the business and experience case for a PWA on a storefront: what you actually get over a well-built responsive site, when the install prompt is worth firing, whether push notifications earn their keep, and — the section most articles skip — when I would tell you not to bother. The mechanics of caching, the strategies, and the kill switch you need before any of it are covered in depth in <a href="/blog/service-workers-offline-caching/">service workers and offline caching strategies</a>, and I am not going to restate them here.</p>
+
+        <h2>2. What a PWA Is, Stripped of Marketing</h2>
+
+        <p>A progressive web app is a website that meets three technical conditions: it is served over HTTPS, it has a web app manifest, and it registers a service worker with a fetch handler. That is the whole definition. Everything else attributed to PWAs — offline support, push notifications, app-like feel, background sync — is a capability those three things unlock, not part of the definition.</p>
+
+        <p>This matters because the term has been stretched into meaninglessness. I have sat in meetings where "we need a PWA" meant, variously: we want an app icon on the home screen, we want the site to be faster, we want push notifications, we want to stop paying Apple 30%, and once, memorably, we want it to feel more premium. Those are five different projects with different costs and different odds of success.</p>
+
+        <p>So before anything else, force the question: which specific capability do you want, and what is it worth? The answer determines whether this is a week of work or a quarter.</p>
+
+        <p>Here is the useful mental model. A PWA is not a category of application. It is a set of browser capabilities you can adopt individually, in any order, on a site that already exists. You can ship a manifest with no service worker and get the install prompt. You can ship a service worker with no manifest and get offline caching with no install. You can adopt them separately, measure each, and revert either. That incrementality is the actual advantage over native, and it is almost never the one that gets pitched.</p>
+
+        <p>The counterpart is that "PWA" as a project name invites scope creep, because it sounds like a thing you either have or do not have. I have started calling the work by its parts — "add an install path", "cache static assets on repeat visits" — and the conversations get considerably more productive.</p>
+
+        <h2>3. What You Genuinely Get Over a Good Responsive Site</h2>
+
+        <p>This is the question worth being ruthless about, because a well-built responsive storefront already does most of what people imagine a PWA does. Let me go through the claimed benefits one at a time and mark the ones that survive scrutiny.</p>
+
+        <p><strong>Speed.</strong> Partly real, entirely conditional. A service worker makes repeat visits faster because assets come off local storage instead of the network, and on a slow connection that is a meaningful difference — we measured repeat-visit LCP dropping from 2.8s to about 1.1s on a mid-range Android over 4G. But it does nothing for first visits, which are the majority of sessions on most storefronts, and it does nothing at all if your site is slow because you ship 900KB of JavaScript. A PWA layered onto a slow site is a slow site that loads its slowness from cache. Fix the underlying performance first; the caching amplifies whatever is already there.</p>
+
+        <p><strong>Offline browsing.</strong> Real but narrow. Nobody shops offline. What actually happens is a customer on a train, in a basement showroom, or on rural data loses connectivity mid-session and gets the browser's error page instead of the product they were reading. A service worker turns that into a slightly stale page and a quiet banner. On the outdoor retailer I worked with, about 3% of sessions hit that path at least once. Whether 3% justifies the work depends entirely on your audience.</p>
+
+        <p><strong>The home screen icon.</strong> Real, and more valuable than engineers expect. It is a persistent piece of screen real estate on a device the customer looks at a hundred times a day. It bypasses the search box, which means it bypasses your competitors bidding on your brand name. For a retailer with genuine repeat purchase behaviour — consumables, pet food, coffee, supplements, workwear — this is the single strongest argument in the whole list.</p>
+
+        <p><strong>Push notifications.</strong> Real, dangerous, and covered at length below.</p>
+
+        <p><strong>App-like navigation.</strong> Mostly imaginary as a benefit, and a source of real bugs. More on this shortly.</p>
+
+        <p><strong>Better SEO.</strong> No. There is no ranking benefit to being installable, and treating a PWA as an SEO play usually makes indexing worse rather than better — the client-side rendering that often comes bundled with these projects is the actual risk, which is the subject of the companion piece on <a href="/blog/pwa-seo-performance/">PWA SEO and crawlability</a>.</p>
+
+        <p>Two and a half of six. That is not nothing, and it is a long way from the pitch deck.</p>
+
+        <h2>4. The Manifest, and the Fields That Actually Matter</h2>
+
+        <p>The manifest is a small JSON file, most of which is ignorable, and three or four fields of which will bite you if you get them wrong.</p>
+
         <pre><code class="language-json">{
-  "name": "MODRACX Storefront",
-  "short_name": "MODRACX",
-  "description": "High-performance headless e-commerce PWA.",
-  "start_url": "/?source=pwa",
+  "name": "Northgate Home",
+  "short_name": "Northgate",
+  "start_url": "/?utm_source=pwa&amp;utm_medium=homescreen",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#07071a",
-  "theme_color": "#07071a",
-  "orientation": "portrait-primary",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
   "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
     {
-      "src": "/icons/icon-192x192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icons/icon-512x512.png",
+      "src": "/icons/maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     }
-  ],
-  "categories": ["shopping", "lifestyle"],
-  "prefer_related_applications": false
+  ]
 }</code></pre>
-        <p>Integrating this manifest involves adding a simple standard link element to the HTML head block. Mobile platforms aggressively cache this file, so appending cache-busting query parameters during deployment is necessary. It is critical that the <code>start_url</code> query parameter tracks the origin of the session for accurate conversion attribution in Google Analytics.</p>
 
-        <h2>3. Service Worker Execution Thread and Caching Strategies</h2>
-        <p>A Service Worker is a programmable network proxy operating within a background browser thread independent of the main UI thread. It provides the core networking logic required to execute caching strategies and background synchronization. Because it operates outside the primary thread, it cannot manipulate the DOM directly; communication with the active page must occur via the <code>postMessage</code> API. The lifecycle of a Service Worker consists of registration, installation, and activation, which must be strictly managed to prevent serving stale application shell logic.</p>
-        <p>For e-commerce performance, implementing an aggressive caching layer is mandatory. The CacheStorage API allows us to manually store Response objects keyed by Request objects. The "Stale-While-Revalidate" strategy is the gold standard for non-critical catalog data. The proxy serves the cached response immediately to unblock the main thread rendering pipeline while silently fetching the updated response in the background to replace the stale cache entry.</p>
-        <pre><code class="language-javascript">// E-Commerce Service Worker: Cache-First for Assets, Stale-While-Revalidate for API
-const CACHE_NAME = 'modracx-store-v2';
-const STATIC_ASSETS = [
-  '/',
-  '/style.min.css',
-  '/script.min.js',
-  '/offline.html',
-  '/manifest.json'
-];
+        <p><code>short_name</code> is what appears under the icon and it gets truncated at roughly twelve characters on Android. "Northgate Home Furnishings" becomes "Northgate H…", which looks broken. Test it on a real device, not in DevTools.</p>
 
-self.addEventListener('install', (event) =&gt; {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =&gt; {
-      return cache.addAll(STATIC_ASSETS);
-    })
-  );
-  self.skipWaiting();
-});
+        <p><code>start_url</code> with campaign parameters is how you attribute installed sessions in analytics without any additional instrumentation. It costs nothing and it is the difference between being able to answer "did the install do anything" and guessing. Do it on day one, because you cannot retroactively add it to installs already out there.</p>
 
-self.addEventListener('activate', (event) =&gt; {
-  event.waitUntil(
-    caches.keys().then((cacheNames) =&gt; {
-      return Promise.all(
-        cacheNames.map((cache) =&gt; {
-          if (cache !== CACHE_NAME) {
-            return caches.delete(cache);
-          }
-        })
-      );
-    })
-  );
-  self.clients.claim();
-});
+        <p>The maskable icon is the one everyone forgets. Without <code>purpose: "maskable"</code>, Android renders your square icon inside a white circle with a border, which looks like a mistake sitting next to properly-shaped icons. The maskable variant needs its important content inside the central 80% because the launcher crops the edges to whatever shape the device theme uses.</p>
 
-self.addEventListener('fetch', (event) =&gt; {
-  const requestUrl = new URL(event.request.url);
+        <p>One field genuinely worth adding once the install path is working is <code>shortcuts</code>, which populates the long-press menu on the home screen icon. It costs nothing and it is the only part of the manifest that has ever produced a measurable behaviour change for me — on the toy retailer, 14% of standalone launches came through a shortcut rather than the icon itself.</p>
 
-  // Stale-While-Revalidate strategy for product catalog API calls
-  if (requestUrl.pathname.startsWith('/api/catalog')) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then((cache) =&gt; {
-        return cache.match(event.request).then((cachedResponse) =&gt; {
-          const fetchPromise = fetch(event.request).then((networkResponse) =&gt; {
-            cache.put(event.request, networkResponse.clone());
-            return networkResponse;
-          });
-          return cachedResponse || fetchPromise;
-        });
-      })
-    );
-  } else if (event.request.mode === 'navigate') {
-    // Network-First with Offline Fallback for HTML navigation
-    event.respondWith(
-      fetch(event.request).catch(() =&gt; caches.match('/offline.html'))
-    );
-  } else {
-    // Cache-First for static CSS, JS, and image assets
-    event.respondWith(
-      caches.match(event.request).then((response) =&gt; {
-        return response || fetch(event.request);
-      })
-    );
+        <pre><code class="language-json">"shortcuts": [
+  {
+    "name": "Track my order",
+    "url": "/account/orders?utm_source=pwa&amp;utm_medium=shortcut",
+    "icons": [{ "src": "/icons/orders-96.png", "sizes": "96x96" }]
+  },
+  {
+    "name": "Reorder essentials",
+    "url": "/account/reorder?utm_source=pwa&amp;utm_medium=shortcut"
   }
-});</code></pre>
-        <p>The code block above illustrates the foundation of network resilience. Implementing robust <a href="/blog/performance-optimization/">performance optimization</a> metrics heavily relies on offloading static asset retrieval to the CacheStorage API. Network routing logic must selectively apply strategies based on HTTP methods and endpoint paths. Cart and checkout mutations (POST, PUT, DELETE) must bypass the cache entirely utilizing a strict Network-First or Network-Only fallback loop.</p>
+]</code></pre>
 
-        <h2>4. IndexedDB Offline Cart State Management</h2>
-        <p>While the CacheStorage API handles HTTP network requests, storing structured application state, such as the customer shopping cart, requires the asynchronous IndexedDB API. IndexedDB is a low-level API for client-side storage of significant amounts of structured data, including files and blobs. It operates transactionally, meaning that read and write operations ensure data integrity across multiple active tabs.</p>
-        <p>Managing the shopping cart offline demands a synchronization queue. When the user modifies cart quantities without network access, the application must write the mutation to an IndexedDB object store. Upon network restoration, the background synchronization API iterates over the queued mutations and applies them to the server sequentially, resolving any potential conflict vectors. This prevents lost revenue due to connectivity disruptions.</p>
-        <pre><code class="language-javascript">// IndexedDB Wrapper for Offline Cart Mutations
-const DB_NAME = 'modracx-cart-db';
-const DB_VERSION = 1;
-const STORE_NAME = 'sync-queue';
+        <p>Pick shortcuts that reflect what returning customers actually do, which is usually checking an order and buying the same thing again — not browsing a category, which is what most sites put there.</p>
 
-function openDatabase() {
-  return new Promise((resolve, reject) =&gt; {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () =&gt; reject(request.error);
-    request.onsuccess = () =&gt; resolve(request.result);
-    request.onupgradeneeded = (event) =&gt; {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
-      }
-    };
-  });
+        <p><code>scope</code> defines which URLs stay inside the app window. Anything outside it opens in a browser tab, which is jarring. If your checkout lives on a different subdomain — and on plenty of Magento and hosted-cart setups it does — the customer will get bounced out of standalone mode at the exact moment you least want a context switch. Check this before you promise anyone an uninterrupted flow, because it may simply not be achievable without a domain change.</p>
+
+        <h2>5. The Install Prompt Is a Conversion Event, Not a Feature</h2>
+
+        <p>Chrome fires <code>beforeinstallprompt</code> when it decides a site is installable and the user has engaged with it. If you do nothing, on most Android configurations the browser will surface its own install affordance somewhere in the UI, and approximately nobody will find it. To do better you intercept the event, stash it, and choose your own moment.</p>
+
+        <pre><code class="language-javascript">let deferredPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) =&gt; {
+  // Stop Chrome showing its own mini-infobar; we choose the moment.
+  e.preventDefault();
+  deferredPrompt = e;
+  maybeOfferInstall();
+});
+
+async function offerInstall() {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  const { outcome } = await deferredPrompt.userChoice;
+  // The event is single-use. Once prompt() has run it cannot be reused.
+  deferredPrompt = null;
+  track('pwa_install_prompt', { outcome }); // 'accepted' | 'dismissed'
+}</code></pre>
+
+        <p>The single-use property is the detail that trips people up. You get one call to <code>prompt()</code> per captured event. If the customer dismisses it, you cannot call it again on that event — you have to wait for the browser to fire a fresh one, which it may not do for a while. So the moment you choose is close to a one-shot decision, and it deserves the same care you would give the placement of an add-to-cart button.</p>
+
+        <p>Here is my opinion, held firmly: firing the prompt on the first page view is always wrong. It converts terribly — I have seen 2-4% acceptance on first-view prompts against 18-25% on engagement-gated ones — and a dismissal is not free. It costs you a bit of goodwill and a bit of screen at the worst possible moment, when the customer is still deciding whether your site is worth their attention at all. You are asking someone who has not yet decided to browse your shop to commit it to their home screen.</p>
+
+        <h2>6. When to Fire It: The Signals Worth Waiting For</h2>
+
+        <p>The rule I use: only ask people who have demonstrated they will come back, and ask at a moment of small success rather than in the middle of a task.</p>
+
+        <p>Concretely, the signals I gate on, in rough order of strength:</p>
+
+        <p><strong>A second session.</strong> Not a second page view — a second visit on a different day. Someone who returned voluntarily has told you something a page-depth metric cannot. This is the strongest single signal and it is trivial to track.</p>
+
+        <p><strong>An add to cart.</strong> Commercial intent, and the moment right after it is a natural pause. Not during checkout — never interrupt a checkout with anything, ever.</p>
+
+        <p><strong>A completed order.</strong> The best moment on the whole site. The customer has just had a good experience, they are on a confirmation page with nothing else to do, and "add us to your home screen to track this order" is a genuine offer rather than a demand.</p>
+
+        <p><strong>An account creation or newsletter signup.</strong> Weaker, but a real commitment signal.</p>
+
+        <p><strong>A wishlist save or a back-in-stock subscription.</strong> Also a good moment, because the customer has already expressed an intention to return.</p>
+
+        <pre><code class="language-javascript">const KEY = 'ng_install_state';
+
+function state() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; }
+  catch { return {}; }
 }
 
-async function queueCartMutation(mutation) {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) =&gt; {
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.add({
-      mutationType: mutation.type,
-      payload: mutation.payload,
-      timestamp: Date.now()
+function save(patch) {
+  localStorage.setItem(KEY, JSON.stringify({ ...state(), ...patch }));
+}
+
+function eligible() {
+  const s = state();
+  if (s.installed) return false;
+  // Respect a dismissal for 60 days. Asking again next week is how you
+  // train people to reflexively dismiss anything you show them.
+  if (s.dismissedAt &amp;&amp; Date.now() - s.dismissedAt &lt; 60 * 864e5) return false;
+  const returning = s.firstSeen &amp;&amp; Date.now() - s.firstSeen &gt; 20 * 36e5;
+  return returning || s.addedToCart || s.orderedAt;
+}</code></pre>
+
+        <p>Note the sixty-day cooldown. I settled on that number after watching a client re-prompt weekly and drive their acceptance rate down to almost nothing — customers had learned the banner was noise and were dismissing it before reading it. A dismissal is data. Treat it as a no, not a not-yet.</p>
+
+        <p>And the delivery matters as much as the timing. Do not use a modal. A modal that blocks a product page to ask for an install is the same mistake as a newsletter interstitial, and it will show up in your Core Web Vitals as a layout shift as well as in your bounce rate. A dismissible bar anchored to the bottom of the viewport, appearing after the page has settled, is the pattern that has worked best for me — visible, ignorable, and out of the way of the primary action.</p>
+
+        <p>The bar itself needs to be laid out so it cannot shift anything. Fixed to the viewport, out of the document flow, with a padding compensation on the body so it does not cover the last element on the page:</p>
+
+        <pre><code class="language-css">.install-bar {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 40;
+  /* Sit above the iOS home indicator rather than under it. */
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+  transform: translateY(100%);
+  transition: transform 240ms ease-out;
+}
+
+.install-bar[data-shown] { transform: translateY(0); }
+
+/* Nothing in the document reflows when the bar appears, so this
+   contributes zero to CLS. The padding below is applied at the
+   same time so the footer stays reachable. */
+body[data-install-bar] { padding-block-end: 4.5rem; }
+
+/* And never show it inside the installed app itself. */
+@media (display-mode: standalone) { .install-bar { display: none; } }</code></pre>
+
+        <p>That last rule catches an embarrassing bug I have shipped: an install banner appearing inside the installed app, asking a customer to install something they are already using.</p>
+
+        <h2>7. Writing the Prompt Copy</h2>
+
+        <p>Engineers hand this to whoever is nearest and it is worth more thought than that, because the browser's own dialogue is the second step. Your banner has one job: get the customer to tap through to the native dialogue with a reason in mind. The native dialogue then says something like "Install app?" with your icon, and it is the reason you supplied that carries them through it.</p>
+
+        <p>What does not work, in my experience: "Install our app." It describes the mechanism, not the benefit, and it triggers the mental cost model people have built up from the app stores — storage space, updates, notifications, another account. Several customers in a usability session told us they assumed it would be a large download.</p>
+
+        <p>What works better is a specific, small promise tied to what they just did. After an order: "Add Northgate to your home screen to check your delivery in one tap." After a back-in-stock signup: "Get to this page faster next time — add us to your home screen." The phrase "home screen" does real work because it is accurate and it sets the expectation of something lightweight.</p>
+
+        <p>One honest caveat: I have never been able to A/B test this cleanly. Install prompts fire for a small, self-selected slice of traffic, the conversion event is rare, and by the time you have significance the season has changed. What I have instead is a consistent direction across four sites, which is weaker evidence than I would like but is what exists. If someone shows you a copy test on install prompts with a confident percentage, ask how many installs were in each arm.</p>
+
+        <h2>8. The iOS Situation, Honestly</h2>
+
+        <p>Safari does not implement <code>beforeinstallprompt</code> and it is not going to. On iOS the only route to the home screen is the user tapping Share, scrolling the sheet, and choosing "Add to Home Screen". You cannot trigger it, you cannot detect whether they did it, and you cannot know whether they have already done it from a browser tab.</p>
+
+        <p>What you can do is teach it, and the honest conversion on a taught flow is poor. On the toy retailer we showed a small iOS-specific instruction card with a screenshot of the share sheet, gated on the same engagement signals, and acceptance ran at roughly a fifth of the Android rate. It was still worth having, because iOS was 61% of their mobile traffic and a fifth of something large beats all of nothing.</p>
+
+        <pre><code class="language-javascript">const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  &amp;&amp; !window.MSStream;
+
+// On iOS, standalone mode is exposed on navigator, not via matchMedia
+// in older versions. Check both.
+const standalone = window.navigator.standalone === true
+  || window.matchMedia('(display-mode: standalone)').matches;
+
+if (isIOS &amp;&amp; !standalone &amp;&amp; eligible()) showIOSInstructions();</code></pre>
+
+        <p>Some other iOS facts worth knowing before you promise anything. Push notifications work on iOS 16.4 and later, released March 2023, but only for a site that has actually been added to the home screen — you cannot push to a Safari tab. Storage eviction is more aggressive than on Chrome, so caches can vanish for users who have not visited in a while. And until fairly recently, each home-screen instance ran in its own storage silo, so a customer logged in on Safari would find themselves logged out inside the installed app, which produced a support ticket pattern that took us a fortnight to recognise.</p>
+
+        <p>None of this makes iOS a lost cause. It makes iOS the reason to keep the browser experience excellent rather than treating installation as the destination.</p>
+
+        <h2>9. App-Like Navigation, and Why I Distrust It</h2>
+
+        <p>Somewhere in most PWA proposals is a line about "app-like navigation" — instant page transitions, a persistent bottom tab bar, no white flash between pages. It is usually the part clients are most excited about and the part I push back on hardest.</p>
+
+        <p>The concrete meaning is a single-page application: a client-side router, JSON endpoints instead of HTML documents, and JavaScript assembling every view. That is a genuine architectural change with a real cost, and it is a different project from adding a manifest and a service worker.</p>
+
+        <p>Here is what I have seen it buy and cost on catalogue sites. Bought: transitions of roughly 120-180ms instead of 400-700ms, and a persistent header that does not flicker. Cost: a rendering and indexing problem that is now yours to solve, a much larger JavaScript bundle competing with the first render, browser back-button behaviour you have to reimplement and will get subtly wrong, and scroll restoration that will be broken on at least one browser at all times.</p>
+
+        <p>My position is that on a storefront, multi-page navigation with well-cached assets is close enough. The gap between a 150ms client-side transition and a 350ms server-rendered one is perceptible in a side-by-side demo and largely invisible in real use, where the customer is reading, thinking, and deciding. Meanwhile the SPA version puts your entire catalogue behind a JavaScript execution step.</p>
+
+        <p>There is a middle ground I like considerably more: keep server-rendered documents and use the View Transitions API for the visual continuity, which in Chrome 111 and later gets you a genuine cross-document transition with no router at all.</p>
+
+        <pre><code class="language-css">/* Opt the whole site into cross-document view transitions.
+   Chrome 126+ for the @view-transition rule; older Chrome ignores it
+   and simply navigates normally, which is a fine fallback. */
+@view-transition {
+  navigation: auto;
+}
+
+/* Give the product image a stable identity so it morphs between
+   the listing page and the product page rather than cross-fading. */
+.product-hero img {
+  view-transition-name: product-image;
+}</code></pre>
+
+        <p>That is four lines of CSS against a quarter of engineering. If someone can articulate why it is insufficient for their case, fine — but they should have to.</p>
+
+        <h2>10. Standalone Mode Breaks Things You Forgot About</h2>
+
+        <p>Once a customer launches from the home screen, the browser chrome is gone. No address bar, and on Android no visible back button on some launchers. Several assumptions in your site quietly become wrong.</p>
+
+        <p><strong>There is no obvious way back.</strong> Android's system back gesture works, but breadcrumbs and in-page back links suddenly carry much more weight. If your product page relies on the browser back button to return to the category listing, standalone users are stuck in a way they will not articulate — they will just leave.</p>
+
+        <p><strong>External links eject the customer.</strong> A link to your Trustpilot profile, a PDF size guide on a CDN domain, a payment provider's hosted page: anything outside <code>scope</code> opens a browser and the customer may not find their way back. Audit these deliberately.</p>
+
+        <p><strong>Third-party auth is a minefield.</strong> Sign in with Google, Apple, or a social provider typically involves a redirect chain across domains. In standalone mode this can dump the user into a browser tab, complete the login there, and leave the installed instance still logged out. We hit exactly this and ended up detecting standalone mode and preferring the native credential flows where available.</p>
+
+        <p><strong>There is no reload.</strong> If your app gets into a bad state, a browser user presses refresh. A standalone user has no such control. This is why the update-notification pattern matters more here than on the web, and it is one place where the service worker lifecycle work is not optional.</p>
+
+        <pre><code class="language-javascript">// Know which mode you are in and record it as an analytics dimension.
+function displayMode() {
+  if (window.navigator.standalone === true) return 'standalone-ios';
+  for (const m of ['fullscreen', 'standalone', 'minimal-ui']) {
+    if (window.matchMedia(`(display-mode: ${m})`).matches) return m;
+  }
+  return 'browser';
+}
+
+track('page_view', { display_mode: displayMode() });</code></pre>
+
+        <p>Recording that dimension from the first day is the cheapest thing on this whole list and the one that lets you answer, later, whether any of it was worth doing.</p>
+
+        <h2>11. Push Notifications and the Economics of a Permission</h2>
+
+        <p>Web push is the capability that gets a PWA project funded and the one most likely to damage the business that funds it.</p>
+
+        <p>The mechanics are unremarkable: request permission, subscribe to a push service, store the subscription on your server, send messages to it. The judgement is where the money is.</p>
+
+        <p>The core fact to internalise: you get approximately one ask per customer, forever. A denial in Chrome is sticky and awkward to reverse — the customer has to find site settings and change it deliberately, which effectively nobody does. Chrome 80, in early 2020, introduced quieter prompting for sites with poor acceptance rates, so abusing the prompt also degrades your ability to ask in future. Safari on iOS requires the site to already be installed before you can even ask. The permission is a finite, non-renewable asset.</p>
+
+        <p>So the calculation is not "does push increase revenue". It is "is what I am going to send worth more than the one ask I have". For most storefronts, sending weekly promotional pushes, the honest answer is no — you burn the permission on offers that email already delivers, at a lower cost and with better attribution.</p>
+
+        <p>The cases where I think push clearly earns the ask:</p>
+
+        <p><strong>Back in stock.</strong> The customer explicitly asked to be told. The notification is the fulfilment of a request they made. Acceptance rates on this prompt are the best I have measured — around 60-70% when asked immediately after the customer taps "notify me", against 5-12% for a generic prompt.</p>
+
+        <p><strong>Order and delivery status.</strong> High perceived value, unambiguous relevance, and it displaces a support contact. "Out for delivery today" is a message people are glad to receive.</p>
+
+        <p><strong>Price drop on a saved item.</strong> Same principle: the customer set it up, the notification is the payoff.</p>
+
+        <p>What burns it: general promotions, cart abandonment nags, "we miss you", anything sent because there is a campaign calendar rather than because something happened that the customer asked to know about.</p>
+
+        <pre><code class="language-javascript">// Only ever call this from a click handler on a specific,
+// explained action. Never on page load.
+async function subscribeToStockAlert(sku) {
+  const permission = await Notification.requestPermission();
+  track('push_permission', { outcome: permission, context: 'stock_alert' });
+  if (permission !== 'granted') {
+    // Fall back to email. Always have a fallback; most people say no.
+    return showEmailAlertForm(sku);
+  }
+
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true, // required; silent pushes are not permitted
+    applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+  });
+
+  await fetch('/api/alerts/stock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sku, subscription: sub })
+  });
+}</code></pre>
+
+        <p>Two things in there that are easy to get wrong. <code>userVisibleOnly: true</code> is mandatory in Chrome — you cannot receive a push and silently do something with it, you must show a notification. And the email fallback is not a nicety. Most people will decline, and if declining leaves them with nothing you have built a feature for a minority and a dead end for everyone else.</p>
+
+        <p>The receiving half lives in the service worker, and the part people get wrong is the click handler. A notification that opens a new tab every time it is tapped will leave a customer with nine tabs of your storefront by Friday.</p>
+
+        <pre><code class="language-javascript">// sw.js
+self.addEventListener('push', (event) =&gt; {
+  const data = event.data.json();
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-72.png',   // monochrome, Android status bar
+      tag: `stock-${data.sku}`,       // replaces an earlier alert for the
+                                      // same SKU instead of stacking
+      data: { url: data.url }
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) =&gt; {
+  event.notification.close();
+  const target = event.notification.data.url;
+
+  event.waitUntil((async () =&gt; {
+    const clients = await self.clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true
     });
-    request.onsuccess = () =&gt; resolve(request.result);
-    request.onerror = () =&gt; reject(request.error);
+    // Reuse an open window if there is one. Only open a new one
+    // as a last resort.
+    for (const client of clients) {
+      if (client.url.includes(new URL(target, self.location).pathname)) {
+        return client.focus();
+      }
+    }
+    if (clients.length) {
+      await clients[0].navigate(target);
+      return clients[0].focus();
+    }
+    return self.clients.openWindow(target);
+  })());
+});</code></pre>
+
+        <h2>12. The Pre-Prompt Pattern, and Why I Am Ambivalent</h2>
+
+        <p>A widespread technique: before calling <code>Notification.requestPermission()</code>, show your own dialogue explaining what you will send. If the customer says no to yours, you never spend the browser's prompt, so the permission stays available for a future ask.</p>
+
+        <p>The logic is sound and the practice is defensible. It does improve measured acceptance, mostly by filtering out the people who would have denied. On one client it moved browser-level acceptance from 41% to 68%, while the number of actual subscribers barely moved — which tells you exactly what it was doing.</p>
+
+        <p>My ambivalence is that it is a second interruption to avoid the cost of the first one, and stacked with an install banner and a cookie notice you have now built three overlays between the customer and the cushions. I use it only where the ask is not already tied to an explicit user action. If the customer has just tapped "notify me when back in stock", the pre-prompt is redundant — they have already told you what they want, and adding a dialogue that asks whether they meant it is faintly insulting.</p>
+
+        <h2>13. Comparing the Three Options Properly</h2>
+
+        <p>When a client is choosing between a responsive site, a PWA, and a native app, this is the comparison I put in front of them. The rows that matter are rarely the technical ones.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Dimension</th><th>Responsive site</th><th>PWA</th><th>Native app</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Build cost, typical mid-market</td><td>Already paid</td><td>1-4 weeks on top</td><td>£50k-150k plus rebuild</td></tr>
+            <tr><td>Ongoing maintenance</td><td>One codebase</td><td>One codebase</td><td>Two, plus store compliance</td></tr>
+            <tr><td>Discoverable in search</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+            <tr><td>Home screen presence</td><td>No</td><td>Yes, if installed</td><td>Yes</td></tr>
+            <tr><td>Install friction</td><td>None</td><td>One tap, no download</td><td>Store, download, sign in</td></tr>
+            <tr><td>Push notifications</td><td>No</td><td>Yes, iOS 16.4+ if installed</td><td>Yes, best support</td></tr>
+            <tr><td>Payment platform fee</td><td>Card fees only</td><td>Card fees only</td><td>Store fee on digital goods</td></tr>
+            <tr><td>Release cycle</td><td>Deploy when ready</td><td>Deploy when ready</td><td>Review queue</td></tr>
+            <tr><td>Camera, NFC, deep hardware</td><td>Limited</td><td>Limited</td><td>Full</td></tr>
+            <tr><td>Works if you stop maintaining it</td><td>Yes</td><td>Yes, but see the kill switch</td><td>Until an OS update</td></tr>
+          </tbody>
+        </table>
+
+        <p>The row that decides most of these conversations is maintenance. A native app is not a project, it is a standing commitment: two codebases, two release processes, and an annual scramble every time Apple or Google changes a requirement. Mid-market retailers consistently underestimate this and consistently regret it, which is how you end up with a two-year-old app that nobody has updated and 900 active users.</p>
+
+        <p>The row that decides the rest is physical hardware. If you need reliable barcode scanning for a trade counter, NFC for a loyalty card, or Bluetooth for anything, build native. That is a real requirement and the web will disappoint you. If someone is wrapping a PWA into a store listing for distribution reasons rather than hardware ones, the practical route is covered in the piece on <a href="/blog/android-studio-pwa-mobile-apps/">building installable Android apps from a PWA</a>.</p>
+
+        <h2>14. The Homeware Retailer, With Numbers</h2>
+
+        <p>Back to the client from the opening. Here is what we actually did, over eleven weeks, and what it produced.</p>
+
+        <p><strong>Weeks one and two: performance, not PWA.</strong> Mobile LCP was 4.1s at the 75th percentile. We deferred two tag manager containers, dropped an unused carousel library, and moved the hero image to a properly sized WebP. LCP came down to 2.4s. No PWA code was written in this phase and it produced the largest single revenue movement of the whole project — mobile conversion went from 1.71% to 2.04%. I mention this because it is the recurring lesson: the boring performance work outperforms the interesting architecture work, nearly every time.</p>
+
+        <p><strong>Week three: manifest and icons.</strong> A day of work, most of it spent on icon variants. We shipped this alone and watched Chrome's own install affordance produce 140 installs in a fortnight with no prompting from us. That became the baseline.</p>
+
+        <p><strong>Weeks four to six: service worker.</strong> Conservative: cache-first for hashed assets and fonts, capped cache-first for product images, network-first for HTML with a three-second timeout, and network-only for cart, checkout, and account. The kill switch went in first. Rolled out at 5%, then 25%, then everyone.</p>
+
+        <p><strong>Weeks seven to nine: the install prompt.</strong> Gated on the eligibility logic above, shown as a bottom bar, with an iOS instruction variant.</p>
+
+        <p><strong>Weeks ten and eleven: stock alerts with push.</strong> Only on out-of-stock product pages, only after the customer tapped the alert button.</p>
+
+        <p>Results at the six-month mark: 11,300 installed instances, 8.9% of mobile sessions arriving in standalone mode, and those sessions converting at 3.8% against 1.9% for mobile browser sessions. Stock alert subscriptions: 4,600, of which 2,900 were push and 1,700 email fallback. Push notifications sent for restocks had a 22% click-through, which is roughly four times their email equivalent.</p>
+
+        <p><strong>What went wrong.</strong> Three things, and they are the useful part.</p>
+
+        <p>First, we fired the install banner on the order confirmation page and it appeared above the fold on smaller phones, pushing the order number below it. We got twelve support emails in the first week from customers who could not find their order number. Fixed by anchoring the bar to the bottom of the viewport, which is what we should have done from the start.</p>
+
+        <p>Second, the checkout was on a different subdomain, which we knew and had decided to live with. In practice standalone users got ejected into a browser tab at the payment step, and the drop-off between cart and payment was three points worse for standalone sessions than browser sessions for the first two months. Moving checkout onto the main domain took a further six weeks of unplanned work and was the single largest cost of the project. Check your scope before you promise anyone a contained experience.</p>
+
+        <p>Third, and most embarrassing: the selection-bias problem I flagged at the top. When the board asked whether the PWA had "doubled conversion", the honest answer was that we did not know, because we had never run a holdout. We had prompted engaged users, and engaged users convert better. I would now hold back 10% of eligible users from the prompt entirely for the first quarter, purely so there is something to compare against. It costs a few hundred installs and buys you the ability to answer the only question anyone will ask.</p>
+
+        <h2>15. Measuring It Without Fooling Yourself</h2>
+
+        <p>Almost every PWA case study you will read has the flaw I just described. Installed users are self-selected loyalists; comparing them to the general population measures loyalty, not the feature. Three things make the measurement honest.</p>
+
+        <p><strong>Hold back a slice of eligible traffic.</strong> Randomly exclude 10% of users who meet the install criteria and never prompt them. Compare that group against the prompted group over the following quarter. This is the only comparison that means anything, and it needs to be set up before launch because you cannot reconstruct it afterwards.</p>
+
+        <pre><code class="language-javascript">// Assign a stable holdback bucket the first time a visitor becomes
+// eligible, and never move them. A bucket recomputed per session is
+// not a holdback, it is noise.
+function installArm() {
+  const s = state();
+  if (s.arm) return s.arm;
+  const arm = Math.random() &lt; 0.1 ? 'holdback' : 'prompt';
+  save({ arm, armAssignedAt: Date.now() });
+  track('pwa_arm_assigned', { arm });
+  return arm;
+}
+
+function maybeOfferInstall() {
+  if (!eligible()) return;
+  // The holdback group is measured, never prompted.
+  if (installArm() === 'holdback') return;
+  showInstallBar();
+}</code></pre>
+
+        <p><strong>Segment by display mode, not by installed flag.</strong> The dimension above tells you which sessions are actually running standalone. Look at conversion, average order value, and session frequency by that dimension, and look at them per user rather than per session — installed users have more sessions almost by definition, which will inflate anything you measure per session.</p>
+
+        <p><strong>Track the funnel, not just the outcome.</strong> Prompt shown, prompt accepted, app installed, app opened, order placed from standalone. The interesting failures are between steps. On one site we found a 30% gap between <code>appinstalled</code> firing and the first standalone session, which turned out to be people installing and never opening — a signal that the icon and name were not recognisable enough on a crowded home screen.</p>
+
+        <pre><code class="language-javascript">window.addEventListener('appinstalled', () =&gt; {
+  save({ installed: true, installedAt: Date.now() });
+  track('pwa_installed', { source: lastPromptContext });
+});
+
+// Fires on every standalone launch; compare the count against installs.
+if (displayMode() !== 'browser') {
+  track('pwa_launch', {
+    days_since_install: daysSince(state().installedAt)
   });
 }</code></pre>
 
-        <h2>5. Push Notification APIs and Background Sync</h2>
-        <p>Re-engaging users who have abandoned their carts is a critical e-commerce retention tactic. The Web Push API permits server-side applications to transmit asynchronous notification payloads to the client device, even when the browser application is completely closed. This mechanism relies on the Push API for subscription management and the Notifications API for presenting the visual system alert.</p>
-        <p>Establishing a subscription requires generating a VAPID (Voluntary Application Server Identification) key pair. The client requests permission from the user, retrieves a unique endpoint URL and authentication keys from the browser vendor's push service, and transmits this subscription object to our server infrastructure for secure storage.</p>
-        <pre><code class="language-javascript">// Requesting Notification Permissions and Subscribing
-async function subscribeToPushNotifications() {
-  if ('serviceWorker' in navigator &amp;&amp; 'PushManager' in window) {
-    try {
-      const permission = await Notification.requestPermission();
-      if (permission === 'granted') {
-        const registration = await navigator.serviceWorker.ready;
-        const vapidPublicKey = 'BEl62iENz6J4...'; // Replace with actual public key
-        const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
-        
-        const subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: convertedVapidKey
-        });
-        
-        // Transmit subscription object to backend server
-        await fetch('/api/notifications/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(subscription)
-        });
-        console.log('Push subscription successful.');
-      }
-    } catch (error) {
-      console.error('Push subscription failed:', error);
-    }
-  }
-}
+        <p>One metric I would not bother with: install count as a headline. It is the number executives ask for and it correlates with nothing useful on its own. Twelve thousand installs where two thousand people ever launch it again is a worse outcome than three thousand installs that are used weekly, and the first number is the one that gets put in the deck.</p>
 
-// Utility function to convert VAPID key
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding)
-    .replace(/\-/g, '+')
-    .replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i &lt; rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}</code></pre>
-        <p>Background Sync operates alongside push notifications to ensure reliable data transmission. If a user attempts to submit a checkout form while disconnected, the Service Worker registers a sync event. The browser automatically fires this event as soon as connectivity returns, guaranteeing that critical business transactions are not dropped due to poor cellular reception or transit dead zones.</p>
+        <h2>16. When I Would Tell You Not to Build One</h2>
 
-        <h2>6. Workbox Custom Integrations for React and Magento 2</h2>
-        <p>Writing raw Service Worker lifecycle management code can quickly become unmanageable in enterprise deployments. Google's Workbox library provides a modular set of tools that abstract the boilerplate involved in routing, caching, and background sync. Integrating Workbox into a Webpack or Vite build pipeline automates the injection of the precache manifest, ensuring that versioned assets are seamlessly downloaded during the installation phase.</p>
-        <p>For headless Magento 2 implementations utilizing React or Vue frontends, Workbox allows explicit regex-based routing rules. We can easily configure Workbox to apply a `NetworkFirst` strategy to the Magento GraphQL endpoints while strictly enforcing a `CacheFirst` policy for product imagery fetched from the CDN. This specific orchestration guarantees the fastest possible initial render while maintaining transactional data consistency.</p>
-        <pre><code class="language-javascript">// Workbox Configuration via Webpack (workbox-config.js)
-module.exports = {
-  globDirectory: 'dist/',
-  globPatterns: [
-    '**/*.{html,json,js,css,woff2,png,svg}'
-  ],
-  swDest: 'dist/service-worker.js',
-  runtimeCaching: [
-    {
-      urlPattern: /^https:\/\/cdn\.modracx\.com\/.*/i,
-      handler: 'CacheFirst',
-      options: {
-        cacheName: 'image-cache',
-        expiration: {
-          maxEntries: 200,
-          maxAgeSeconds: 30 * 24 * 60 * 60, // 30 Days
-        },
-        cacheableResponse: {
-          statuses: [0, 200],
-        },
-      },
-    },
-    {
-      urlPattern: /\/graphql/i,
-      handler: 'NetworkFirst',
-      options: {
-        cacheName: 'graphql-api-cache',
-        networkTimeoutSeconds: 5,
-        expiration: {
-          maxEntries: 50,
-          maxAgeSeconds: 5 * 60, // 5 Minutes for rapid pricing updates
-        },
-      },
-    }
-  ],
-};</code></pre>
-        <p>Implementing Workbox reduces the risk of accidental cache corruption and simplifies the process of clearing stale assets during significant version upgrades. The abstraction layer provided by Workbox ensures that the underlying caching mechanisms adhere to strict quota limitations enforced by mobile browsers.</p>
+        <p>This is the section I wish more of these articles had, so it gets real detail.</p>
 
-        <h2>7. Advanced Architecture: Handling Cache Invalidation and State Consistency</h2>
-        <p>Cache invalidation represents one of the most notoriously difficult problems in computer science. In a Progressive Web App managing an e-commerce catalog, improper caching strategies result in customers viewing obsolete pricing or purchasing out-of-stock inventory. Resolving this requires a multi-tiered approach utilizing HTTP cache-control headers, Service Worker interceptors, and application-level state management libraries like Redux or Zustand.</p>
-        <p>When the backend inventory system records a stock depletion, the client must be informed. Since Service Workers cannot proactively reach into the DOM, they rely on the <code>postMessage</code> protocol. Upon fetching an updated catalog response, the Service Worker compares the ETag headers. If a discrepancy is detected, the Service Worker dispatches a message to the active client window, instructing the React or Vue application to trigger a UI re-render.</p>
-        <pre><code class="language-javascript">// Service Worker Cache Invalidation Broadcast
-async function fetchAndBroadcast(request) {
-  const cache = await caches.open('modracx-catalog-cache');
-  const cachedResponse = await cache.match(request);
-  
-  const networkResponse = await fetch(request);
-  cache.put(request, networkResponse.clone());
+        <p><strong>Your purchase frequency is genuinely low.</strong> If the median customer buys from you once every two years — mattresses, wedding dresses, garden buildings, most furniture — nobody is putting you on their home screen and nobody should. The install has no value to them because there is no next visit. Spend the budget on the first-visit experience instead. This was the true diagnosis of the native app failure at the top of this article, and it applied to the PWA as well; the PWA merely failed cheaply.</p>
 
-  if (cachedResponse) {
-    const cachedETag = cachedResponse.headers.get('ETag');
-    const networkETag = networkResponse.headers.get('ETag');
-    
-    if (cachedETag !== networkETag) {
-      const clients = await self.clients.matchAll();
-      for (const client of clients) {
-        client.postMessage({
-          type: 'CACHE_UPDATED',
-          url: request.url,
-          message: 'New catalog data is available.'
-        });
-      }
-    }
-  }
-  return networkResponse;
-}</code></pre>
+        <p><strong>Your site is slow for reasons a cache will not fix.</strong> If your Time to First Byte is 1.4s because of an unindexed query, or you ship 800KB of JavaScript on a product page, a service worker layered on top is decoration. Worse, it can hide the problem from you: cached sessions stop hitting your origin, so your server-side metrics improve while the customer experience does not. Fix the fundamentals; the PWA will be worth more afterwards and might turn out to be unnecessary.</p>
 
-        <h2>8. Frequently Asked Questions (FAQ)</h2>
+        <p><strong>Your traffic is overwhelmingly first-visit and paid.</strong> If 85% of sessions come from paid social and never return, you are optimising for a repeat visit that does not happen. The service worker's benefit lands on visit two.</p>
 
-        <h3>1. How does a Service Worker enable offline catalog browsing in e-commerce PWAs?</h3>
-        <p>Service Workers operate in a background browser thread independent of the main web page. By intercepting fetch requests and implementing a Cache-First or Stale-While-Revalidate caching strategy using the CacheStorage API, product details and media remain instantly viewable even when users experience flaky cellular connectivity. The proxy effectively isolates the application from network instability.</p>
+        <p><strong>You cannot control your checkout domain.</strong> If checkout is on a hosted domain you do not control and cannot bring in scope, standalone mode will eject customers at the worst moment. Either fix that first or skip the install path and keep the caching.</p>
 
-        <h3>2. What is the Web App Manifest configuration for home screen installation?</h3>
-        <p>A Web App Manifest is a JSON file (`manifest.json`) that dictates application branding, standalone display mode, background color, theme color, and high-resolution maskable application icons. This configuration enables mobile operating systems to prompt users to install the Progressive Web App directly onto their device home screen, bridging the gap between web and native application experiences.</p>
+        <p><strong>Nobody will own it in six months.</strong> This is the one I feel most strongly about. A service worker keeps running on customers' devices after the team that shipped it has moved on. If this is an agency project with no ongoing retainer and no internal owner, you are leaving a persistent, unpurgeable cache on your customers' phones with nobody watching it. I have been called in to clean up exactly that situation more than once. If you cannot name the person who will be responsible for it next year, do not ship it.</p>
 
-        <h3>3. How do Push Notifications function on iOS devices?</h3>
-        <p>Following recent iOS updates, Apple Safari now supports the Web Push API for PWAs added to the home screen. The underlying mechanism relies on standard VAPID authentication protocols, allowing headless e-commerce architectures to dispatch abandoned cart alerts directly to the iOS notification center without requiring deployment through the Apple App Store.</p>
+        <p><strong>The main driver is avoiding store fees.</strong> For a physical goods retailer this is a misunderstanding — Apple and Google do not take a cut of physical goods sold through a web view or an app. If someone is pitching a PWA on the basis of dodging a 30% fee you do not pay, the rest of the pitch deserves scrutiny too.</p>
 
-        <hr />
+        <h2>17. What It Costs to Keep</h2>
+
+        <p>The build estimate is the number people ask for and the maintenance is the number that matters. From the projects I have run, roughly:</p>
+
+        <p>A manifest, icons, and an install path: three to five days, and close to zero ongoing. Icons need revisiting when branding changes and that is about it.</p>
+
+        <p>A conservative service worker: two to three weeks including the rollout and the testing states nobody wants to do. Ongoing, budget a half-day per quarter for a review, plus attention on any release that changes asset naming or adds a new API path that should be on the never-cache list. That last one is the recurring hazard — a new endpoint gets added, nobody updates the caching rules, and it quietly gets cached.</p>
+
+        <p>Push notifications: two to three weeks for the plumbing, and then a permanent operational commitment. Someone has to own what gets sent, respond when subscriptions fail, rotate VAPID keys if they leak, and handle the fact that subscriptions expire and need re-registering. I have seen more push implementations rot than any other part of this stack, usually because the person who cared about it left.</p>
+
+        <p>The thing that is genuinely cheap here, and the reason I keep recommending the incremental approach: each of these can be shipped, measured, and abandoned independently. If the install path produces nothing in a quarter, remove the banner and you have lost a week. Try that with a native app.</p>
+
+        <h2>18. Questions That Come Up</h2>
+
+        <p><strong>"Will a PWA improve our search rankings?"</strong> No. Installability is not a ranking factor and never has been. Speed improvements from caching help returning visitors and therefore your field data, which is a small indirect benefit. If the project is being sold on SEO grounds it is being mis-sold.</p>
+
+        <p><strong>"Can we replace our native app with this?"</strong> Often yes, and it is frequently the best decision available. Check three things first: does the app use hardware the web cannot reach, does it have a meaningful installed base you would strand, and does anything about your business model depend on being in a store listing. If all three are no, the PWA plus a browser experience is almost certainly cheaper and better.</p>
+
+        <p><strong>"Do we need a single-page app for it to feel app-like?"</strong> No, and I would resist it. Server-rendered pages with cached assets and view transitions get you most of the perceived smoothness without handing yourself a rendering and indexing problem.</p>
+
+        <p><strong>"How many people will actually install it?"</strong> On the storefronts I have measured, between 3% and 9% of mobile users, when prompted well. Anyone quoting 30% is either counting differently or selling something. Plan the business case at 5% and be pleased if it beats that.</p>
+
+        <p><strong>"Can we prompt for both install and notifications at once?"</strong> Please do not. Two permission requests stacked together reads as a demand, and if either produces a problem you will not know which. Ship the install path, wait a month, then consider push if you have something specific to send.</p>
+
+        <p><strong>"What happens if we want to remove it later?"</strong> The manifest is trivial to remove. The service worker is not — it lives on customers' devices and needs an explicit eviction deployment, which is exactly why the kill switch is the first thing you write. The removal worker in the <a href="/blog/service-workers-offline-caching/">offline caching article</a> is the mechanism, and it is worth reading before you ship rather than after.</p>
+
+        <p><strong>"Does any of this work on desktop?"</strong> Yes, Chrome and Edge both support desktop installation, and it is a surprisingly good experience for B2B trade portals where a buyer places orders weekly from the same machine. For consumer retail, desktop install rates in my data are under 1% and not worth designing for.</p>
+
+        <h2>19. What I Would Do First</h2>
+
+        <p>In order, and do not skip ahead.</p>
+
+        <p><strong>One.</strong> Look at your repeat purchase rate and your returning visitor share before writing any code. If under a fifth of your customers ever come back, stop here and spend the budget on the first visit. That single number decides more than any technical consideration in this article.</p>
+
+        <p><strong>Two.</strong> Fix your mobile performance. Measure LCP and INP at the 75th percentile on a real mid-range Android, not on your laptop. If LCP is over 2.5s, that work will beat everything below it and it will make the caching worth more when you get to it.</p>
+
+        <p><strong>Three.</strong> Add the manifest with proper icons, a scoped <code>start_url</code> with campaign parameters, and the display-mode analytics dimension. Ship nothing else. Watch for a month and find out how many people install with no prompting at all. That number is your floor.</p>
+
+        <p><strong>Four.</strong> Write the kill switch and the never-cache list. Then, and only then, the service worker. Roll it out to 5% behind a flag and leave it there for a week.</p>
+
+        <p><strong>Five.</strong> Add the install prompt, gated on a second session or an add-to-cart, delivered as a dismissible bottom bar with a sixty-day cooldown on dismissal. Hold back 10% of eligible users so you have a comparison.</p>
+
+        <p><strong>Six.</strong> Leave push alone for at least a quarter. When you come back to it, come back with a specific trigger the customer asked for — restock, delivery, price drop — and an email fallback for the majority who will say no.</p>
+
+        <p>The toy retailer got to step five and stopped, and I think that was the right call. They killed the native app, kept the web, and now have about nine percent of their mobile audience opening the site from a home screen icon. It is not a transformation. It is a small, cheap, reversible improvement to the experience of customers who already liked them, which is what a PWA is when you strip the marketing off it. The transformation was the two weeks of performance work in the first phase, and nobody wanted to put that in a press release.</p>
 
         <div class="blog-suggested-reads">
           <h3>Suggested &amp; Related Reading</h3>
@@ -518,7 +761,6 @@ async function fetchAndBroadcast(request) {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -552,6 +794,6 @@ async function fetchAndBroadcast(request) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

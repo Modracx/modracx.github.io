@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Designing Mobile-Responsive Web Applications & E-Commerce | MODRACX</title>
-  <meta name="description" content="Technical UX design guide on fluid typography (clamp()), CSS Container Queries (@container), and touch-first hit targets for high-converting mobile interfaces." />
+  <meta name="description" content="Intrinsic grids, container queries, computed clamp() type scales, svh units, 44px touch targets and the form attributes that decide mobile checkout completion." />
   <meta property="og:title" content="Designing Mobile-Responsive Web Applications & E-Commerce | MODRACX" />
   <meta property="og:description" content="Technical UX design guide on fluid typography by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Designing Mobile-Responsive Web Applications & E-Commerce</h1>
-        <p class="lede">Over 70% of global e-commerce traffic originates from mobile viewports. Implementing fluid CSS typography using `clamp()` creates seamless scaling across all screen sizes.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Designing Mobile-Responsive Web Applications &amp; E-Commerce</h1>
+        <p class="lede">A German product name broke a category grid that had been signed off at 375px and 1440px. Responsive layout is a content problem before it is a viewport problem.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=UX+%26+Design">UX & Design</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/?category=UX+%26+Design">UX &amp; Design</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,29 +205,641 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Fluid Typography & Container Query CSS Code</h2>
+        <h2>1. The Bug Report That Was Just The Word "Ostfriesische"</h2>
 
-        <pre><code class="language-css">/* Modern Responsive CSS Fluid Typography & Container Queries */
-h1 {
-  font-size: clamp(2rem, 5vw + 1rem, 4.5rem);
+        <p>A German-market client sent us a screenshot with no message attached. It showed a product card on their category grid where the title, <em>Ostfriesische Teekanne mit Stövchen</em>, had pushed the price out of the card, over the "Add to basket" button, and off the right edge of a 360px viewport. The card next to it, containing a product called "Mug", was fine.</p>
+
+        <p>The design had been signed off on Figma frames at 375px and 1440px. Every product name in those frames was between nine and fourteen characters. The developer had built exactly what was drawn. The layout was responsive in the sense that it reflowed at breakpoints, and completely non-responsive in the sense that it fell apart the moment the content stopped cooperating.</p>
+
+        <p>That is the failure mode I see most often, and it is not really a CSS problem. It is a problem of designing for viewport widths instead of designing for content. The viewport is one of several variables, and on a real store it is not even the most volatile one. Product titles vary from four characters to ninety. Prices go from "£9" to "£1,249.99" to "From £9 — £1,249.99". A badge appears on some cards and not others. Someone translates the site into German and every word gets forty percent longer.</p>
+
+        <p>This article is about building layouts that survive that. Not the performance side — <a href="/blog/responsive-webp-images/">responsive images and the bandwidth question</a> is a separate topic with its own article — but the geometry, the type, the touch behaviour, and the specific browser quirks that turn a good design into a support ticket.</p>
+
+        <h2>2. Breakpoints Are A Blunt Instrument And We Reach For Them First</h2>
+
+        <p>The media query is thirteen years old as a mainstream technique and it taught everyone a mental model that is now mostly wrong: pick some device widths, write a layout for each, done.</p>
+
+        <p>The problem is that a media query asks about the viewport, and almost nothing in your layout actually cares about the viewport. A product card cares how wide the product card is. A card in a four-column grid on a desktop is 280px wide; the same card in a sidebar on the same desktop is 240px; the same card full-width on a phone is 344px. Two of those three are narrower than the phone. If your card's layout switches on viewport width, the sidebar version gets the desktop layout and looks broken, and you end up writing <code>.sidebar .product-card</code> overrides until the stylesheet is unreadable.</p>
+
+        <p>I spent years writing those overrides. The honest reckoning is that roughly two-thirds of the media queries in a typical ecommerce stylesheet exist to undo a layout decision that was made at the wrong level. The remaining third are legitimate — page-level scaffolding, showing or hiding navigation, changing the number of grid tracks.</p>
+
+        <p>Three techniques replace most of that third-of-a-stylesheet, and they are all well-supported now:</p>
+
+        <p><strong>Intrinsic sizing</strong>, where the grid decides its own column count from available space rather than from a breakpoint you nominated. <strong>Container queries</strong>, where a component asks about its own box instead of the window. And <strong>fluid values</strong> with <code>clamp()</code>, which interpolate smoothly rather than jumping at a threshold.</p>
+
+        <p>Used together they eliminate a class of bug rather than fixing instances of it. That is the distinction worth caring about.</p>
+
+        <h2>3. The Grid That Never Needs A Media Query</h2>
+
+        <p>The single highest-value line of CSS in a modern storefront:</p>
+
+        <pre><code class="language-css">.product-grid {
+  display: grid;
+  /* auto-fill: keep empty tracks. auto-fit: collapse them.
+     For a product grid you want auto-fill, so a row of two products
+     in a four-column grid stays left-aligned at card width instead
+     of stretching both cards to half the page. */
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1.5rem;
+}</code></pre>
+
+        <p>That is the entire responsive behaviour of a product grid, from a 320px phone to a 2560px monitor, with no breakpoints. The browser fits as many 16rem columns as it can and distributes the remainder.</p>
+
+        <p>The <code>auto-fill</code> versus <code>auto-fit</code> choice trips people up and the difference is visible exactly when you have fewer items than columns. With <code>auto-fit</code>, three products in a four-column grid become three enormous cards. With <code>auto-fill</code>, they stay card-sized and the fourth slot is empty. For search results, filtered categories and "you may also like" strips — all places where you frequently have two or three items — <code>auto-fill</code> is what you want. I default to it and switch only when a design genuinely wants full-bleed stretching.</p>
+
+        <p>The failure case is narrow containers. If the grid lives in a 240px sidebar and your <code>minmax</code> floor is 16rem (256px), the track overflows the container by 16px, because <code>minmax</code>'s minimum is a hard floor. The fix is to make the floor itself responsive:</p>
+
+        <pre><code class="language-css">.product-grid {
+  /* min() lets the floor collapse when the container is narrower
+     than the ideal card width, instead of overflowing it. */
+  grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
+}</code></pre>
+
+        <p>That one-line change removes the most common source of horizontal scrolling on mobile that I find when auditing a build. Horizontal scroll on a phone is one of those defects that everybody notices and nobody reports, because it reads as "this site feels cheap" rather than as a bug.</p>
+
+        <p>The same idea handles the flexible sidebar layout without media queries, using the Flexbox holy-grail trick:</p>
+
+        <pre><code class="language-css">.catalogue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+}
+.catalogue &gt; .filters {
+  /* Grow to 18rem when there is room; when the basis exceeds the
+     available space the item wraps to its own line. 30rem is the
+     effective breakpoint, expressed in terms of content. */
+  flex: 1 1 18rem;
+}
+.catalogue &gt; .results {
+  flex: 999 1 30rem;
+}</code></pre>
+
+        <p>The <code>999</code> is not a hack so much as a statement of priority: when both fit on one line, the results take essentially all the extra space. When they cannot both fit, they stack. No query, and the switch happens at the width where the design actually stops working rather than at 768px because that is a number someone wrote down in 2011.</p>
+
+        <h2>4. Fluid Typography, And The Accessibility Trap Inside It</h2>
+
+        <p><code>clamp()</code> is the right tool and it is very frequently used in a way that fails WCAG. Let me show the good version first.</p>
+
+        <pre><code class="language-css">:root {
+  /* Fluid scale: 320px viewport to 1280px viewport.
+     The middle term is the slope, computed once, not guessed. */
+  --step-0: clamp(1rem,    0.93rem + 0.36vw, 1.125rem);  /* body   16 → 18 */
+  --step-1: clamp(1.25rem, 1.13rem + 0.60vw, 1.5rem);    /* h3     20 → 24 */
+  --step-2: clamp(1.5rem,  1.25rem + 1.25vw, 2.25rem);   /* h2     24 → 36 */
+  --step-3: clamp(2rem,    1.50rem + 2.50vw, 3.5rem);    /* h1     32 → 56 */
 }
 
-.product-card-container {
+h1 { font-size: var(--step-3); line-height: 1.05; }
+h2 { font-size: var(--step-2); line-height: 1.15; }
+p  { font-size: var(--step-0); line-height: 1.6;  }</code></pre>
+
+        <p>The middle term is the part people fudge. It is a straight line through two points: the minimum size at the minimum viewport, and the maximum size at the maximum viewport. The slope in <code>vw</code> is the size difference divided by the viewport difference, and the <code>rem</code> component is the intercept. For a 32px-to-56px heading across 320px to 1280px:</p>
+
+        <pre><code class="language-javascript">// Compute the clamp middle term rather than eyeballing it.
+function fluid(minPx, maxPx, minVw = 320, maxVw = 1280, root = 16) {
+  const slope = (maxPx - minPx) / (maxVw - minVw);   // px per px of viewport
+  const vw = (slope * 100).toFixed(3);               // as vw units
+  const intercept = (minPx - slope * minVw) / root;  // in rem
+  return `clamp(${minPx / root}rem, ${intercept.toFixed(3)}rem + ${vw}vw, ${maxPx / root}rem)`;
+}
+
+fluid(32, 56);
+// clamp(2rem, 1.5rem + 2.5vw, 3.5rem)</code></pre>
+
+        <p>Now the trap. WCAG 1.4.4 requires that text can be resized to 200% without loss of content or function. A user who sets their browser's default font size to 24px expects your text to get bigger. If your font size is expressed purely in <code>vw</code>, it does not — the viewport did not change, so nothing changes, and you have silently overridden an accessibility setting the user deliberately chose.</p>
+
+        <p><code>clamp()</code> with <code>rem</code> endpoints mostly survives this, because the minimum and maximum scale with the root font size even though the slope does not. But there is a second failure that catches almost everyone: a <code>clamp()</code> whose maximum is reached at your design's widest breakpoint will lock text at that maximum for a zoomed-in user, because zooming in browsers is implemented as shrinking the CSS viewport. A user at 200% zoom on a 1280px screen sees a 640px CSS viewport, lands in the middle of your fluid range, and gets text that grew far less than 200%.</p>
+
+        <p>The mitigation is to include a <code>rem</code> component in the fluid term so that root-relative scaling always contributes:</p>
+
+        <pre><code class="language-css">/* The 0.75rem term guarantees the value tracks the user's root size
+   even in the middle of the fluid range. Costs a little precision at
+   the endpoints; buys you conformance. */
+h1 { font-size: clamp(2rem, 0.75rem + 3.9vw, 3.5rem); }</code></pre>
+
+        <p>Test it properly. Set your browser's default font size to 24px, not the zoom control, and load the page. If the body copy is still 16px, your type scale is broken and no amount of it looking nice at 1440px makes that acceptable. I have shipped this bug. It surfaced in an accessibility audit two months after launch and it was embarrassing.</p>
+
+        <h3>Line length matters more than font size</h3>
+
+        <p>The other half of readable type is measure — characters per line. Somewhere between 45 and 75 is the well-worn range for body copy, and <code>ch</code> units make it declarative:</p>
+
+        <pre><code class="language-css">.prose { max-width: 68ch; }
+
+/* On a product description inside a two-column layout, the container
+   is already narrow, so cap by whichever is smaller. */
+.product-description { max-width: min(68ch, 100%); }</code></pre>
+
+        <p>One <code>ch</code> is the width of the zero glyph in the current font, so <code>68ch</code> in a condensed display face is much narrower than in a wide serif. Set it on the element whose font it should measure, not on a wrapper with a different font stack. Getting this slightly wrong is invisible on desktop and produces oddly cramped mobile paragraphs.</p>
+
+        <h2>5. Container Queries In Actual Use</h2>
+
+        <p>Container queries shipped across all major browsers in early 2023 and they are the correct answer to the product-card problem I opened with. The component asks its own box how much room it has.</p>
+
+        <pre><code class="language-css">.card-slot {
+  /* inline-size: query the width only. Also establishes a containment
+     context, which has layout side effects — see below. */
   container-type: inline-size;
+  container-name: card;
 }
 
-@container (min-width: 400px) {
+.product-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* Narrow: stacked, image on top */
+@container card (max-width: 20rem) {
+  .product-card__title { font-size: var(--step-0); }
+  .product-card__meta  { display: none; }
+}
+
+/* Wide enough for a horizontal layout, wherever it happens to live */
+@container card (min-width: 30rem) {
   .product-card {
-    display: grid;
-    grid-template-columns: 1fr 2fr;
+    grid-template-columns: 12rem 1fr;
+    align-items: start;
   }
 }</code></pre>
 
-        <hr />
+        <p>Three things I learned the hard way using these on real builds.</p>
+
+        <p><strong>You need a wrapper element.</strong> A container cannot query itself. If you put <code>container-type</code> on <code>.product-card</code> and then query <code>.product-card</code>'s own layout, nothing happens. The container is the parent slot; the queried styles apply to descendants. This means one extra div per component, which is annoying and unavoidable.</p>
+
+        <p><strong><code>container-type: inline-size</code> applies size containment on the block axis.</strong> The element's height no longer depends on its contents in some layout situations, which shows up as collapsed containers when you apply it too broadly. Apply it to specific component wrappers, never to something like <code>* { container-type: inline-size }</code> in a fit of enthusiasm, which I did once on a staging build and spent forty minutes wondering why the footer had zero height.</p>
+
+        <p><strong>Container query units are excellent and slightly dangerous.</strong> <code>cqi</code> is one percent of the container's inline size, and it makes genuinely self-scaling components possible — a card whose padding and type scale with its own width. It also makes it trivial to build something that looks fine in every context you tested and absurd in the one you did not, because nothing bounds it. Always clamp.</p>
+
+        <pre><code class="language-css">.promo-tile {
+  /* Scales with the tile, not the page — but bounded at both ends. */
+  padding: clamp(0.75rem, 4cqi, 2rem);
+  font-size: clamp(0.875rem, 3.5cqi, 1.25rem);
+  border-radius: clamp(4px, 1.5cqi, 12px);
+}</code></pre>
+
+        <p>Where container queries have paid off most for me is in Shopify and Magento theme work, where a section component genuinely can be dropped into a full-width row, a two-column row or a sidebar by a merchandiser who will not read your documentation. Making the component defend itself is cheaper than making the CMS prevent bad placements.</p>
+
+        <h2>6. The Viewport Units Problem, And Why 100vh Is A Lie</h2>
+
+        <p>Every mobile site has had this bug: a full-height hero that is 60px too tall, so the bottom of it is hidden under the browser chrome and the page scrolls slightly when it should not.</p>
+
+        <p>The cause is that <code>100vh</code> on mobile Safari and Chrome refers to the <em>largest</em> viewport — the height when the URL bar is collapsed. When the page first loads, the URL bar is expanded and the actual visible area is smaller. So <code>100vh</code> overflows on load and fits after you scroll.</p>
+
+        <p>The fix has been available since 2022 and is still underused:</p>
+
+        <pre><code class="language-css">.hero {
+  /* Fallback for anything ancient */
+  min-height: 100vh;
+  /* svh = small viewport height: the visible area with browser UI
+     expanded. lvh is the large one, dvh changes as you scroll. */
+  min-height: 100svh;
+}
+
+/* dvh is right for a fixed overlay that must always fill the screen,
+   but it recalculates during scroll, so anything sized in dvh will
+   visibly resize as the URL bar hides. Never use it for page content. */
+.modal-sheet { height: 100dvh; }</code></pre>
+
+        <p>My rule: <code>svh</code> for content that must fit without scrolling, <code>dvh</code> only for fixed-position overlays, and <code>lvh</code> almost never. And in most cases the honest answer is that a full-height hero on a phone is a bad idea regardless of which unit you pick, because it pushes every piece of useful content below the fold. On a category page, a hero taking the full screen costs conversions. I have argued this with designers repeatedly and lost about half the time.</p>
+
+        <p>The related trap is <code>position: fixed</code> elements and the virtual keyboard. A sticky "Add to basket" bar fixed to the bottom of the viewport will be shoved off-screen or float over the middle of the page when a keyboard opens, because different browsers resize the visual viewport differently. If you need precision, the Visual Viewport API is the only reliable source:</p>
+
+        <pre><code class="language-javascript">// Keep a sticky bar pinned above the virtual keyboard.
+const bar = document.querySelector('.sticky-cta');
+const vv = window.visualViewport;
+
+function reposition() {
+  if (!vv) return;
+  // Distance from the bottom of the layout viewport to the bottom of
+  // the visible area — i.e. how much the keyboard is covering.
+  const occluded = window.innerHeight - vv.height - vv.offsetTop;
+  bar.style.transform = `translateY(${-Math.max(0, occluded)}px)`;
+}
+
+vv?.addEventListener('resize', reposition);
+vv?.addEventListener('scroll', reposition);</code></pre>
+
+        <p>Use that sparingly. On most product pages the right behaviour when a keyboard opens is for the sticky bar to get out of the way entirely, and the simplest implementation of that is to hide it while any input inside the page has focus.</p>
+
+        <h2>7. Touch Targets: The Numbers, And Where They Come From</h2>
+
+        <p>There are three commonly cited minimum sizes and they disagree, which is why every team argues about this.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Source</th><th>Minimum</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>WCAG 2.2 SC 2.5.8 (AA)</td><td>24 × 24 CSS px</td><td>Spacing exception: smaller allowed if a 24px circle around it does not overlap another target</td></tr>
+            <tr><td>WCAG 2.1 SC 2.5.5 (AAA)</td><td>44 × 44 CSS px</td><td>The one most design systems adopt</td></tr>
+            <tr><td>Apple HIG</td><td>44 × 44 pt</td><td>Where the 44 number originally comes from</td></tr>
+            <tr><td>Material Design</td><td>48 × 48 dp</td><td>Android's default; slightly larger</td></tr>
+          </tbody>
+        </table>
+
+        <p>I build to 44px and treat 48px as the target for anything in a bottom bar, because thumb accuracy is worst at the screen edges. The important part is not the number but that the <em>hit area</em> can be larger than the visible control, which lets designers keep small icons without failing the guideline:</p>
+
+        <pre><code class="language-css">.icon-button {
+  position: relative;
+  width: 24px;
+  height: 24px;         /* what the user sees */
+}
+
+.icon-button::after {
+  /* what the user can hit — 44px, centred, invisible */
+  content: '';
+  position: absolute;
+  inset: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}</code></pre>
+
+        <p>Spacing between targets matters as much as size. Two 44px buttons flush against each other are, in practice, one 88px ambiguous zone: users hit the boundary and get the wrong one. Eight pixels of gap between adjacent interactive elements removes most mis-taps, and the quantity-stepper on a cart line — minus, number, plus, all crammed together — is where I find this violated most often.</p>
+
+        <h3>Hover is not a thing you can assume</h3>
+
+        <p>The other half of touch design is that <code>:hover</code> on a touch device is either nothing or a sticky state that requires a second tap to clear. A dropdown menu that opens on hover means the first tap opens it and does nothing else, which reads as an unresponsive site.</p>
+
+        <pre><code class="language-css">/* Only apply hover styling on devices with a precise pointer that
+   can actually hover. This is the correct guard, not a width query. */
+@media (hover: hover) and (pointer: fine) {
+  .product-card:hover .product-card__quickview { opacity: 1; }
+}
+
+/* Coarse pointers get the affordance permanently rather than on hover */
+@media (pointer: coarse) {
+  .product-card__quickview { opacity: 1; }
+}</code></pre>
+
+        <p>Do not use viewport width as a proxy for touch. Touchscreen laptops exist, tablets in landscape are 1024px wide, and a phone in a desktop-mode browser reports whatever it likes. <code>pointer</code> and <code>hover</code> ask the question you actually mean.</p>
+
+        <h2>8. Forms Are Where Mobile UX Is Won Or Lost</h2>
+
+        <p>Checkout is the only part of an ecommerce site where the user is guaranteed to type. Every extra second there is measurable in abandonment, and most of the wins are attributes rather than design.</p>
+
+        <pre><code class="language-html">&lt;!-- The keyboard, the autofill and the validation all come from
+     these attributes. Getting them right takes minutes and is
+     the highest-return work in a checkout. --&gt;
+&lt;label for="email"&gt;Email address&lt;/label&gt;
+&lt;input id="email" name="email"
+       type="email"
+       inputmode="email"
+       autocomplete="email"
+       autocapitalize="off"
+       spellcheck="false"&gt;
+
+&lt;label for="postcode"&gt;Postcode&lt;/label&gt;
+&lt;input id="postcode" name="postcode"
+       type="text"
+       inputmode="text"
+       autocomplete="postal-code"
+       autocapitalize="characters"&gt;
+
+&lt;label for="card"&gt;Card number&lt;/label&gt;
+&lt;input id="card" name="cardnumber"
+       inputmode="numeric"
+       autocomplete="cc-number"
+       pattern="[0-9\s]{13,19}"&gt;
+
+&lt;label for="phone"&gt;Mobile&lt;/label&gt;
+&lt;input id="phone" name="phone"
+       type="tel"
+       inputmode="tel"
+       autocomplete="tel"&gt;</code></pre>
+
+        <p>A few specifics that come up every time:</p>
+
+        <p><code>type="number"</code> is wrong for postcodes, card numbers, phone numbers and house numbers. It strips leading zeros, adds spinner arrows nobody wants, and in some browsers silently discards non-numeric input the user typed deliberately. Use <code>inputmode="numeric"</code> with <code>type="text"</code>, which gets you the numeric keypad without the semantics.</p>
+
+        <p><code>autocomplete</code> tokens have to be exactly the specified strings. <code>autocomplete="address"</code> does nothing; <code>address-line1</code> works. Getting the full set right on a checkout form means a returning customer fills the whole thing with one tap, and the difference in completion rate is not subtle.</p>
+
+        <p>Font size on inputs must be at least 16px on iOS or Safari zooms the page in when the field is focused, and does not zoom back out. That single behaviour has probably cost more mobile conversions than any other CSS decision. If your design calls for 14px inputs, the design is wrong.</p>
+
+        <pre><code class="language-css">input, select, textarea {
+  /* Below 16px iOS Safari zooms on focus. Non-negotiable. */
+  font-size: max(16px, 1rem);
+}</code></pre>
+
+        <p>Labels above fields, not floating inside them. Floating-label patterns look tidy in a portfolio and consistently test worse: the label animates to a size that is hard to read, the field looks filled when it is not, and screen reader behaviour depends on implementation details most component libraries get wrong. I have stopped building them.</p>
+
+        <h2>9. When Content Overflows Anyway</h2>
+
+        <p>Back to the German teapot. Even with intrinsic layouts, some strings are simply too long, and the layout needs a defined behaviour rather than an accident.</p>
+
+        <pre><code class="language-css">.product-card__title {
+  /* Two lines, then ellipsis. Widely supported despite the vendor
+     prefix looking obsolete — it is the specified syntax. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+
+  /* Break inside a word only when there is no other option, so
+     normal wrapping is unaffected but a 40-character compound
+     German noun cannot push the card open. */
+  overflow-wrap: break-word;
+  /* Hyphens need lang="de" on an ancestor to know the rules */
+  hyphens: auto;
+}</code></pre>
+
+        <p>Two notes. <code>overflow-wrap: break-word</code> is the one you want; <code>word-break: break-all</code> is not — it breaks every word at the edge regardless of need and turns ordinary English into nonsense. And <code>hyphens: auto</code> does nothing without a correct <code>lang</code> attribute, which on a multilingual store means the <code>lang</code> has to be set per rendered locale and not hardcoded to <code>en</code> in your base template. It very often is.</p>
+
+        <p>Truncating a product title is a trade-off, not a fix. If the title is the only differentiator between two variants — "Teapot, 0.8L" versus "Teapot, 1.2L" — clamping to two lines can hide the thing the customer is choosing between. On a client's cookware category we found the clamp was cutting the capacity off exactly the products people compared most. We moved capacity into its own metadata line under the title. Layout problems are frequently content-model problems wearing a costume.</p>
+
+        <p>Tables are the other chronic overflow. A specifications table with six columns does not become mobile-friendly by shrinking. The two honest options are horizontal scroll with a visible affordance, or restructuring into definition pairs at narrow widths.</p>
+
+        <pre><code class="language-css">.table-wrap {
+  overflow-x: auto;
+  /* Tells the browser to allow horizontal panning here without
+     hijacking the page's vertical scroll */
+  overscroll-behavior-x: contain;
+  /* A shadow on the right edge that disappears at the end — the
+     only reliable signal to users that there is more content */
+  background:
+    linear-gradient(90deg, transparent, rgba(0,0,0,0.12)) right / 18px 100% no-repeat;
+}
+.table-wrap table { min-width: 34rem; }</code></pre>
+
+        <p>Add <code>tabindex="0"</code> and an accessible name to the scrolling wrapper, or keyboard users cannot scroll it at all. That is a real conformance failure and it is present on most sites that use this pattern.</p>
+
+        <h2>10. Layout Stability Is A Responsive Design Problem</h2>
+
+        <p>Cumulative Layout Shift is usually filed under performance, and most of its causes are design decisions. A responsive layout that reflows after fonts or images load is shifting because nobody reserved the space.</p>
+
+        <p>For images, the fix is to give the browser the intrinsic ratio up front. In a responsive layout the pixel dimensions are wrong but the ratio is right, and modern browsers compute the reserved box from <code>width</code> and <code>height</code> attributes combined with the CSS width:</p>
+
+        <pre><code class="language-html">&lt;img src="/media/teapot-800.jpg"
+     srcset="/media/teapot-400.jpg 400w, /media/teapot-800.jpg 800w"
+     sizes="(min-width: 60rem) 24rem, 45vw"
+     width="800" height="1000"
+     alt="Cast iron teapot with wooden handle"&gt;</code></pre>
+
+        <pre><code class="language-css">img {
+  /* Together with the width/height attributes this reserves the
+     correct box before the image arrives. Without it, the attributes
+     are overridden and the space is not reserved. */
+  max-width: 100%;
+  height: auto;
+}</code></pre>
+
+        <p>For fonts, the shift comes from the fallback and the web font having different metrics. <code>size-adjust</code> and the metric-override descriptors let you match them so the swap is near-invisible:</p>
+
+        <pre><code class="language-css">@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Arial');
+  /* Tuned so Arial occupies the same space as Inter at the same size.
+     Derive these by measuring, not by guessing — a 1% error is
+     visible on a heading. */
+  size-adjust: 107%;
+  ascent-override: 90%;
+  descent-override: 22.5%;
+  line-gap-override: 0%;
+}
+
+body { font-family: 'Inter', 'Inter Fallback', sans-serif; }</code></pre>
+
+        <p>The third source is content that appears after load: a cookie banner, a promotional bar, a "3 people are viewing this" widget. Each pushes the page down. If it must exist, reserve its height in the initial layout, even if that means a visible empty strip for 200ms. A gap is better than a shift, because a shift is what makes someone tap the wrong thing.</p>
+
+        <h2>11. Safe Areas, Notches And The Bottom Bar</h2>
+
+        <p>Devices with rounded corners, notches or a home indicator have regions where content is either obscured or hard to hit. On iOS, the home indicator sits over the bottom 34px in portrait, and a sticky "Add to basket" bar placed flush at the bottom will be partly under it.</p>
+
+        <pre><code class="language-html">&lt;!-- viewport-fit=cover is required for the env() values to be
+     anything other than zero --&gt;
+&lt;meta name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"&gt;</code></pre>
+
+        <pre><code class="language-css">.sticky-cta {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  /* Base padding plus whatever the device says it needs. On devices
+     with no inset, env() resolves to 0 and this is just 12px. */
+  padding-block: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  padding-inline: max(1rem, env(safe-area-inset-left, 0px));
+}</code></pre>
+
+        <p>Note <code>viewport-fit=cover</code> has a cost: it also lets your background extend under the notch in landscape, which is usually what you want, but it means every full-width element now needs horizontal safe-area padding or text will sit under the notch when the phone is rotated. Rotating the device is a test step people skip, and about a third of the builds I review have text under the notch in landscape.</p>
+
+        <h2>12. Logical Properties, Because Someone Will Ask For Arabic</h2>
+
+        <p>If there is any chance of an RTL locale — and for a business selling into the UAE or Israel there usually is — writing <code>margin-left</code> is building a second stylesheet you will have to maintain. Logical properties flip automatically with the document direction.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Physical</th><th>Logical</th><th>What it means in RTL</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>margin-left</code></td><td><code>margin-inline-start</code></td><td>Becomes the right margin</td></tr>
+            <tr><td><code>padding: 0 1rem</code></td><td><code>padding-inline: 1rem</code></td><td>Unchanged, but clearer</td></tr>
+            <tr><td><code>text-align: left</code></td><td><code>text-align: start</code></td><td>Right-aligned</td></tr>
+            <tr><td><code>left: 0; right: 0</code></td><td><code>inset-inline: 0</code></td><td>Unchanged</td></tr>
+            <tr><td><code>border-left</code></td><td><code>border-inline-start</code></td><td>Border on the right</td></tr>
+          </tbody>
+        </table>
+
+        <p>The conversion is mechanical and worth doing even if RTL never happens, because <code>padding-inline: 1rem</code> is more precise than <code>padding: 0 1rem</code> about what it intends. What does not flip automatically is iconography with directional meaning — a "next" chevron, a progress arrow — and those need explicit handling with <code>[dir="rtl"]</code> selectors. Flipping every icon is also wrong: a shopping basket does not mirror, a clock does not mirror, a play button in a media control does not mirror. There is no rule; you go through them one at a time.</p>
+
+        <h2>13. Navigation And Filters, Where Mobile Layouts Get Political</h2>
+
+        <p>Every mobile navigation argument I have been in comes down to the same tension: the business wants twelve top-level categories visible, and there is room for four. The layout technique is the easy part; deciding what loses is the hard part, and it is not a decision an engineer should make alone.</p>
+
+        <p>Mechanically, the pattern I now default to on catalogue-heavy stores is a persistent bottom bar with four or five destinations — home, search, categories, basket, account — plus a full-screen category drawer behind the categories entry. Bottom placement is not fashion. The reachable zone on a 6.1-inch phone held one-handed is roughly the lower 60% of the screen, and the top corners are the worst real estate on the device. Putting the primary navigation trigger at the top right, which is the convention inherited from desktop, puts it exactly where a thumb cannot go.</p>
+
+        <p>The counter-argument is that a bottom bar costs 56px of vertical space on every page. That is a real cost and on a content-led site I would not pay it. On a store where the basket and search are the two things people reach for constantly, it repays itself.</p>
+
+        <pre><code class="language-css">.bottom-nav {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  min-height: var(--tap-min);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* Sticky rather than fixed: it participates in layout, so content
+     is never hidden underneath it and no body padding hack is needed. */
+}
+
+@media (min-width: 60rem) {
+  .bottom-nav { display: none; }
+}</code></pre>
+
+        <p>Filters are the other flashpoint. On desktop a filter sidebar is always visible; on mobile it has to become a drawer, and the drawer has two design decisions that determine whether it gets used. First, does applying a filter close the drawer or keep it open? Keep it open, with a live count on the apply button — customers stack two or three filters and closing after each one makes that miserable. Second, does the result update behind the drawer or on close? Update behind it. A count that changes as you tick boxes is the single clearest feedback signal in the whole interaction.</p>
+
+        <p>The native <code>&lt;dialog&gt;</code> element handles the drawer mechanics — focus trapping, escape to close, inert background — that people otherwise reimplement badly:</p>
+
+        <pre><code class="language-html">&lt;dialog id="filters" class="drawer"&gt;
+  &lt;form method="dialog"&gt;
+    &lt;button value="close" aria-label="Close filters"&gt;&lt;/button&gt;
+  &lt;/form&gt;
+  &lt;!-- filter controls --&gt;
+  &lt;button class="apply"&gt;Show 42 results&lt;/button&gt;
+&lt;/dialog&gt;</code></pre>
+
+        <p>Open it with <code>showModal()</code>, not by toggling a class. You get the top layer, the backdrop, and correct behaviour for keyboard and screen reader users without writing a focus trap, and every focus trap I have ever reviewed had at least one bug in it.</p>
+
+        <h2>14. Testing On Things That Are Not Your Laptop</h2>
+
+        <p>Chrome DevTools device emulation is a layout preview, not a device test. It gets the CSS viewport right and almost everything else wrong: no real touch behaviour, no real font rendering, no virtual keyboard, none of the platform-specific scroll physics that make a sticky element behave differently on iOS.</p>
+
+        <p>What I actually do, in order of cost:</p>
+
+        <p><strong>Responsive sweep in the browser</strong>, dragging the window from 320px to 2000px continuously rather than checking three fixed widths. Breakage lives between breakpoints, not at them. This takes ninety seconds and finds more than any other single check.</p>
+
+        <p><strong>Two real devices minimum.</strong> An iPhone of some vintage and an inexpensive Android. Not the newest of each — a mid-range Android from three years ago is closer to your median customer than an iPhone 16 Pro. Safari on iOS is the one that will surprise you, because it is the only engine with genuinely different behaviour and you cannot test it on desktop.</p>
+
+        <p><strong>Automated width sweeps for horizontal overflow</strong>, which is cheap to script and catches regressions nobody would notice manually:</p>
+
+        <pre><code class="language-javascript">// playwright: fail the build if anything overflows the viewport
+import { test, expect } from '@playwright/test';
+
+const widths = [320, 360, 390, 414, 480, 600, 768, 1024, 1280];
+const paths  = ['/', '/collections/teapots', '/products/cast-iron-teapot', '/cart'];
+
+for (const width of widths) {
+  for (const path of paths) {
+    test(`no overflow at ${width}px on ${path}`, async ({ page }) =&gt; {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(path);
+      // Find the specific culprits, not just "the page is too wide"
+      const offenders = await page.evaluate((vw) =&gt;
+        [...document.querySelectorAll('body *')]
+          .filter(el =&gt; el.getBoundingClientRect().right &gt; vw + 1)
+          .slice(0, 5)
+          .map(el =&gt; el.tagName + '.' + (el.className || '').toString().slice(0, 40)),
+        width);
+      expect(offenders).toEqual([]);
+    });
+  }
+}</code></pre>
+
+        <p>That test has caught more real bugs on my projects than any visual regression tool, and it costs about four seconds per combination. Returning the offending selectors rather than a boolean is the part that makes it useful — a failing test that says "something overflows" gets muted within a week.</p>
+
+        <p><strong>Zoom and reflow.</strong> WCAG 1.4.10 requires the page to work at 400% zoom on a 1280px viewport without two-dimensional scrolling, which is equivalent to a 320px CSS viewport. If your responsive layout is honest this is free. If you have any fixed-width element, this is where it shows up.</p>
+
+        <h2>15. What Happened On The Rebuild</h2>
+
+        <p>The German-market client. Roughly 2,400 SKUs, three locales — German, Dutch, English — on a Shopify theme that had been extended over four years by three different agencies. 68% of sessions were mobile, and mobile conversion was 1.1% against 2.9% on desktop, which is a wider gap than the usual mobile penalty and suggested something was genuinely broken rather than merely different.</p>
+
+        <p>We did not redesign. We rebuilt the layout primitives underneath the existing design over about five weeks: intrinsic grid, container queries on the four components that appeared in multiple contexts, a computed fluid type scale, logical properties throughout, and the overflow test suite in CI.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Measure</th><th>Before</th><th>After 8 weeks</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Media queries in the theme</td><td>214</td><td>31</td></tr>
+            <tr><td>Stylesheet size (uncompressed)</td><td>186KB</td><td>119KB</td></tr>
+            <tr><td>Pages with horizontal overflow at 360px</td><td>19 of 24 templates</td><td>0</td></tr>
+            <tr><td>CLS at p75 (mobile, field data)</td><td>0.21</td><td>0.04</td></tr>
+            <tr><td>Mobile conversion rate</td><td>1.10%</td><td>1.74%</td></tr>
+            <tr><td>Add-to-basket taps per session (mobile)</td><td>0.31</td><td>0.44</td></tr>
+          </tbody>
+        </table>
+
+        <p>I want to be careful about the conversion figure. That eight-week window included a seasonal peak and a change to their delivery threshold, so attributing the full 58% lift to layout work would be dishonest. The number I trust more is the add-to-basket rate, because it is upstream of both of those confounds, and the CLS improvement, which is directly attributable.</p>
+
+        <p>What went wrong: container queries broke the theme editor. Shopify's editor injects sections into a wrapper that did not establish a containment context, so components that looked right on the storefront collapsed in the merchandiser's preview. Two days of confused emails before we worked out that the preview and the live render had different DOM ancestry. The fix was to declare the containment context on the section's own outer element rather than relying on the theme's grid wrapper — obvious in retrospect, invisible at the time. If you are building container-query components inside any CMS with a live preview, test the preview specifically. It is not the same page.</p>
+
+        <p>The other thing I would change: we converted all 214 media queries in one pass. That made review nearly impossible and we shipped two regressions that a smaller series of changes would have caught. Component by component, over three releases, would have been slower and better.</p>
+
+        <h2>16. Where I Still Use Media Queries</h2>
+
+        <p>Being honest about the limits, because "you never need breakpoints" is the sort of claim that sounds good and gets people into trouble.</p>
+
+        <p>Page-level scaffolding still wants viewport queries. Whether the header shows a full navigation bar or a hamburger is a question about the window, not about any component's box. So is whether a filter panel is an inline sidebar or a slide-over drawer, because that is a change in interaction model rather than layout.</p>
+
+        <p>Print styles, obviously. Ecommerce sites need a decent print stylesheet more often than people expect — order confirmations and returns forms get printed constantly, and the default is usually unusable.</p>
+
+        <p>User preference queries are media queries and among the most valuable ones:</p>
+
+        <pre><code class="language-css">@media (prefers-reduced-motion: reduce) {
+  /* Not display:none on animations — some are load-bearing.
+     Collapse the duration instead so state changes still happen. */
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root { --border-subtle: currentColor; }
+}</code></pre>
+
+        <p>And there is a category of design decision that is genuinely about the device rather than the space: showing a "call us" button only where <code>tel:</code> links do something useful, or dropping a hover-dependent interaction on coarse pointers. Those are media queries about capability, not width, and they are the right tool.</p>
+
+        <h2>17. Design Tokens Make This Maintainable</h2>
+
+        <p>All of the above collapses back into chaos if the values live in fifty different places. The layer that keeps it coherent is a small set of custom properties that everything else references.</p>
+
+        <pre><code class="language-css">:root {
+  /* Spacing on a fluid scale, so gutters tighten on small screens
+     without a single media query */
+  --space-3xs: clamp(0.25rem, 0.23rem + 0.11vw, 0.31rem);
+  --space-xs:  clamp(0.5rem,  0.46rem + 0.21vw, 0.63rem);
+  --space-s:   clamp(0.75rem, 0.68rem + 0.36vw, 1rem);
+  --space-m:   clamp(1.5rem,  1.36rem + 0.71vw, 2rem);
+  --space-l:   clamp(2.25rem, 2.04rem + 1.07vw, 3rem);
+
+  /* One place that decides how wide content gets */
+  --measure: 68ch;
+  --page-max: 82rem;
+  --gutter: var(--space-s);
+
+  /* Component-level knobs referenced by every card in the system */
+  --card-min: 16rem;
+  --radius: clamp(4px, 0.5vw, 10px);
+  --tap-min: 44px;
+}
+
+.container {
+  width: min(100% - (var(--gutter) * 2), var(--page-max));
+  margin-inline: auto;
+}</code></pre>
+
+        <p>That <code>.container</code> rule is worth studying: it produces a centred, gutter-respecting, max-width container in two lines with no breakpoints and no nested wrapper. It replaces the four-rule Bootstrap-style container most projects carry.</p>
+
+        <p>Keep the token count small. A system with nine spacing values gets used correctly; a system with twenty-six gets used arbitrarily and you end up with the same inconsistency you were trying to eliminate, plus a documentation site nobody reads. I would rather have too few tokens and occasional one-off values than a taxonomy that requires a decision every time.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Should we build a separate mobile site?"</strong> No. It was a defensible answer in 2011 when phones could not run real CSS. Now it means two codebases, two sets of bugs, a device-detection layer that will misclassify something, and a canonical-tag arrangement that goes wrong quietly. The only case I would still consider it is a genuinely different mobile <em>product</em> — a native-feeling app-shell experience with different information architecture — and then it is an app, not a mobile site.</p>
+
+        <p><strong>"Can we drop support for browsers without container queries?"</strong> Check your own analytics rather than a support table. Across the stores I look at, browsers lacking container query support are now under half a percent of sessions, and they are overwhelmingly bots and very old Android WebViews. Write the component so the un-queried state is the acceptable single-column layout, and those users get something usable rather than something broken. That is achievable with no extra work if you write the narrow layout as the default and the queries as enhancements.</p>
+
+        <p><strong>"How many breakpoints should a design system have?"</strong> Wrong question, but if you must: two or three page-level ones, named for what changes rather than for devices. <code>--bp-nav-expands</code>, not <code>--bp-tablet</code>. Naming them after devices makes people reason about devices, and there is no such thing as a tablet width any more.</p>
+
+        <p><strong>"Is <code>vw</code> for spacing a good idea?"</strong> Bounded, yes — as one term inside a <code>clamp()</code>. Unbounded, no. Pure <code>vw</code> padding gives you 40px of gutter on a phone and 300px on an ultrawide monitor, and someone will file a bug about the second one about a year after launch.</p>
+
+        <p><strong>"What about the fold?"</strong> There is no fold, but there is a first screen, and the question of what occupies it is real. On mobile category pages I want product cards visible without scrolling — at least the top of the first row. That constrains hero height, filter chrome and promotional bars, and it is a much more useful design constraint than a pixel measurement.</p>
+
+        <p><strong>"Our designer works at 375px and 1440px. Is that enough?"</strong> It is enough for two frames, not for a system. Ask for the awkward states instead: the longest product name in the catalogue, a price range rather than a price, a card with three badges, a category with two results, and an empty cart. Those five artefacts prevent more rework than a third viewport frame ever will.</p>
+
+        <h2>19. What I Would Do First</h2>
+
+        <p>Working on an existing storefront rather than a greenfield build, in this order:</p>
+
+        <p><strong>One.</strong> Run the overflow sweep across your templates at 320, 360 and 390px and fix everything it finds. Horizontal scrolling on a phone is the highest-severity, lowest-effort defect class on most sites, and it is usually four or five elements causing all of it.</p>
+
+        <p><strong>Two.</strong> Set your browser's default font size to 24px and load the site. Fix whatever does not scale. This is a conformance requirement, it takes an afternoon, and almost nobody has done it.</p>
+
+        <p><strong>Three.</strong> Audit form inputs for <code>inputmode</code>, <code>autocomplete</code> and the 16px minimum. This is the change with the most direct revenue effect in the whole list and it is mostly attribute edits.</p>
+
+        <p><strong>Four.</strong> Replace fixed grid column counts with the intrinsic <code>auto-fill</code> pattern, one grid at a time. Each replacement deletes media queries, and deleting stylesheet is the most reliable way to make a codebase better.</p>
+
+        <p><strong>Five.</strong> Introduce a computed fluid type scale as tokens, and convert headings to it. Do not convert everything at once — headings first, because that is where the awkward jumps are most visible.</p>
+
+        <p><strong>Six.</strong> Identify components that appear in more than one context and convert those to container queries. Only those. Converting components that appear in exactly one place buys nothing and adds a wrapper.</p>
+
+        <p><strong>Seven.</strong> Put the width sweep in CI so none of it regresses. Every layout system decays; the only ones that do not are the ones with a test that fails when they do.</p>
+
+        <p>If you get through the first three you will have fixed most of what your mobile customers actually notice. The rest is what stops it happening again — which matters, but it matters second. The broader conversion mechanics that sit on top of a layout that works are covered in the material on <a href="/blog/designing-for-convert/">designing for conversion</a>, and they are worth reading once the geometry underneath is stable.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -238,7 +852,6 @@ h1 {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -272,6 +885,6 @@ h1 {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

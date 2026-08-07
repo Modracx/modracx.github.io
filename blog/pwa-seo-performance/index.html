@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Progressive Web Apps (PWA) for SEO & Performance | MODRACX</title>
-  <meta name="description" content="Learn how turning your Magento or Shopify store into a Progressive Web App boosts SEO, improves Core Web Vitals, and delivers app-like experiences." />
+  <meta name="description" content="PWA and SPA crawlability for ecommerce: what Googlebot really renders, critical content in server HTML, soft 404s in client routers, render lag, and how to test it." />
   <meta property="og:title" content="Progressive Web Apps (PWA) for SEO & Performance | MODRACX" />
   <meta property="og:description" content="Learn how turning your Magento or Shopify store into a PWA boosts SEO by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -169,17 +171,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Progressive Web Apps (PWA) for SEO & Performance</h1>
-        <p class="lede">Combining Service Worker precaching with SSR page rendering ensures your PWA is 100% crawlable by Googlebot while delivering instant navigation transitions for human shoppers.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Progressive Web Apps (PWA) for SEO &amp; Performance</h1>
+        <p class="lede">A distributor relaunched on React and had 431 of 12,400 products indexed four months later. Google renders JavaScript — here is why that sentence answers the wrong question.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -204,223 +206,464 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Architecting PWAs for Googlebot and Human Scale</h2>
-        <p>In modern e-commerce systems, the balance between rich, application-like functionality and search engine discoverability remains a critical engineering challenge. Progressive Web Apps (PWAs) transform frontend development by introducing Service Workers and instant navigation transitions. However, shifting rendering logic to the browser introduces substantial risks for search visibility. When your core rendering logic moves to the client side, search engine crawlers like Googlebot face the computationally expensive task of executing Javascript just to understand basic product data.</p>
-        <p>The standard client-side rendering (CSR) model frequently results in a blank HTML payload containing only script tags. This minimal structure delays indexing, forces crawlers into a deferred rendering queue, and severely degrades Core Web Vitals like Largest Contentful Paint (LCP) and First Input Delay (FID). The solution requires a hybrid approach: utilizing Server-Side Rendering (SSR) for the initial document payload and enabling seamless Service Worker hydration for all subsequent navigations. This methodology guarantees that the exact moment a crawler requests a product detail page (PDP), the response is a fully formed HTML document containing all necessary metadata, JSON-LD structured data, and readable content text.</p>
+        <h2>1. Twelve Thousand Products, Four Hundred Indexed</h2>
 
-        <h2>Server-Side Rendering (SSR) vs Pre-rendering for Crawlers</h2>
-        <p>E-commerce platforms handling millions of stock keeping units (SKUs) must carefully evaluate the operational overhead of SSR versus static Pre-rendering. Pre-rendering involves generating static HTML at build time, which is highly efficient but notoriously difficult to scale for massive product catalogs with volatile pricing. SSR dynamically compiles the HTML on every single request using current backend state. To mitigate the latency introduced by SSR, aggressive caching strategies at the CDN layer are absolutely mandatory. For systems migrating to a decoupled headless PWA, implementing a dedicated Node.js middleware layer allows you to handle SSR efficiently.</p>
-        
-        <h3>Production SSR Fallback Handler</h3>
-        <p>The following Node.js Express snippet demonstrates a production-grade SSR fallback handler that detects bots and serves fully rendered HTML while gracefully passing standard API requests to the headless backend. This setup strongly protects the structural integrity of your organic search equity.</p>
-<pre><code class="language-javascript">const express = require('express');
-const { renderToString } = require('react-dom/server');
-const { StaticRouter } = require('react-router-dom/server');
-const isbot = require('isbot');
-const App = require('./src/App').default;
-const { getProductData } = require('./services/api');
+        <p>In March 2024 a tools and fixings distributor called me about a traffic collapse. They had relaunched in November on a React storefront — a progressive web app, service worker, install prompt, the full set — and organic sessions had fallen 71% over the following four months. The agency that built it told them Google needed time to adjust to the new site.</p>
 
-const app = express();
+        <p>Search Console said something more specific. Of 12,400 product URLs in the sitemap, 431 were indexed. Another 6,800 sat in "Crawled — currently not indexed" and about 5,000 in "Discovered — currently not indexed", which means Google had seen the URL and had not even bothered to fetch it.</p>
 
-app.get('/products/:slug', async (req, res) => {
-  const { slug } = req.params;
-  const userAgent = req.headers['user-agent'];
-  
-  try {
-    const productData = await getProductData(slug);
-    
-    // If the client is a PWA performing a client-side navigation, return raw JSON.
-    if (req.headers['accept']?.includes('application/json')) {
-      return res.json(productData);
-    }
-    
-    // If the requester is a bot or a direct first-page navigation, perform SSR.
-    if (isbot(userAgent) || !req.headers['x-pwa-navigation']) {
-      const html = renderToString(
-        &lt;StaticRouter location={req.url}&gt;
-          &lt;App initialData={productData} /&gt;
-        &lt;/StaticRouter&gt;
-      );
-      
-      return res.send(`
-        &lt;!DOCTYPE html&gt;
-        &lt;html lang="en"&gt;
-        &lt;head&gt;
-          &lt;meta charset="UTF-8"&gt;
-          &lt;title&gt;${productData.title} | MODRACX&lt;/title&gt;
-          &lt;meta name="description" content="${productData.metaDescription}"&gt;
-          &lt;script&gt;window.__INITIAL_DATA__ = ${JSON.stringify(productData)};&lt;/script&gt;
-        &lt;/head&gt;
-        &lt;body&gt;
-          &lt;div id="root"&gt;${html}&lt;/div&gt;
-          &lt;script src="/client-bundle.js" defer&gt;&lt;/script&gt;
-        &lt;/body&gt;
-        &lt;/html&gt;
-      `);
-    }
-  } catch (error) {
-    console.error('SSR Critical Error:', error);
-    res.status(500).send('Internal Server Error Processing SSR');
+        <p>I ran one command:</p>
+
+        <pre><code class="language-bash"># What does the server actually return, before any JavaScript runs?
+curl -sL https://example.com/products/m8-hex-bolt-zinc-100 \
+  | grep -c "M8 Hex"
+# 0</code></pre>
+
+        <p>Zero. The product name did not exist in the HTML the server sent. Neither did the price, the description, the specification table, or a single internal link to another product. The document was a nav, a footer, an empty <code>&lt;div id="root"&gt;</code>, and 640KB of JavaScript that would eventually build the page in the browser.</p>
+
+        <p>Google can render JavaScript. That is true and it gets repeated as though it settles the matter. What it does not tell you is that rendering is a separate, queued, resource-limited stage that behaves nothing like the initial crawl, and that a catalogue of twelve thousand pages entirely dependent on it will be indexed slowly, partially, and unpredictably. That is what happened here, and it is what this article is about.</p>
+
+        <p>This is the crawlability half of the PWA story. The business and experience case — install prompts, push, whether any of it is worth building — is in the companion piece on <a href="/blog/pwa-for-ecommerce/">PWAs for ecommerce</a>, and the caching mechanics are in the <a href="/blog/service-workers-offline-caching/">service workers article</a>. Here I am only concerned with one question: can a search engine see your catalogue, and how do you prove it.</p>
+
+        <h2>2. Where the Risk Actually Comes From</h2>
+
+        <p>Let me be precise about the causation, because "PWAs are bad for SEO" is both a common belief and wrong.</p>
+
+        <p>Nothing in the definition of a progressive web app is a crawling problem. A manifest is a JSON file crawlers ignore. A service worker is never executed by Googlebot at all — each crawl is a fresh browser profile with no registration, so whatever your worker does is invisible to indexing. HTTPS is a positive. You can add all three to a perfectly ordinary server-rendered storefront tomorrow and your indexing will not move a millimetre.</p>
+
+        <p>The risk arrives because of what usually rides along. PWA projects are, in practice, rewrites. Somebody decides that app-like navigation requires a client-side router, the router requires JSON endpoints instead of HTML documents, and within a sprint the catalogue exists only as data assembled in the browser. The manifest gets the blame in the post-mortem because it is what changed in the project name.</p>
+
+        <p>So the useful framing: the PWA parts are neutral, and the single-page architecture that often accompanies them is where every problem in this article originates. If you are adding a manifest and a service worker to an existing server-rendered site, you can stop reading and go do that; it is safe. If someone is proposing a client-side rewrite and calling it a PWA, the rest of this is for you.</p>
+
+        <h2>3. What Googlebot Actually Does With JavaScript</h2>
+
+        <p>The model that matters is a pipeline with a queue in the middle.</p>
+
+        <p>Googlebot fetches a URL and gets the raw HTML response. It parses that for links, for meta directives, for canonical tags, and for content. If the page needs JavaScript to be meaningful, the URL is placed into a render queue. Some time later — and the time is the whole issue — a headless Chromium instance fetches the page, executes the JavaScript, waits for network activity to settle, and produces a rendered DOM. That rendered DOM is then indexed, and any new links discovered in it go back into the crawl queue.</p>
+
+        <p>Several properties of that pipeline cause trouble on a large catalogue.</p>
+
+        <p><strong>The queue has a delay and it is not fixed.</strong> Google has said the median is seconds and I believe them for a well-known site with a small page count. What I measure on mid-market ecommerce is different: new product URLs on a client-rendered site typically appear in the index days after their server-rendered equivalents, and on the distributor above the gap was averaging eleven days across the sample I checked. The median is not the number that hurts you; the tail is.</p>
+
+        <p><strong>Rendering is rate-limited by your crawl budget in a way initial fetching is not.</strong> Rendering a page costs Google roughly an order of magnitude more than fetching it. On a site with twelve thousand product URLs plus filtered category permutations, that cost is what decides how much gets rendered at all. This is the mechanism behind "Discovered — currently not indexed" at scale: Google has the URL and has decided rendering it is not worth the compute right now.</p>
+
+        <p><strong>Links only discovered after rendering are discovered late.</strong> If your category pages need JavaScript to list their products, the product URLs are not found in the crawl stage. They are found in the render stage, which means the discovery of your catalogue is gated behind the most expensive part of the pipeline. On a server-rendered site the whole catalogue is discoverable in one cheap pass.</p>
+
+        <p><strong>Rendering can fail silently.</strong> A JavaScript error, a request to an API that times out, a third-party script that hangs — any of these can produce a rendered DOM that is missing your content, and there is no error report. The page simply gets indexed as whatever managed to render, which is often the nav and the footer.</p>
+
+        <p>That last one produces the most confusing outcome on this list: pages indexed with no content, ranking for nothing, with Search Console reporting them as perfectly fine.</p>
+
+        <h2>4. What "Critical Content in the Server HTML" Means Precisely</h2>
+
+        <p>Everyone nods at this advice and then implements it partially. Here is the list I actually check, in priority order, for a product page.</p>
+
+        <p><strong>The <code>&lt;title&gt;</code> and meta description.</strong> Not injected by a helmet library after hydration — present in the response body. A title written by JavaScript is a title that exists only for the render stage, and it also means every social scraper and link preview gets your generic fallback.</p>
+
+        <p><strong>The canonical tag.</strong> This one is serious enough to have its own section below.</p>
+
+        <p><strong>The H1 and the product name.</strong> Obvious and routinely missing.</p>
+
+        <p><strong>Price and availability, as text.</strong> Not only in the structured data. If the visible price comes from a client-side API call, the rendered page Google indexes may show a loading skeleton, and skeleton text is what gets extracted.</p>
+
+        <p><strong>The full product description and specifications.</strong> Including anything behind a tab or an accordion. Content hidden in a collapsed panel is fine as long as it is in the DOM; content fetched when the panel is opened is not.</p>
+
+        <p><strong>Product schema in the response.</strong> A JSON-LD block written by JavaScript will usually be picked up in rendering, but it is one more thing that depends on the fragile stage, and the Rich Results test will pass while real indexing is inconsistent.</p>
+
+        <p><strong>Real <code>&lt;a href&gt;</code> elements to related products, the parent category, and breadcrumbs.</strong> This is the one that governs crawl efficiency for the whole site.</p>
+
+        <p>A quick way to check the whole set at once:</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# Check a URL's raw HTML for the things that must not require JavaScript.
+URL="$1"
+HTML=$(curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1)" "$URL")
+
+check() { printf '%-22s %s\n' "$1" "$(grep -qi -- "$2" &lt;&lt;&lt; "$HTML" &amp;&amp; echo OK || echo MISSING)"; }
+
+check "title"        "&lt;title"
+check "canonical"    "rel=\"canonical\""
+check "h1"           "&lt;h1"
+check "product schema" "\"@type\": *\"Product\""
+check "price text"   "£"
+
+# How many real links does the raw document contain?
+echo "internal links: $(grep -o 'href="/[^"]*"' &lt;&lt;&lt; "$HTML" | sort -u | wc -l)"</code></pre>
+
+        <p>On the distributor's product pages that script reported a title, no canonical, no H1, no schema, no price, and four internal links — all of them in the header nav. On a healthy product page I expect somewhere north of forty unique internal links in the raw HTML, most of them to sibling products and category facets.</p>
+
+        <h2>5. The curl Test, and Where It Misleads You</h2>
+
+        <p>Fetching raw HTML is the fastest diagnostic available and it answers exactly one question: what is in the initial response. It does not tell you what Google indexed. Three ways people over-read it.</p>
+
+        <p>First, a missing element in the raw HTML is not proof the page will not be indexed correctly. Google may well render it fine. What you have found is a dependency on the fragile stage, not a confirmed failure. The correct conclusion is "this is at risk", and the confirmation comes from the index.</p>
+
+        <p>Second, present in the raw HTML is not proof it survives. I have seen a server-rendered canonical overwritten by a client-side routing library on hydration, and the rendered DOM is what Google uses. Server-side presence is necessary, not sufficient.</p>
+
+        <p>Third, your curl request is not a Googlebot request. Some CDNs and bot-management layers serve different responses by user agent, and a few serve a prerendered variant to crawlers. If a client swears their pages are server-rendered and curl disagrees, check whether something is fronting the origin before accusing anyone.</p>
+
+        <p>The tool that answers the real question is the URL Inspection tool in Search Console, specifically "Test live URL" followed by "View tested page". That gives you the rendered HTML Google's own renderer produced, a screenshot, and — the most useful panel and the one nobody opens — the list of page resources that failed to load. Half the rendering bugs I have diagnosed were visible in that list as a blocked or timed-out request.</p>
+
+        <p>A local approximation that catches most problems before you deploy:</p>
+
+        <pre><code class="language-javascript">// render-check.js — compare raw HTML against the rendered DOM.
+import puppeteer from 'puppeteer';
+
+const url = process.argv[2];
+const raw = await (await fetch(url)).text();
+
+const browser = await puppeteer.launch();
+const page = await browser.newPage();
+// Approximate Googlebot: mobile viewport, no service worker, and a
+// hard cap on how long we are willing to wait for the network.
+await page.setUserAgent('Mozilla/5.0 (Linux; Android 6.0.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1)');
+await page.setViewport({ width: 412, height: 892, isMobile: true });
+await page.goto(url, { waitUntil: 'networkidle0', timeout: 20000 });
+
+const rendered = await page.content();
+const title = await page.title();
+const h1 = await page.$eval('h1', (el) =&gt; el.textContent).catch(() =&gt; null);
+const canonical = await page
+  .$eval('link[rel=canonical]', (el) =&gt; el.href)
+  .catch(() =&gt; null);
+
+console.log({
+  rawBytes: raw.length,
+  renderedBytes: rendered.length,
+  // A large ratio means most of the page only exists after JavaScript.
+  ratio: (rendered.length / raw.length).toFixed(1),
+  titleInRaw: raw.includes(title),
+  h1InRaw: h1 ? raw.includes(h1.trim()) : false,
+  canonicalInRaw: canonical ? raw.includes(canonical) : false
+});
+
+await browser.close();</code></pre>
+
+        <p>The ratio is the number I watch. A healthy server-rendered product page comes out between 1.0 and 1.4. The distributor's pages were at 34. Anything over about 3 means the majority of your page exists only after execution, and you should assume everything in this article applies to you.</p>
+
+        <h2>6. The Canonical Tag Problem</h2>
+
+        <p>Canonicals deserve separating out because the failure is quiet and the consequences are wide.</p>
+
+        <p>If a canonical tag is written by JavaScript, it exists only in the rendered DOM. Google generally picks it up, but the initial crawl sees no canonical at all and may act on that — particularly during the window before rendering happens. On a site with filtered category URLs, that window is when duplicate URLs get into the index.</p>
+
+        <p>The failure I see most often is worse and more specific: a routing library sets the canonical to the current URL on every navigation, including URLs that should canonicalise elsewhere. Filter and sort parameters are the usual victim. A category page at <code>/screws?sort=price&amp;page=3</code> ends up self-canonical, and now you have several thousand near-duplicate URLs each declaring itself the original.</p>
+
+        <p>On the distributor this had produced roughly 41,000 indexed URLs against 12,400 real products, which is a large part of why the genuine pages were not getting rendered — the crawl budget was being spent on permutations.</p>
+
+        <pre><code class="language-html">&lt;!-- Server-rendered, computed from the canonical route,
+     with tracking and pagination parameters stripped. --&gt;
+&lt;link rel="canonical" href="https://example.com/c/screws-fixings/wood-screws" /&gt;
+
+&lt;!-- And for the filtered variants that should not be indexed
+     but should still be crawlable for discovery. --&gt;
+&lt;meta name="robots" content="noindex,follow" /&gt;</code></pre>
+
+        <p>The rule I apply: canonical, robots meta, and hreflang are server responsibilities. If your framework offers a component that writes them client-side, use it for nothing that matters. And if you are on a headless setup where the frontend genuinely does own the head, make the canonical a server-computed value passed into the initial render rather than something derived from <code>window.location</code>, which is a bug waiting for its first tracking parameter. The same applies to any headless commerce architecture — the broader trade-offs there are covered in the piece on <a href="/blog/headless-commerce-seo-performance/">headless commerce SEO and performance</a>.</p>
+
+        <h2>7. Soft 404s, and the Status Code a Router Cannot Send</h2>
+
+        <p>This is the single most common client-side routing bug on ecommerce sites and it is structural rather than accidental.</p>
+
+        <p>A client-side router receives a URL that matches no route. It renders a "Product not found" component. The customer sees a sensible message. Googlebot sees an HTTP 200 response containing a page, because the server has already answered 200 with the app shell before the router ever ran. There is no mechanism by which JavaScript can change a status code that has already been sent.</p>
+
+        <p>This matters because discontinued products are constant on a catalogue site. Every delisted SKU becomes a 200-status page with almost no content and a heading that says the product is unavailable. Google's classifier eventually flags these as soft 404s, but "eventually" can be months, and in the meantime they consume crawl budget and dilute the site's quality signals.</p>
+
+        <p>On the distributor there were about 2,900 of these. Their categories included discontinued lines that still had links pointing at them, so the crawler kept finding them, kept fetching them, kept rendering them, and kept getting a 200 with a sad message.</p>
+
+        <p>There are three fixes, in descending order of how much I like them.</p>
+
+        <p><strong>Handle unknown routes on the server.</strong> If you have any server rendering — Next.js, Nuxt, Remix, a Node layer in front of a static build — the route resolver knows whether the SKU exists before it responds, so it can send a real 404 or a 301 to the category. This is the correct fix and it is available on more architectures than people assume.</p>
+
+        <pre><code class="language-javascript">// Next.js app router — a real 404 status for an unknown product.
+export default async function ProductPage({ params }) {
+  const product = await getProduct(params.sku);
+  // notFound() renders the not-found UI *and* sends HTTP 404.
+  if (!product) notFound();
+  if (product.replacedBy) {
+    // Discontinued but superseded: send them to the successor.
+    redirect(`/products/${product.replacedBy}`, 301);
   }
-});
+  return &lt;ProductView product={product} /&gt;;
+}</code></pre>
 
-app.listen(3000, () => console.log('SSR Node.js server running on port 3000'));
-</code></pre>
+        <p><strong>Serve a noindex header for unknown paths at the edge.</strong> If the routing is genuinely client-only, a CDN worker can check the URL against a list of valid SKUs and add <code>X-Robots-Tag: noindex</code> to responses for anything unmatched. It is not as good as a 404 but it stops the pages entering the index.</p>
 
-        <h2>Service Worker Hydration and Workbox Offline Strategy Tuning</h2>
-        <p>A properly configured Service Worker acts as a programmable network proxy residing directly between the user's browser and the internet. To achieve exceptional performance metrics and pass strict web vitals audits, the Service Worker must manage a sophisticated caching hierarchy. Relying solely on standard browser HTTP caching headers is entirely insufficient for modern e-commerce demands. Using Google's specialized Workbox library allows developers to rapidly implement granular caching strategies such as Stale-While-Revalidate, Cache First, and Network First depending strictly on the requested asset type.</p>
-        
-        <h3>Workbox Service Worker Configuration</h3>
-        <p>The following code block illustrates a comprehensive Workbox Service Worker configuration specifically tailored for an e-commerce PWA. It handles strict precaching, image optimization caching, API response strategies, and offline queueing fallbacks to heavily preserve layout speed.</p>
-<pre><code class="language-javascript">import { precacheAndRoute } from 'workbox-precaching';
-import { registerRoute } from 'workbox-routing';
-import { StaleWhileRevalidate, CacheFirst, NetworkOnly } from 'workbox-strategies';
-import { ExpirationPlugin } from 'workbox-expiration';
-import { CacheableResponsePlugin } from 'workbox-cacheable-response';
+        <pre><code class="language-javascript">// Cloudflare Worker — mark unknown product URLs as noindex.
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const response = await fetch(request);
 
-// Precache the application shell and static assets injected by the build process
-precacheAndRoute(self.__WB_MANIFEST);
-
-// Cache heavy product images with an aggressive Cache First strategy
-registerRoute(
-  ({ request }) => request.destination === 'image',
-  new CacheFirst({
-    cacheName: 'ecommerce-images',
-    plugins: [
-      new CacheableResponsePlugin({ statuses: [0, 200] }),
-      new ExpirationPlugin({
-        maxEntries: 500, // Strictly limit cache to 500 images
-        maxAgeSeconds: 30 * 24 * 60 * 60, // Keep valid for 30 Days
-        purgeOnQuotaError: true, // Auto-purge if storage is full
-      }),
-    ],
-  })
-);
-
-// Cache API responses for dynamic product data using Stale-While-Revalidate
-registerRoute(
-  ({ url }) => url.pathname.startsWith('/api/v1/products'),
-  new StaleWhileRevalidate({
-    cacheName: 'ecommerce-api-cache',
-    plugins: [
-      new ExpirationPlugin({
-        maxEntries: 100, // Cache up to 100 API responses
-        maxAgeSeconds: 24 * 60 * 60, // Expire after 24 Hours
-      }),
-    ],
-  })
-);
-
-// Handle crucial offline checkout queueing for specific POST requests
-registerRoute(
-  ({ url, request }) => url.pathname.startsWith('/api/v1/checkout') && request.method === 'POST',
-  new NetworkOnly({
-    plugins: [
-      {
-        fetchDidFail: async ({ originalRequest }) => {
-          // Implement Background Sync queueing logic safely here
-          const cache = await caches.open('offline-checkout-queue');
-          await cache.put(originalRequest, new Response(JSON.stringify({ queued: true })));
-        }
+    if (url.pathname.startsWith('/products/')) {
+      const sku = url.pathname.split('/')[2];
+      // KV namespace populated by the catalogue export on each build.
+      const exists = await env.SKUS.get(sku);
+      if (!exists) {
+        const r = new Response(response.body, response);
+        r.headers.set('X-Robots-Tag', 'noindex');
+        return r;
       }
-    ]
-  })
-);
-
-// Global offline fallback rendering
-self.addEventListener('install', (event) => {
-  const offlinePage = new Request('/offline.html');
-  event.waitUntil(
-    fetch(offlinePage).then((response) => {
-      return caches.open('offline-fallback').then((cache) => {
-        return cache.put(offlinePage, response);
-      });
-    })
-  );
-});
-</code></pre>
-
-        <h2>Web App Manifest and SEO Signaling</h2>
-        <p>The Web App Manifest is a structured JSON file that formally provides the browser with deep metadata regarding your PWA application. While its primary surface-level function is to define the installation behavior, device display mode, and application icon sets, it serves a secondary, highly valuable purpose as a structured SEO signal. Search engines explicitly parse the manifest file to structurally understand the application context, brand identity, and hierarchical structure of the overall site.</p>
-        
-        <h3>Optimized Web App Manifest (manifest.json)</h3>
-        <p>The following configuration example demonstrates a fully populated manifest.json file containing extensive SEO signaling, specialized application category definitions, and OS shortcut parameters that drastically enhance both user engagement and search visibility.</p>
-<pre><code class="language-json">{
-  "short_name": "MODRACX",
-  "name": "MODRACX Ecommerce Architecture & Development",
-  "description": "High-performance headless e-commerce solutions built for scale and speed.",
-  "icons": [
-    {
-      "src": "/icons/icon-72x72.png",
-      "sizes": "72x72",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icons/icon-192x192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icons/icon-512x512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
     }
-  ],
-  "start_url": "/?source=pwa_install",
-  "background_color": "#07071a",
-  "theme_color": "#07071a",
-  "display": "standalone",
-  "orientation": "portrait",
-  "dir": "ltr",
-  "lang": "en-US",
-  "categories": ["shopping", "business", "technology"],
-  "shortcuts": [
-    {
-      "name": "New Arrivals",
-      "short_name": "New",
-      "description": "View our latest product releases",
-      "url": "/collections/new-arrivals?source=pwa",
-      "icons": [{ "src": "/icons/shortcut-new.png", "sizes": "192x192" }]
-    },
-    {
-      "name": "Track Order",
-      "short_name": "Orders",
-      "description": "Track your recent purchases",
-      "url": "/account/orders?source=pwa",
-      "icons": [{ "src": "/icons/shortcut-orders.png", "sizes": "192x192" }]
+    return response;
+  }
+};</code></pre>
+
+        <p><strong>Redirect client-side to a real 404 URL.</strong> The worst option: the router pushes the browser to <code>/404</code>, which the server does answer with a 404. It works, sort of, and it is a redirect chain and a flash of the wrong content. I would take it over nothing.</p>
+
+        <p>The same problem applies to every other status code a storefront needs. Out of stock should not be a 404. A retired category should be a 301. A geo-restricted product should probably be a 404 in that region rather than a page saying the customer cannot buy it. All of these are server decisions, and a client-only architecture has quietly given away the ability to make them.</p>
+
+        <h2>8. Links That Are Not Links</h2>
+
+        <p>Google finds pages by following <code>href</code> attributes on anchor elements in the DOM. That sentence is doing a lot of work and there is a family of common patterns that fail it.</p>
+
+        <p>A <code>&lt;div&gt;</code> with an onclick handler that calls the router is not a link. A <code>&lt;button&gt;</code> that navigates is not a link. An anchor with <code>href="#"</code> and a JavaScript handler is not a link. A router component that renders correctly is fine — most do emit real anchors — but I have reviewed enough custom implementations that emit spans to check every time rather than assume.</p>
+
+        <pre><code class="language-bash"># Count anchors with a real href in the rendered DOM, and how many
+# clickable-looking elements are not anchors at all.
+node -e "
+const p = require('puppeteer');
+(async () =&gt; {
+  const b = await p.launch();
+  const pg = await b.newPage();
+  await pg.goto(process.argv[1], { waitUntil: 'networkidle0' });
+  console.log(await pg.evaluate(() =&gt; ({
+    realLinks: document.querySelectorAll('a[href]:not([href^=\"#\"])').length,
+    fakeLinks: document.querySelectorAll('[onclick], [role=link]:not(a)').length
+  })));
+  await b.close();
+})();
+" "$1"</code></pre>
+
+        <p>The second pattern that costs discovery is infinite scroll with no underlying pagination. A category page that loads twenty products and fetches more on scroll exposes exactly twenty product links to a crawler, because Googlebot does not scroll. Whatever is on page four of your best category is, as far as discovery is concerned, not linked from anywhere.</p>
+
+        <p>The fix is not to remove infinite scroll. It is to have real paginated URLs underneath it — <code>/c/wood-screws?page=2</code> — that are server-rendered, contain real links, and are reachable via anchors in the page even if those anchors are visually subordinate to the scrolling behaviour. Customers get the scroll, crawlers get the pagination, and you get a set of URLs you can actually inspect when something goes wrong.</p>
+
+        <p>A third, subtler discovery problem: a well-built SPA often stops requesting the server for navigation entirely, which means your server logs stop showing page views. Crawl analysis from log files is one of the better diagnostic techniques available on a large catalogue, and a client-side router removes the data it depends on for real users. It does not affect Googlebot, which always makes real requests, but it does mean your logs no longer tell you what humans and crawlers are doing on comparable terms.</p>
+
+        <h2>9. Rendering Strategies, Ranked for a Catalogue</h2>
+
+        <p>The choice is not binary and the middle options are where most storefronts should sit.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Strategy</th><th>Crawl safety</th><th>Cost</th><th>Where it fits</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Server-rendered documents, no framework</td><td>Highest</td><td>Lowest</td><td>Most catalogues, honestly</td></tr>
+            <tr><td>Static generation at build</td><td>Highest</td><td>Build time grows with catalogue</td><td>Stable catalogues under ~10k SKUs</td></tr>
+            <tr><td>Static plus incremental regeneration</td><td>Highest</td><td>Moderate infrastructure</td><td>Large catalogues that change daily</td></tr>
+            <tr><td>SSR with hydration</td><td>High</td><td>Server cost, hydration bugs</td><td>Interactive catalogues at scale</td></tr>
+            <tr><td>SSR shell plus client-fetched data</td><td>Medium</td><td>Deceptively low</td><td>Rarely the right answer</td></tr>
+            <tr><td>Pure client-side rendering</td><td>Lowest</td><td>Low to build, high to fix</td><td>Logged-in areas, never the catalogue</td></tr>
+            <tr><td>Dynamic rendering for bots</td><td>Medium</td><td>A second system to maintain</td><td>A stopgap, nothing more</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two rows deserve comment.</p>
+
+        <p>"SSR shell plus client-fetched data" is the trap. It looks server-rendered — you get HTML back, the layout is there, the nav is there — and the price, stock, and description arrive from an API call after load. Teams believe they have solved the problem because curl returns real markup. The content that determines whether the page ranks is still on the fragile stage. If you check one thing after reading this article, check whether your product data is in the response or fetched afterwards.</p>
+
+        <p>Dynamic rendering — detecting crawlers and serving them a prerendered snapshot — was Google's own recommendation for years and was downgraded to a workaround in 2022. It works. It is also a second rendering system that will drift out of sync with the real one, and the drift is invisible until someone notices the snapshot service has been serving a cached version from six weeks ago. I have inherited exactly that. Use it to stop bleeding while you fix the architecture, not as the architecture.</p>
+
+        <p>The strategy I recommend most often for large catalogues is pre-rendering with incremental regeneration, which gets you static HTML for crawlers and a manageable build. Its own failure modes — build times, stale pages, where dynamic commerce breaks the static model — are the subject of the article on <a href="/blog/jamstack-ecommerce/">JAMstack ecommerce</a>.</p>
+
+        <h2>10. Rendering Delay, Measured</h2>
+
+        <p>"How long does Google take to render?" gets answered with anecdote. Here is how to measure it on your own site, which is the only number that should influence your decisions.</p>
+
+        <p>Publish a new product with a unique, invented token in the body — something like a nonsense string that appears nowhere else on the web. Note the timestamp. Then poll the index for that token.</p>
+
+        <pre><code class="language-bash"># Check whether the token has been indexed yet.
+# Run daily; the first day it returns a result is your indexing lag.
+TOKEN="zx7qwelm"
+curl -s "https://www.google.com/search?q=%22$TOKEN%22+site:example.com" \
+  -A "Mozilla/5.0" | grep -qi "$TOKEN" &amp;&amp; echo "indexed" || echo "not yet"</code></pre>
+
+        <p>Do this for two variants: one token in the server HTML, one injected by JavaScript only. The difference between the two dates is your render lag, on your site, at your current crawl rate. It is the most useful single measurement in this whole area and almost nobody takes it.</p>
+
+        <p>On the distributor, before the fix, the server-HTML token was indexed in 3 days and the JavaScript-only token in 19. After they moved product pages to server rendering, the server token was indexed in under 48 hours. That was the evidence that made the case internally, and it was worth more than any amount of argument about how capable Googlebot is in principle.</p>
+
+        <p>A caveat on the method: scraping search results is fragile and against the terms of service if you do it at volume. Run it a handful of times a day, manually if you prefer, or use the URL Inspection API which is the supported route and gives you the last crawl date directly.</p>
+
+        <h2>11. The Service Worker Does Not Index Anything</h2>
+
+        <p>Worth stating flatly because it comes up in every one of these projects: Googlebot does not register or execute service workers. Every crawl is a first visit with an empty cache. Nothing your worker does — good or bad — affects what gets indexed.</p>
+
+        <p>This has two practical consequences.</p>
+
+        <p>You cannot use a service worker to fix a rendering problem. Serving crawlers a cached, complete version of a page is not possible, and if it were it would be cloaking.</p>
+
+        <p>You also cannot break indexing with one, which is more reassuring than it sounds. The worst service worker bug I have seen — eleven days of a stale promotional price — was invisible to search entirely. The customers saw it; Google never did.</p>
+
+        <p>The one genuine, indirect effect is on field performance data. Cached assets make repeat visits faster, repeat visits are part of the Chrome User Experience Report, and so your Core Web Vitals field data improves modestly. On the sites where I have measured it, the 75th percentile LCP moved by 8-15% after a service worker rollout, which is real but is not going to rescue a page that is failing for other reasons. And it is worth remembering that the same caching hides errors from your monitoring: customers served from cache never hit your origin, so your error rates can look healthy while a slice of your audience sees something broken.</p>
+
+        <h2>12. What the Caching Does and Does Not Do for Core Web Vitals</h2>
+
+        <p>Since this is filed under performance, let me be specific about which metrics move.</p>
+
+        <p><strong>LCP on repeat visits: improves, substantially.</strong> Fonts, CSS, and the hero image come from local storage. This is the biggest effect and it is confined to visits two and onward.</p>
+
+        <p><strong>LCP on first visits: unchanged, or slightly worse.</strong> The worker installs during that visit and competes for bandwidth. If you pre-cache a long list of assets, measurably worse — which is why I pre-cache almost nothing.</p>
+
+        <p><strong>INP: unchanged by caching, and often made worse by the SPA architecture.</strong> Interaction latency is about main-thread work, and a client-side router adds main-thread work. If you are moving to an SPA to feel faster, INP is the metric that will tell you whether you succeeded, and in my experience it usually gets worse before it gets better.</p>
+
+        <p><strong>CLS: unchanged by caching, at risk from install banners.</strong> An install prompt that inserts itself into the flow after load is a layout shift. Anchor it with <code>position: fixed</code> and it is free.</p>
+
+        <p><strong>TTFB: unchanged for uncached navigations, near-zero for cached ones.</strong> Which distorts your averages pleasantly and your understanding unhelpfully, so segment your field data by whether a service worker was controlling the page. The broader measurement discipline is covered in <a href="/blog/core-web-vitals-optimization/">measuring Core Web Vitals in CI</a>.</p>
+
+        <p>The summary I give clients: a service worker is a repeat-visit optimisation wearing a performance costume. If your problem is first-visit speed — and on most storefronts it is, because most sessions are first visits — it will not help you.</p>
+
+        <h2>13. The Distributor, Fixed</h2>
+
+        <p>What we actually did, over about five months, and what it cost.</p>
+
+        <p><strong>Weeks one to three: stop the bleeding.</strong> Server-rendered canonicals via an edge worker, computed from a path-matching table, stripping all query parameters except <code>page</code>. <code>X-Robots-Tag: noindex</code> on any URL with a filter parameter. This removed nothing from the index immediately but it stopped the growth, and indexed URLs began falling from 41,000 within a fortnight.</p>
+
+        <p><strong>Weeks two to six, in parallel: the 404 problem.</strong> An edge worker checking SKUs against a KV store refreshed on each catalogue export, returning a genuine 404 for unknown products and a 301 for the 400-odd that had a documented successor. About 2,900 soft 404s stopped being fetched.</p>
+
+        <p><strong>Weeks four to fourteen: server rendering for product and category pages.</strong> The expensive part. They kept React, moved to Next.js with the app router, and rendered product and category routes on the server with the data in the initial payload. Everything behind login stayed client-rendered, which is fine because none of it should be indexed.</p>
+
+        <p><strong>Weeks twelve to sixteen: real pagination under the infinite scroll.</strong> Category pages got server-rendered paginated URLs with anchor links, and the scroll behaviour was layered on top.</p>
+
+        <p>Results at month six from the start of work: 11,900 of 12,400 product URLs indexed, against 431 at the start. Organic sessions recovered to 94% of the pre-relaunch baseline at month seven and passed it at month nine. Render lag on a test token fell from 19 days to under 2.</p>
+
+        <p><strong>What went wrong.</strong> Two things worth recording.</p>
+
+        <p>The edge worker doing canonical rewriting had a path-matching bug that affected category URLs containing a hyphenated two-word segment — roughly 6% of categories — and pointed their canonicals at the wrong parent. Nobody noticed for five weeks because the affected pages were low traffic and the aggregate numbers were improving. When we found it, those categories had been consolidated into their wrong parents in the index and took another two months to recover. The lesson I took: when you deploy a canonical rewrite, sample fifty URLs across every path shape you have and check each one by hand, before deploying. It takes an hour.</p>
+
+        <p>The second was a hydration mismatch on the price element. The server rendered the list price and the client hydrated with the customer-specific trade price, and React's mismatch handling produced a brief flash and, on some pages, a discrepancy between the rendered price and the price in the JSON-LD. Search Console flagged it as a structured data mismatch about three weeks later. It was fixed by rendering the anonymous price server-side and only applying trade pricing after an explicit login check, but I would now treat any price that varies by customer as something to keep out of the initial render entirely.</p>
+
+        <p>And one thing I would do differently at a strategic level: we should have run the token-indexing test in week one rather than week six. It is a two-day setup and it would have given us the single most persuasive number in the project before we had to argue for a fourteen-week rebuild.</p>
+
+        <h2>14. Monitoring It Continuously</h2>
+
+        <p>Rendering regressions are silent. A dependency upgrade moves a component from server to client, nobody notices, and three months later the traffic is down. The defence is a check in the pipeline.</p>
+
+        <pre><code class="language-yaml"># .github/workflows/render-check.yml
+# Fail the build if critical content stops appearing in the server HTML.
+name: SEO render check
+on: [pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci &amp;&amp; npm run build &amp;&amp; npm run start &amp;
+      - run: npx wait-on http://localhost:3000
+      - run: node scripts/assert-server-html.mjs</code></pre>
+
+        <pre><code class="language-javascript">// scripts/assert-server-html.mjs
+// Fetch a representative URL of each template and assert the
+// non-negotiables are present before any JavaScript runs.
+const CASES = [
+  { url: '/products/m8-hex-bolt-zinc-100', needs: ['&lt;h1', 'rel="canonical"', '"@type":"Product"', 'M8 Hex'] },
+  { url: '/c/screws-fixings',              needs: ['&lt;h1', 'rel="canonical"', 'href="/products/'] },
+  { url: '/blog/torque-settings-guide',    needs: ['&lt;h1', 'rel="canonical"'] }
+];
+
+let failed = false;
+for (const { url, needs } of CASES) {
+  const html = await (await fetch('http://localhost:3000' + url)).text();
+  for (const needle of needs) {
+    if (!html.includes(needle)) {
+      console.error(`FAIL ${url}: missing ${needle}`);
+      failed = true;
     }
-  ]
+  }
+  // A page that is mostly script tags is a page that mostly is not there.
+  const scriptBytes = [...html.matchAll(/&lt;script[\s\S]*?&lt;\/script&gt;/g)]
+    .reduce((n, m) =&gt; n + m[0].length, 0);
+  if (scriptBytes / html.length &gt; 0.7) {
+    console.error(`FAIL ${url}: ${Math.round(scriptBytes / html.length * 100)}% script`);
+    failed = true;
+  }
 }
-</code></pre>
+process.exit(failed ? 1 : 0);</code></pre>
 
-        <h2>Asset Precaching and Core Web Vitals Optimization</h2>
-        <p>A fundamental requirement of any technical SEO strategy in the modern era is strict, unwavering adherence to Google's defined Core Web Vitals thresholds. PWAs excel uniquely in this demanding domain primarily through intelligent, programmatic asset precaching. By heavily utilizing Webpack or Vite build plugins properly configured with Workbox, developers can systematically generate manifest files detailing the cryptographic hashes of every required Javascript chunk and CSS payload. The installed Service Worker routinely consumes this manifest file and automatically downloads the assets directly into the Cache Storage API silently in the user's background.</p>
-        <p>When a human user actively clicks a product link or category tile, the application actively avoids a slow network round-trip to retrieve the HTML skeleton and CSS files. Instead, it instantly retrieves the core shell from the local cache and simultaneously fires a lightweight, asynchronous JSON data request for the product parameters. This architectural decoupling drastically reduces the Time to First Byte (TTFB) and effectively eliminates variable network latency as a primary bottleneck for browser rendering. The resulting LCP typically occurs in mere milliseconds rather than multiple seconds, driving higher overall visibility.</p>
+        <p>Alongside that, two things worth watching weekly in Search Console: the count in "Crawled — currently not indexed" as a trend rather than an absolute, and the ratio of indexed pages to sitemap pages per template. A drop in one template's ratio is the earliest signal you will get that a rendering change has broken something, usually weeks before traffic moves.</p>
 
-        <h2>Handling Dynamic Inventory and Real-Time Pricing</h2>
-        <p>Massive e-commerce inventory systems are inherently characterized by extreme data volatility and constant change. Localized inventory levels fluctuate rapidly, promotional flash pricing takes effect momentarily, and heavily personalized discount logic requires dynamic computation. Architectural caching strategies must deeply accommodate this fluid reality without ever serving stale, incorrect data to the live customer. This specific challenge is exactly where the sophisticated Stale-While-Revalidate network pattern proves utterly invaluable for revenue preservation and layout stability.</p>
-        <p>When an active shopper navigates to a PDP, the Service Worker aggressively serves the cached version of the page, ensuring instantaneous rendering. Simultaneously, it actively initiates a background fetch protocol to the headless inventory API to securely retrieve the current state of the product. If the backend API returns updated pricing or revised inventory data, the frontend application state is safely mutated, and the React or Vue reconciliation engine updates the DOM gracefully. This proven pattern guarantees that the user virtually never waits for a blocking loading spinner.</p>
+        <p>And check the rendered screenshot in URL Inspection after any significant frontend release. It takes thirty seconds and it has caught two problems for me that no automated check would have — once a cookie consent overlay covering the entire rendered page, and once a geo-redirect that sent the renderer to a country selector.</p>
 
-        <h2>Offline Checkout Queues and Resilient Data Synchronization</h2>
-        <p>The defining, revolutionary feature of a true PWA is its inherent ability to operate reliably independently of varying network conditions. Safely leveraging the Service Worker Background Sync API purposefully provides a robust, native mechanism for securely handling HTTP POST requests exactly when the mobile user completely loses cellular connectivity. When an offline user actively attempts to add a chosen product to their cart, the Service Worker safely intercepts the outgoing request and securely stores the JSON payload locally in IndexedDB using Workbox's Background Sync plugin module.</p>
-        <p>The application UI optimistically updates, reflecting the addition and seamlessly allowing the user to continue browsing uninterrupted. The exact moment the mobile device reliably regains stable internet connectivity, the Service Worker autonomously and reliably replays the queued HTTP requests, syncing the local application state perfectly with the central headless database. This impressive level of system resilience drastically reduces overall cart abandonment rates in geographical areas heavily plagued with intermittent cellular coverage or unstable Wi-Fi.</p>
+        <h2>15. Blocking the Resources That Build Your Page</h2>
 
-        <h2>Monitoring, Analytics, and Continuous Iteration</h2>
-        <p>Successfully deploying a high-performance e-commerce PWA to production is not the termination of the complex engineering process; it firmly marks the strict beginning of continuous, data-driven iteration heavily based on Real User Monitoring (RUM). Implementing precise, granular telemetry safely allows systems architects to accurately measure the cache hit ratios of the live Service Worker, closely track the exact execution time of backend SSR requests, and proactively monitor the frequency of Background Sync replays.</p>
-        <p>Google Search Console typically provides detailed, delayed reports regarding Core Web Vitals health and mobile usability issues. It is absolutely imperative for engineering teams to cross-reference these external reports closely with internal APM tools like Datadog, Dynatrace, or New Relic. If Search Console actively flags a specific product URL template for recurring CLS issues, frontend developers must rapidly analyze the client-side rendering lifecycle carefully to ensure layout skeleton loaders and CSS aspect-ratio constraints are functioning correctly across all modern viewports.</p>
+        <p>An old mistake that keeps coming back, and it is nastier on a client-rendered site than it ever was on a server-rendered one.</p>
 
-        <h2>Final Architectural Considerations for E-commerce PWAs</h2>
-        <p>The successful, robust execution of a comprehensive PWA strategy in a highly competitive e-commerce environment naturally demands a rigorous, highly disciplined approach to overall system design. The modern frontend must absolutely be treated not merely as a loose collection of static HTML templates, but as an autonomous, deeply stateful client application fully capable of safely negotiating complex data synchronization and rendering paradigms natively. By strictly implementing Server-Side Rendering (SSR) for robust crawler accessibility and confidently deploying a meticulously configured Service Worker designed for sub-second client navigation, forward-thinking systems architects can firmly bridge the historical gap existing between strict SEO indexing requirements and app-like performance expectations.</p>
-        <p>Consistently maintaining clean code architecture, forcefully caching static layout assets, and carefully implementing resilient offline transaction queues will position the commerce platform optimally to handle massive, unpredictable traffic spikes while strictly maintaining perfect Core Web Vitals scores. The advanced code snippets and configurations thoroughly detailed in this comprehensive guide actively represent the foundational structural components of a production-grade system. However, the absolute true efficacy of the PWA fundamentally relies on continuous monitoring, aggressive invalidation logic processed at the edge, and a relentless focus on constantly minimizing client-side computational overhead. Operating efficiently at the direct intersection of deep performance engineering and technical search engine optimization is the undisputed hallmark of successful modern digital commerce architecture.</p>
+        <p>If <code>robots.txt</code> disallows the path your JavaScript bundles are served from, Googlebot cannot fetch them, so rendering produces an empty shell. On a server-rendered site that costs you some interactivity in the rendered screenshot and nothing else. On a client-rendered site it costs you the entire page. The content is not merely degraded; it does not exist.</p>
 
-        <hr />
+        <p>The reason this survives in the wild is that the disallow rules are usually old and were written for good reasons. Someone blocked <code>/static/</code> in 2016 to stop the crawler wasting budget on assets, which was reasonable advice at the time, and then five years later the frontend moved to a bundler that emits into that directory.</p>
+
+        <pre><code class="language-text"># robots.txt — the rules that break rendering, and what to do instead
+
+# Wrong: blocks the bundle that builds every page.
+Disallow: /_next/
+Disallow: /static/
+Disallow: /assets/
+
+# Right: allow anything the renderer needs, block only what
+# generates crawl waste and has no bearing on rendering.
+Allow: /_next/static/
+Disallow: /search
+Disallow: /cart
+Disallow: /*?*sort=
+Disallow: /*?*utm_</code></pre>
+
+        <p>The same applies to any API endpoint your page calls during render. If your product page fetches <code>/api/pdp/{sku}</code> and <code>/api/</code> is disallowed, the render will produce a skeleton. I have found this twice, both times on sites where somebody had blocked the API path for what they described as security reasons — which it is not, since a disallow is a request to well-behaved crawlers and no obstacle at all to anyone hostile.</p>
+
+        <p>Third-party resources matter too, and are easier to miss. A page that cannot render without a script from a tag manager, a personalisation vendor, or a font service is a page whose rendering depends on somebody else's uptime and somebody else's robots rules. The blocked-resources panel in the URL Inspection tool lists all of it, which is why I keep recommending that panel over every other diagnostic in Search Console.</p>
+
+        <p>One more, specific to storefronts with geographic routing: if your edge redirects visitors by IP to a country-specific path, remember that Googlebot crawls predominantly from US addresses. A UK retailer who redirects every non-UK IP to a "we do not ship to your country" page has just told the crawler that is what the whole site is. Serve crawlers the canonical locale, or better, do not IP-redirect at all and offer a country switcher instead.</p>
+
+        <h2>16. Things That Are Not Actually Problems</h2>
+
+        <p>An equal and opposite failure mode is being so cautious about JavaScript that you cripple the site. A few things people worry about that they should not.</p>
+
+        <p><strong>JavaScript-driven filters and sorting on a category page.</strong> Fine, as long as the default unfiltered view is server-rendered and the filtered states have crawlable URLs where you want them indexed and are noindexed where you do not.</p>
+
+        <p><strong>Lazy-loaded images.</strong> Fine with native <code>loading="lazy"</code>. Googlebot handles it. Custom scroll-driven implementations that only set <code>src</code> on intersection are a different matter, because the renderer does not scroll — but native lazy loading is not that.</p>
+
+        <p><strong>Content in tabs and accordions.</strong> Fine if it is in the DOM. Google has been clear that hidden-by-default content is indexed and, since the mobile-first index, treated at full weight.</p>
+
+        <p><strong>React, Vue, or Svelte as such.</strong> The framework is irrelevant. Where the rendering happens is the entire question. A Next.js site rendering on the server is as crawlable as a PHP one, and a PHP site that outputs an empty div and a bundle is as broken as any SPA.</p>
+
+        <p><strong>A large JavaScript bundle, from a crawling perspective.</strong> It is a performance problem and a user problem, and Googlebot has more patience than your customers do. Do not conflate the two arguments; fix the bundle for the humans.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"Google says it renders JavaScript. Why is this still a problem?"</strong> Because rendering is queued, rate-limited, and can fail without telling you, and because links discovered only after rendering are discovered late. On a fifty-page site none of that matters. On a twelve-thousand-page catalogue it decides how much of your site exists.</p>
+
+        <p><strong>"Is prerendering for bots cloaking?"</strong> Not if the content is equivalent. It is a supported workaround and Google has said so. The practical risk is drift: the snapshot service falls behind and starts serving crawlers a different site than the one users get, and at that point it is cloaking whether you meant it or not.</p>
+
+        <p><strong>"Do we need to server-render everything?"</strong> No. Server-render anything you want indexed, which is the catalogue, the content, and the landing pages. Account pages, order history, the wishlist, the checkout — all of that should be client-rendered and noindexed, and you will be glad of the simplicity.</p>
+
+        <p><strong>"Our Lighthouse SEO score is 100. Are we fine?"</strong> No. Lighthouse runs JavaScript, so it sees the rendered page and reports the title and meta description it finds there. It cannot tell you whether those existed in the server response. A perfect Lighthouse SEO score is compatible with a catalogue that is entirely invisible to the initial crawl.</p>
+
+        <p><strong>"How long after fixing this should we expect recovery?"</strong> On the sites I have done this on, indexing counts move within two to four weeks and traffic follows over two to four months. If you also had a duplicate URL problem, add time — consolidating a bloated index is slower than adding pages to it.</p>
+
+        <p><strong>"Should we submit a sitemap with lastmod to speed it up?"</strong> Yes, and make <code>lastmod</code> honest. Google has said it uses the field and also that it ignores it from sites where it is obviously wrong. A sitemap where every URL claims to have been modified today is a sitemap Google stops trusting.</p>
+
+        <p><strong>"Does the install prompt or manifest affect any of this?"</strong> Not at all. Add them freely. It is the rendering architecture that matters, and the two get bundled together by project scope rather than by any technical necessity.</p>
+
+        <h2>18. What I Would Do First</h2>
+
+        <p>In order.</p>
+
+        <p><strong>One.</strong> Run curl against one product page and one category page and count how many of the seven critical elements are in the response. Ten minutes, no tooling, and it tells you immediately whether you have a problem or not.</p>
+
+        <p><strong>Two.</strong> Open Search Console and compare indexed URLs against sitemap URLs, per template. If products are indexed at under 80% of their sitemap count, you have a discovery or rendering problem regardless of what the traffic graph says this month.</p>
+
+        <p><strong>Three.</strong> Set up the two-token indexing lag test. It takes a day and it gives you the number that will settle every subsequent argument.</p>
+
+        <p><strong>Four.</strong> Fix canonicals and status codes before touching the rendering architecture. They are cheap, they can usually be done at the edge without a rebuild, and they stop the index getting worse while you plan the expensive work.</p>
+
+        <p><strong>Five.</strong> Move product and category templates to server rendering. Nothing else. Leave the account area, the cart, and anything behind login exactly where it is.</p>
+
+        <p><strong>Six.</strong> Put the assertion script in CI so the next person who moves a component to the client finds out in a pull request rather than in a traffic report.</p>
+
+        <p>The distributor's agency was not lying when they said Google renders JavaScript. They were answering a different question from the one that mattered. The question that mattered was whether Google would render twelve thousand pages of low-authority product content, promptly, and reliably, and the answer to that was visible in four months of Search Console data before anyone thought to look.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -428,7 +671,7 @@ self.addEventListener('install', (event) => {
               <p>Service Worker caching strategies and offline modes.</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>Decoupling presentation layers for PWA execution.</p>
             </li>
             <li>
@@ -441,7 +684,6 @@ self.addEventListener('install', (event) => {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -475,6 +717,6 @@ self.addEventListener('install', (event) => {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

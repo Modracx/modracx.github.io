@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Content Security Policy (CSP) Directives for E-Commerce | MODRACX</title>
-  <meta name="description" content="Technical guide on crafting strict Content-Security-Policy HTTP headers to stop XSS and credit card skimming." />
+  <meta name="description" content="Nonces, strict-dynamic, report-only rollout and the Magento and Shopify specifics of shipping a Content-Security-Policy that actually stops card skimming." />
   <meta property="og:title" content="Content Security Policy (CSP) Directives for E-Commerce | MODRACX" />
   <meta property="og:description" content="Technical guide on CSP directives by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Content Security Policy (CSP) Directives for E-Commerce</h1>
-        <p class="lede">Enforcing CSP headers prevents unauthorized script execution, mitigating cross-site scripting (XSS) and Magecart card-skimming attacks.</p>
+        <p class="lede">A skimmer ran for nine days on a store that had a CSP header. This is why allowlists fail, and how to ship a nonce policy that doesn't break checkout.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security & Compliance</a></span>
+          <span>Reading Time: 30 min read</span> •
+          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,16 +205,512 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Nginx CSP Header Directive Code</h2>
+        <h2>1. The Skimmer That Ran For Nine Days</h2>
 
-        <pre><code class="language-nginx"># Nginx Content-Security-Policy Directive
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'nonce-rAnd0m123' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://www.google-analytics.com;" always;</code></pre>
+        <p>A cycling retailer I look after called me on a Tuesday in March because their acquirer had flagged a cluster of fraudulent transactions on cards that had last been used on their site. Not a breach notification. Just a pattern, forwarded by a risk analyst who had noticed the same merchant ID appearing behind a run of testing charges in another country.</p>
 
-        <hr />
+        <p>The skimmer had been live for nine days. It was forty-one lines of JavaScript appended to a legitimate file served from a marketing vendor's CDN — a vendor the store had integrated eighteen months earlier for on-site surveys, and which nobody had thought about since. The vendor's build pipeline had been compromised, not the store's. Every byte of the store's own infrastructure was clean. The Magento install was patched. The admin had two-factor. The server had never been touched.</p>
+
+        <p>The store had a Content-Security-Policy header. I want to be clear about that, because the tidy version of this story is that they had no CSP and then they got one. They had one. It read, in part, <code>script-src 'self' 'unsafe-inline' https://*.googletagmanager.com https://cdn.thatvendor.com</code>, and it had been pasted in during a PCI assessment two years earlier to satisfy a checklist item. The vendor's host was on the allowlist because the vendor's script needed to load. The skimmer arrived from that host. The policy permitted it exactly as designed.</p>
+
+        <p>Then the stolen card data went out. To an endpoint the policy said nothing about, because the policy had no <code>connect-src</code> directive, and in the absence of <code>connect-src</code> the browser falls back to <code>default-src</code>, and <code>default-src</code> in that policy was <code>*</code>.</p>
+
+        <p>That is the article in one incident. CSP is the strongest client-side control available to an ecommerce site and the one most commonly deployed in a shape that cannot possibly work. This piece is about the shape that does: nonces, <code>strict-dynamic</code>, a report-only rollout that does not break checkout, and the specific things that go wrong on Magento and Shopify. I've written the wider survey of what every security header does in <a href="/blog/secure-http-headers/">the guide to secure HTTP headers</a>; this one goes down into the single header that takes the most work.</p>
+
+        <h2>2. What the Browser Is Actually Doing</h2>
+
+        <p>The mental model matters, because most bad policies come from a wrong one.</p>
+
+        <p>When a browser parses your HTML and hits a resource — a script tag, a stylesheet link, an image, an <code>XMLHttpRequest</code>, a form submission, a WebSocket, a frame — it checks whether that resource is permitted before it does anything with it. The check happens against the policy delivered with the document that is trying to load it. Not the document that owns the resource. Not some global setting. The response headers of the page currently executing.</p>
+
+        <p>Two consequences that people get wrong constantly.</p>
+
+        <p>First, CSP is per-response. Your homepage, your category pages and your checkout can each have a different policy, and on most storefronts they should. A checkout page that only ever needs Stripe and your own origin does not need the same permissions as a homepage running a heat-mapping tool, a chat widget and four ad pixels. Merchants resist this because one policy is easier to reason about, and then they end up with the union of every requirement on every page — which is the same as no policy on the page that matters.</p>
+
+        <p>Second, blocking happens in the browser, on the customer's machine, before the request goes out. That's the whole value. A blocked <code>fetch()</code> to a collection server never reaches the network. The attacker gets nothing, not even a hit in their logs. Compare that with a server-side control, which by definition cannot see what a script does in someone else's browser.</p>
+
+        <p>What CSP does not do: stop the malicious code arriving, stop it running if you've allowed its source, protect anything that isn't a browser, or help at all against a compromise of your own server. It reduces the blast radius of code you didn't intend to run. That's a narrower promise than the marketing around it suggests, and it is still the single most valuable header on a checkout page.</p>
+
+        <h2>3. Why Allowlists Do Not Work</h2>
+
+        <p>The default way people write CSP is to list the hosts they trust. It feels right. It is how firewalls work, how CORS reads, how most access control is expressed. And for script it is close to useless.</p>
+
+        <p>Three reasons, in increasing order of how much they matter.</p>
+
+        <h3>Allowlisted hosts serve arbitrary code</h3>
+
+        <p>Google's team published research in 2016 that looked at around 1.6 million hosts with CSP headers and found that roughly 95% of policies were trivially bypassable. The common failure was allowlisting a domain that also hosts something attacker-controllable — a JSONP endpoint, a CDN with open path structure, an Angular or similar library that can be induced to evaluate strings.</p>
+
+        <p>If your policy contains <code>https://ajax.googleapis.com</code> so you can load jQuery, it also permits every other file on that host, including old framework builds with known gadget chains. An injected <code>&lt;script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.0.8/angular.js"&gt;</code> followed by an injected template expression gets you arbitrary execution from inside your own allowlist.</p>
+
+        <h3>The supply chain is inside the allowlist by definition</h3>
+
+        <p>This was the cycling retailer's problem and it is the dominant ecommerce case. You allowlist a vendor because you need their script. Their script is the thing that gets compromised. The Polyfill.io incident in June 2024 hit more than a hundred thousand sites this way: a domain that had been a boring, universally trusted script source for years changed hands, and started serving conditional malware to mobile users. Every site with <code>cdn.polyfill.io</code> in its <code>script-src</code> was protected by its CSP exactly as much as a site with no CSP at all.</p>
+
+        <h3>Allowlists rot</h3>
+
+        <p>A policy is a snapshot of your third-party estate on the day someone wrote it. Marketing adds a tag in Tag Manager on a Thursday. Nobody updates the header. Either the tag is blocked and someone opens a ticket, or — far more often — <code>default-src</code> was permissive enough that it wasn't blocked, and the policy quietly means less than it did. After two years of this you have twenty-six hosts in <code>script-src</code>, four of which are no longer used and none of which anyone can justify.</p>
+
+        <p>The fix is not a better allowlist. It's to stop identifying scripts by where they came from and start identifying them by whether you put them there.</p>
+
+        <h2>4. Nonces: Marking the Scripts You Meant</h2>
+
+        <p>A nonce is a random value your server generates per response, puts in the CSP header, and puts on every script tag your template renders. The browser executes a script only if its nonce attribute matches. An attacker injecting a script tag doesn't know the value — it changes on every request — so their tag doesn't run, regardless of which host it points at.</p>
+
+        <pre><code class="language-http">Content-Security-Policy: script-src 'nonce-EDNnf03nceIOfn39fn3e9h3sdfa' 'strict-dynamic'; object-src 'none'; base-uri 'none';</code></pre>
+
+        <pre><code class="language-html">&lt;script nonce="EDNnf03nceIOfn39fn3e9h3sdfa" src="/static/app.js"&gt;&lt;/script&gt;
+&lt;script nonce="EDNnf03nceIOfn39fn3e9h3sdfa"&gt;
+  // Inline scripts work too, which is what makes this practical
+  window.dataLayer = window.dataLayer || [];
+&lt;/script&gt;</code></pre>
+
+        <p>Three rules about generating the value, and all three have been broken in production systems I've audited.</p>
+
+        <p>It must be cryptographically random. Not a timestamp, not a hash of the URL, not an incrementing counter. At least 128 bits of entropy from a CSPRNG.</p>
+
+        <p>It must be different on every response. This is the one full-page caching breaks, and it's covered below where I get into Varnish, because on Magento it is the single largest obstacle to shipping a nonce policy.</p>
+
+        <p>It must not be predictable from anything the attacker can see. If you derive it from the session ID, and the attacker can read the session ID through the same XSS they're using, you've handed them the key.</p>
+
+        <p>In Nginx you can generate one per request without touching PHP, which is useful for the tags you control at the edge:</p>
+
+        <pre><code class="language-nginx">http {
+    map $request_id $csp_nonce {
+        # $request_id is 32 hex chars of randomness, unique per request.
+        # Good enough as a nonce source and free — no module needed.
+        default $request_id;
+    }
+
+    server {
+        location / {
+            add_header Content-Security-Policy
+              "script-src 'nonce-$csp_nonce' 'strict-dynamic' https: 'unsafe-inline'; object-src 'none'; base-uri 'none'" always;
+
+            # sub_filter can inject the nonce into templates you cannot edit.
+            # Use sparingly; it defeats gzip upstream and costs CPU.
+            sub_filter '&lt;script' '&lt;script nonce="$csp_nonce"';
+            sub_filter_once off;
+        }
+    }
+}</code></pre>
+
+        <p>I've shipped that <code>sub_filter</code> approach twice and regretted it once. It rewrites every occurrence of the literal string in the response body, including ones inside JavaScript strings and inside JSON blobs that happen to contain markup. On a store whose product descriptions contained escaped HTML examples, it corrupted three product pages before anyone noticed. If you can add the nonce in your templating layer, do that instead.</p>
+
+        <h2>5. strict-dynamic, and Why You Want It</h2>
+
+        <p>Nonces alone solve the tags in your HTML. They don't solve the scripts those scripts load. Google Tag Manager's whole job is to inject further script tags at runtime; so does every consent platform, every A/B testing tool, every payment SDK that lazily pulls a second bundle. Those injected tags have no nonce, because GTM doesn't know yours.</p>
+
+        <p><code>'strict-dynamic'</code> is the answer. It says: any script that was itself trusted — because it carried a valid nonce or hash — may load further scripts, and those inherit the trust. Simultaneously it makes the browser ignore every host allowlist, <code>'self'</code>, and <code>https:</code> in that directive.</p>
+
+        <p>That last part is the trade people miss. Turning on <code>'strict-dynamic'</code> disables your allowlist. Deliberately. The allowlist was the weak part; you're replacing it with propagated trust from an explicit root.</p>
+
+        <p>The canonical policy for a site that has this working looks like this, and it's short:</p>
+
+        <pre><code class="language-http">Content-Security-Policy:
+  script-src 'nonce-{RANDOM}' 'strict-dynamic' https: 'unsafe-inline';
+  object-src 'none';
+  base-uri 'none';
+  require-trusted-types-for 'script';</code></pre>
+
+        <p>The <code>https: 'unsafe-inline'</code> at the end is not a mistake and not a weakening. Browsers that support <code>'strict-dynamic'</code> ignore both when a nonce is present. Browsers that don't support it — and there are still a few in the long tail of embedded webviews and older Safari on locked-down iOS devices — fall back to the permissive value rather than blocking everything and rendering a blank page. It's a graceful degradation trick and it is the officially recommended one.</p>
+
+        <p>What breaks under <code>'strict-dynamic'</code>: scripts injected using <code>document.write</code>, and scripts injected by parsing HTML strings rather than creating elements. Propagation only happens through the DOM APIs — <code>createElement('script')</code> and friends. Anything that goes through the parser loses the trust chain. Older ad tags and some legacy chat widgets still use <code>document.write</code>, and they will simply stop loading. You will find out during report-only, which is the point of report-only.</p>
+
+        <h2>6. Hashes, and When They Beat Nonces</h2>
+
+        <p>The other way to identify a script you meant to run is by the SHA hash of its contents. The browser hashes the inline block and compares.</p>
+
+        <pre><code class="language-http">script-src 'sha256-B2yPHKaXnvFWtRChIbabYmUBFZdVfKKXHbWtWidDVF8=' 'strict-dynamic';</code></pre>
+
+        <p>Hashes are strictly better than nonces in one situation: static, fully cached pages. If your storefront is Hydrogen or a static build served from a CDN edge with no per-request server logic, you cannot generate a per-response nonce — so you compute hashes at build time and ship them in the header. This is the normal pattern for Jamstack storefronts, and it's why the framework you chose determines which of these two you use more than your preferences do.</p>
+
+        <p>Since Chrome 105 and the corresponding Firefox release, hashes propagate through <code>'strict-dynamic'</code> the same way nonces do for external scripts too, using the hash of the file's content. That was the missing piece that made hash-based policies viable for anything beyond a handful of inline blocks.</p>
+
+        <p>The operational problem with hashes is that they change when the file changes. Every build produces a new set. If your header is written by hand in an Nginx config and your bundle hash changes on deploy, you have shipped a broken site. The hashes must be generated by the same build that generates the assets and injected into whatever emits the header — a Netlify or Vercel headers file, a Cloudflare Worker, an Nginx include that the pipeline writes. If that plumbing doesn't exist, use nonces and a dynamic origin instead. I've seen more outages caused by stale hashes than by any other CSP mechanism.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Mechanism</th><th>Best for</th><th>Fails when</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Host allowlist</td><td>Nothing, for script. Fine for <code>img-src</code>, <code>frame-src</code>, <code>font-src</code>.</td><td>Any allowlisted host is compromised or serves a gadget.</td></tr>
+            <tr><td>Nonce</td><td>Server-rendered pages: Magento, WooCommerce, Shopify Liquid, Next.js SSR.</td><td>Full-page cache serves the same nonce to everyone.</td></tr>
+            <tr><td>Hash</td><td>Static builds, edge-cached pages, a small fixed set of inline blocks.</td><td>Content changes without the header being regenerated.</td></tr>
+            <tr><td>strict-dynamic</td><td>Any site with tag managers or SDKs that inject scripts.</td><td>Third parties use <code>document.write</code>.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>7. The Directives That Actually Stop Card Theft</h2>
+
+        <p>If you take one thing from this article: <code>script-src</code> gets all the attention and it is not the directive that stops the money leaving.</p>
+
+        <p>A skimmer needs to do two things. Read the card fields, and send them somewhere. Reading is hard to prevent — once script is running on the page, the DOM is open to it. Sending is very preventable, and there are exactly three ways to do it.</p>
+
+        <h3>connect-src</h3>
+
+        <p>Covers <code>fetch</code>, <code>XMLHttpRequest</code>, <code>sendBeacon</code>, WebSocket, EventSource. This is where the data goes in the overwhelming majority of skimmers. On a checkout page it should be a short, explicit list:</p>
+
+        <pre><code class="language-http">connect-src 'self' https://api.stripe.com https://m.stripe.network;</code></pre>
+
+        <p>No wildcards. No <code>https:</code>. If your analytics vendor needs to beacon from checkout, decide whether that's worth it — I usually argue it isn't, and that checkout analytics should be server-side.</p>
+
+        <h3>form-action</h3>
+
+        <p>An injected form, or a rewritten <code>action</code> attribute on your existing one, posts the card details straight to the attacker with no JavaScript networking at all. <code>form-action 'self'</code> stops it. This directive is missing from perhaps four out of five policies I audit, and it is two words long.</p>
+
+        <p>One warning: it is not inherited by frames and, more importantly, redirects are checked against it in most browsers. If your payment flow posts to your own origin and then 302s to a PSP's hosted page, <code>'self'</code> alone will break it. List the PSP host too.</p>
+
+        <h3>img-src</h3>
+
+        <p>The old exfiltration trick. Build an <code>Image()</code> object with the stolen data in the query string, set its <code>src</code>, and the browser makes the request. No response needed. If <code>img-src</code> is <code>https:</code> or <code>*</code> — and it usually is, because product images come from everywhere — this path is wide open. On checkout specifically, where you probably don't need arbitrary images, tighten it.</p>
+
+        <p>There's a subtlety worth knowing about: browsers deliberately strip the path and query from the blocked-URI field in violation reports for cross-origin resources, which limits what you learn from a report. But the request itself is still blocked, and that's what counts.</p>
+
+        <p>Add <code>base-uri 'none'</code> while you're there. An injected <code>&lt;base&gt;</code> tag rewrites every relative URL on the page, including the ones pointing at your own scripts, which turns a single HTML injection into full script control without needing to bypass <code>script-src</code> at all. It costs nothing and almost nobody sets it.</p>
+
+        <h2>8. Report-Only: The Rollout That Doesn't Break Checkout</h2>
+
+        <p>Never deploy an enforcing CSP first. The header exists in two flavours, and the report-only one is the entire reason this is a tractable project rather than a gamble.</p>
+
+        <pre><code class="language-http">Content-Security-Policy-Report-Only:
+  default-src 'self';
+  script-src 'nonce-{RANDOM}' 'strict-dynamic';
+  connect-src 'self' https://api.stripe.com;
+  report-to csp-endpoint;
+
+Reporting-Endpoints: csp-endpoint="https://example.com/_csp"</code></pre>
+
+        <p>Under report-only the browser evaluates the policy, blocks nothing, and POSTs a JSON report for each violation. You get a list of everything the policy would have broken, from real customers on real browsers, without breaking anything.</p>
+
+        <p>Both flavours can be sent simultaneously. This is the mechanism for tightening an existing policy safely: keep the current enforcing header exactly as it is, add a stricter report-only one, watch for a fortnight, then promote. I do this for every change now, including ones I'm confident about.</p>
+
+        <p>The old <code>report-uri</code> directive and the newer <code>report-to</code> both exist, and browser support is annoyingly split — Safari still only understands <code>report-uri</code> as of the versions in wide use, Chrome has moved to <code>report-to</code> with the <code>Reporting-Endpoints</code> header. Send both. They're a few dozen bytes.</p>
+
+        <h3>What the reports actually look like</h3>
+
+        <pre><code class="language-json">{
+  "csp-report": {
+    "document-uri": "https://example.com/checkout/",
+    "referrer": "",
+    "violated-directive": "script-src",
+    "effective-directive": "script-src",
+    "original-policy": "default-src 'self'; script-src 'nonce-...' 'strict-dynamic'",
+    "blocked-uri": "https://cdn.thatvendor.com/survey/loader.js",
+    "status-code": 200,
+    "line-number": 412,
+    "source-file": "https://example.com/checkout/"
+  }
+}</code></pre>
+
+        <p>And here is the thing nobody warns you about: the volume is absurd, and most of it is noise. On a store doing 40,000 sessions a day I collected 1.9 million reports in the first 24 hours of report-only. Roughly 70% came from browser extensions injecting their own scripts and styles into the page — password managers, coupon finders, ad blockers, accessibility tools. Another chunk came from mobile carrier injection and from in-app browsers rewriting pages.</p>
+
+        <p>You cannot fix those and you must not add them to the policy. Filter them at the collector: drop reports where <code>blocked-uri</code> starts with <code>chrome-extension:</code>, <code>moz-extension:</code>, <code>safari-extension:</code>, <code>webviewprogressproxy:</code>, or is the literal string <code>inline</code> from a source file that isn't yours. Drop anything with <code>about:blank</code> as the document URI.</p>
+
+        <pre><code class="language-javascript">// Cloudflare Worker CSP collector. Rate-limits, filters extension noise,
+// and buckets by directive+blocked-uri so you get counts, not a firehose.
+const IGNORE = /^(chrome|moz|safari|ms-browser)-extension:|^webviewprogressproxy:|^about:/;
+
+export default {
+  async fetch(request, env) {
+    if (request.method !== 'POST') return new Response(null, { status: 405 });
+    // Sample: 1.9M reports/day is not worth storing in full.
+    if (Math.random() &gt; 0.05) return new Response(null, { status: 204 });
+
+    const body = await request.json().catch(() =&gt; null);
+    const r = body?.['csp-report'] ?? body?.[0]?.body;
+    if (!r) return new Response(null, { status: 204 });
+
+    const blocked = r['blocked-uri'] || r.blockedURL || '';
+    if (IGNORE.test(blocked)) return new Response(null, { status: 204 });
+
+    const key = `${r['effective-directive'] || r.effectiveDirective}|${blocked}`;
+    await env.CSP_COUNTS.put(key, '1', { expirationTtl: 604800 });
+    return new Response(null, { status: 204 });
+  }
+};</code></pre>
+
+        <p>Sample aggressively. You are looking for distinct violation types, not a complete census. Five per cent of traffic surfaces everything that matters within an hour.</p>
+
+        <h2>9. The Rollout I Use</h2>
+
+        <p>Seven stages, and the whole thing takes about six weeks on a store of any size. Rushing it is how you end up rolling back and never trying again.</p>
+
+        <p><strong>Stage one, inventory.</strong> Before any header goes out, list what the site loads. Not what you think it loads. Run the checkout, the account pages, the product pages and the cart through a browser with the network panel open and export a HAR, then diff the third-party origins against your allowlist. On the homeware store this turned up an analytics vendor whose contract had ended fourteen months earlier and whose tag was still firing.</p>
+
+        <p><strong>Stage two, report-only with a deliberately loose policy.</strong> Something you're confident won't produce much noise, just to prove the reporting pipeline works end to end. <code>default-src 'self' https:; report-to csp-endpoint</code>. If reports don't arrive, fix that before going further.</p>
+
+        <p><strong>Stage three, report-only with the target policy.</strong> The strict one. Nonces, <code>strict-dynamic</code>, tight <code>connect-src</code>. Leave it for two weeks minimum — you need a full weekly cycle, and you need whatever runs monthly to fire at least once. Marketing campaigns introduce scripts that don't appear in a Tuesday snapshot.</p>
+
+        <p><strong>Stage four, fix what the reports show.</strong> Every violation gets a decision: add a nonce, add a hash, refactor the inline handler, or drop the vendor. Never "add the host to the allowlist" unless it's a non-script directive.</p>
+
+        <p><strong>Stage five, enforce on a low-traffic path first.</strong> Not checkout. Pick the account section or a CMS page. Watch error rates and conversion for a week.</p>
+
+        <p><strong>Stage six, enforce on checkout.</strong> Alone, and with someone watching. This is the page that matters and the page where a mistake costs revenue by the minute.</p>
+
+        <p><strong>Stage seven, enforce everywhere, and keep a report-only header running permanently.</strong> The permanent report-only policy is one notch stricter than the enforced one. It tells you when a new vendor is added, before it becomes a problem.</p>
+
+        <h2>10. Magento 2: Where It Gets Hard</h2>
+
+        <p>Magento ships CSP support out of the box since 2.3.5, through the <code>Magento_Csp</code> module, and the implementation is better than most people give it credit for. It's also where the majority of my CSP work goes wrong, for reasons that are specific to how Magento renders and caches.</p>
+
+        <h3>The module and its config</h3>
+
+        <p>Policies live in <code>csp_whitelist.xml</code> inside a module, and the mode is set per area in the admin under Stores → Configuration → Security → Content Security Policy, or in <code>config.php</code>. Storefront and admin are configured separately, which is genuinely useful — you can enforce hard in the admin, where you control every script, long before you touch the storefront.</p>
+
+        <pre><code class="language-xml">&lt;?xml version="1.0"?&gt;
+&lt;csp_whitelist xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Csp:etc/csp_whitelist.xsd"&gt;
+    &lt;policies&gt;
+        &lt;policy id="connect-src"&gt;
+            &lt;values&gt;
+                &lt;value id="stripe" type="host"&gt;https://api.stripe.com&lt;/value&gt;
+                &lt;value id="stripe-network" type="host"&gt;https://m.stripe.network&lt;/value&gt;
+            &lt;/values&gt;
+        &lt;/policy&gt;
+        &lt;policy id="frame-src"&gt;
+            &lt;values&gt;
+                &lt;value id="stripe-js" type="host"&gt;https://js.stripe.com&lt;/value&gt;
+            &lt;/values&gt;
+        &lt;/policy&gt;
+    &lt;/policies&gt;
+&lt;/csp_whitelist&gt;</code></pre>
+
+        <p>Put your own entries in a dedicated module rather than editing a vendor one. Extension vendors ship their own <code>csp_whitelist.xml</code> files, which is the correct pattern and means a well-behaved extension does not require you to know what it contacts.</p>
+
+        <h3>The Varnish problem</h3>
+
+        <p>Here is the thing that stops most Magento CSP projects. Magento's full-page cache — Varnish in any serious deployment — stores the rendered HTML and serves it to thousands of visitors. The nonce is in that HTML. It is also in the header, and Varnish caches headers too, so at first glance they stay in sync and everything looks fine.</p>
+
+        <p>They stay in sync at the cost of the entire security property. A nonce that is identical for every visitor for the four hours that page sits in cache is a public constant. An attacker requests the page, reads the nonce, and injects a script tag carrying it. The policy passes it.</p>
+
+        <p>There are three ways out and they are not equally good.</p>
+
+        <p>The first is to have Varnish generate a fresh nonce per response and substitute it into both the header and the body with VMOD-based regex replacement. It works. It's also fragile, requires <code>vmod_re2</code> or similar, and body rewriting in Varnish costs you the ability to cache the gzipped representation.</p>
+
+        <p>The second is ESI. Magento already uses Edge Side Includes for private content blocks, so the machinery exists. You render the script tags in an ESI block that Varnish always fetches fresh. In practice this is painful because scripts are scattered throughout the layout, not conveniently grouped.</p>
+
+        <p>The third, and the one I use, is to move nonce generation to the edge — Nginx, or a CDN worker in front of Varnish — and inject it after the cache. The <code>$request_id</code> map shown earlier does this at essentially zero cost. The trade is that you must rewrite the body at the edge, which brings back the <code>sub_filter</code> problems I mentioned, and you must be careful to run after Varnish has decompressed or to disable gzip between the two.</p>
+
+        <p>The fourth option, which I'll name because it is what most stores actually do: accept hash-based policies for the inline blocks and skip nonces entirely. Magento's inline scripts are largely generated by the same templates every time, so a build step can enumerate their hashes. Less elegant, considerably less work, and it does close the injection path.</p>
+
+        <h3>Knockout, RequireJS and x-magento-init</h3>
+
+        <p>Magento's frontend is built on RequireJS and Knockout, and both have CSP consequences.</p>
+
+        <p>RequireJS creates script elements dynamically, so it needs <code>'strict-dynamic'</code> to work at all under a nonce policy — with a plain allowlist you must permit your own origin, which is fine, but under <code>strict-dynamic</code> the loader's own tag needs the nonce and everything it pulls inherits.</p>
+
+        <p>Knockout's default template engine uses <code>new Function()</code>, which requires <code>'unsafe-eval'</code>. Magento's bundled Knockout has been patched to avoid this in recent versions, but a custom binding or a third-party module using the raw library will drag <code>'unsafe-eval'</code> back into your policy, and once it's there your <code>script-src</code> is meaningfully weaker. Grep the codebase for <code>new Function</code> and <code>eval(</code> before you promise anyone a policy without it.</p>
+
+        <p>The <code>x-magento-init</code> pattern — <code>&lt;script type="text/x-magento-init"&gt;</code> containing JSON — is not executed as script by the browser, since the type is unrecognised. Those blocks are read by Magento's own JS and don't need nonces. Useful to know, because they look like violations waiting to happen and aren't.</p>
+
+        <h2>11. Shopify: Less Control, Different Problems</h2>
+
+        <p>On Shopify you do not control response headers on storefront pages. That's the constraint everything else follows from.</p>
+
+        <p>What you can do is a <code>&lt;meta http-equiv="Content-Security-Policy"&gt;</code> tag in <code>theme.liquid</code>. It works, with limitations: <code>frame-ancestors</code>, <code>report-uri</code>, <code>report-to</code> and <code>sandbox</code> are all ignored in meta form. Losing <code>report-to</code> means losing the report-only rollout, which is the part I'd least like to give up. Practically, you either accept a blind deployment on a staging theme or you proxy the storefront through something that can set headers.</p>
+
+        <pre><code class="language-liquid">&lt;!-- theme.liquid, immediately after &lt;head&gt; --&gt;
+&lt;meta http-equiv="Content-Security-Policy" content="
+  default-src 'self' https://cdn.shopify.com https://*.myshopify.com;
+  script-src 'self' 'unsafe-inline' https://cdn.shopify.com https://cdn.shopifycloud.com https://*.shopifysvc.com;
+  connect-src 'self' https://monorail-edge.shopifysvc.com https://*.myshopify.com;
+  img-src 'self' data: https://cdn.shopify.com https://*.shopifycdn.com;
+  frame-src https://*.shopifycloud.com https://js.stripe.com;
+  base-uri 'self';
+  form-action 'self' https://*.myshopify.com https://checkout.shopify.com;
+"&gt;</code></pre>
+
+        <p>Note the <code>'unsafe-inline'</code>. Shopify's own storefront JavaScript emits inline blocks you cannot nonce, because Liquid renders before you get a chance and there's no per-request random you can thread through reliably. This is the honest state of it: on a standard Shopify theme, a script policy without <code>'unsafe-inline'</code> is not achievable without substantial theme surgery, and even then app blocks will break it.</p>
+
+        <p>The compensating control is that Shopify Checkout is not your problem. Since the migration away from <code>checkout.liquid</code> — additional scripts there were deprecated in August 2024 for the Plus tier, with checkout extensibility replacing them — the card fields live on Shopify's infrastructure under Shopify's own policy. Whatever you do to your theme, the payment page is theirs. That removes the highest-value target from your responsibility entirely, and it's the single strongest argument for Shopify on a PCI basis.</p>
+
+        <p>Where you still have exposure: the cart, the account pages, and any custom checkout-adjacent flow. Apps installed through the Shopify App Store inject script tags via <code>ScriptTag</code> or theme app extensions, and each one widens whatever policy you wrote. Audit the app list quarterly. I've found stores running eleven apps of which four were unused and two duplicated functionality.</p>
+
+        <p>On Shopify Plus with a Hydrogen storefront the picture changes completely — you own the server, you can set real headers, and Hydrogen ships a <code>createContentSecurityPolicy</code> helper that generates a nonce per request and threads it into the React tree. That's the version I'd recommend if you're choosing.</p>
+
+        <h2>12. What Actually Breaks</h2>
+
+        <p>In rough order of how often I see it during a report-only period.</p>
+
+        <p><strong>Inline event handlers.</strong> <code>onclick</code>, <code>onchange</code>, <code>onsubmit</code> attributes in templates. No nonce or hash can save these; the only fix is <code>addEventListener</code>. On a legacy Magento theme I counted 340 of them across 60 templates. That was three days of work and it was the bulk of the project. There is no shortcut, and anyone offering one is telling you to keep <code>'unsafe-inline'</code>.</p>
+
+        <p><strong>Inline styles.</strong> <code>style-src</code> without <code>'unsafe-inline'</code> breaks any library that sets <code>element.style.display</code> — which is nearly all of them. jQuery's <code>.show()</code> and <code>.hide()</code> do exactly this. My position: keep <code>'unsafe-inline'</code> in <code>style-src</code> and spend the effort on <code>script-src</code>. CSS injection attacks exist and can exfiltrate data through attribute selectors and background images, but they need an injection point you'd have already lost the game over, and the cost of eliminating inline styles across a real theme is enormous relative to the return. That's a judgement call and reasonable people disagree with me on it.</p>
+
+        <p><strong>Google Tag Manager.</strong> Works fine with a nonce plus <code>'strict-dynamic'</code>, provided the GTM snippet itself carries the nonce and none of your tags use custom HTML with <code>document.write</code>. It will not work under a pure allowlist policy because tags load from arbitrary vendor hosts. If marketing has Custom HTML tags in the container, review every one — that's a script injection point with a web UI and typically looser access control than your Git repository.</p>
+
+        <p><strong>Web fonts.</strong> <code>font-src</code> and <code>style-src</code> both matter for Google Fonts, since the CSS comes from <code>fonts.googleapis.com</code> and the files from <code>fonts.gstatic.com</code>. Self-hosting removes the problem and is faster anyway, which I've argued at length in the piece on <a href="/blog/preconnect-dns-prefetch/">connection setup and third-party origins</a>.</p>
+
+        <p><strong>Payment SDKs.</strong> Stripe needs <code>js.stripe.com</code> in <code>script-src</code> and <code>frame-src</code>, plus <code>api.stripe.com</code> and <code>m.stripe.network</code> in <code>connect-src</code>. PayPal is worse and its requirements have changed twice in the last two years. Adyen, Klarna and Braintree all publish their required directives; use the vendor's list as a starting point and then remove what your report-only data says you don't hit.</p>
+
+        <p><strong>Browser extensions.</strong> Covered above — not fixable, and the reason your report volume is 20x what you expected.</p>
+
+        <p><strong>Blob and data URLs.</strong> Workers created from <code>blob:</code> need <code>worker-src blob:</code>. Some analytics libraries do this. It won't show up until you look.</p>
+
+        <h2>13. Trusted Types, and Whether You Need Them</h2>
+
+        <p>CSP stops scripts loading. It does not stop your own trusted script writing attacker-controlled markup into the DOM. That's DOM XSS, and it lives entirely inside code your policy has already approved.</p>
+
+        <pre><code class="language-http">Content-Security-Policy: require-trusted-types-for 'script'; trusted-types default dompurify;</code></pre>
+
+        <p>With that header, assigning a plain string to <code>innerHTML</code>, <code>outerHTML</code>, <code>document.write</code>, or a <code>&lt;script&gt;</code> element's <code>src</code> throws a TypeError. The only way to write to those sinks is through a policy object that you registered.</p>
+
+        <pre><code class="language-javascript">// Register once, early, before any code touches innerHTML.
+if (window.trustedTypes &amp;&amp; trustedTypes.createPolicy) {
+  trustedTypes.createPolicy('default', {
+    createHTML: (input) =&gt; DOMPurify.sanitize(input, { RETURN_TRUSTED_TYPE: false }),
+    createScriptURL: (url) =&gt; {
+      const u = new URL(url, location.origin);
+      // Only allow script URLs from origins we actually ship code from.
+      if (u.origin !== location.origin) throw new TypeError(`blocked script URL: ${url}`);
+      return url;
+    }
+  });
+}</code></pre>
+
+        <p>Honest assessment: this is Chromium-only in practice. Firefox and Safari have been moving toward it but you cannot rely on it as a control across your traffic. It's worth deploying in report-only on Chrome to find your DOM XSS sinks — the reports are genuinely useful as a static analysis substitute — and I would not currently spend engineering time making a legacy Magento theme Trusted Types clean. On a greenfield React or Hydrogen build where you control every sink from day one, yes, turn it on.</p>
+
+        <h2>14. PCI DSS 4.0 and the Compliance Angle</h2>
+
+        <p>Two requirements became mandatory on 31 March 2025 and both are about exactly this problem.</p>
+
+        <p><strong>6.4.3</strong> requires that every script on a payment page is authorised, that its integrity is assured, and that an inventory of scripts exists with written business justification for each. <strong>11.6.1</strong> requires a mechanism that detects unauthorised modification of the HTTP headers and the content of payment pages, alerting on change, evaluated at least weekly.</p>
+
+        <p>CSP is not, on its own, sufficient for either. It's a strong contributor. For 6.4.3, a nonce-based policy plus Subresource Integrity on external scripts covers authorisation and integrity, and the <code>csp_whitelist.xml</code> or equivalent config doubles as part of the inventory — though you still need the business justification column, which is a spreadsheet, not a header. For 11.6.1, the report-only endpoint gives you change detection on scripts but nothing on headers themselves; you need a separate synthetic check that fetches the payment page and diffs both.</p>
+
+        <p>I'd add: assessors vary enormously in how they read this. I've had one accept a documented CSP plus SRI plus a weekly synthetic diff as complete coverage, and another insist on a commercial client-side monitoring product. Ask early, in writing, rather than building to a guess.</p>
+
+        <p>The SRI half of that pairing has its own considerations — particularly what happens when a vendor updates a file and your hash stops matching — and I've covered it separately in <a href="/blog/sri-implementation/">the piece on Subresource Integrity</a>.</p>
+
+        <h2>15. A Worked Example, Including the Part That Went Wrong</h2>
+
+        <p>Back to the cycling retailer. Magento 2.4.6, Varnish, Cloudflare in front, about 40,000 sessions a day, average order value £86, checkout conversion 2.4%.</p>
+
+        <p>Starting policy, the one that had been there for two years:</p>
+
+        <pre><code class="language-http">Content-Security-Policy: default-src *; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.googletagmanager.com https://cdn.thatvendor.com https://*.hotjar.com https://connect.facebook.net; style-src * 'unsafe-inline'; img-src * data:;</code></pre>
+
+        <p>Twenty-two hosts by the time I'd expanded the wildcards against real traffic. No <code>connect-src</code>, no <code>form-action</code>, no <code>base-uri</code>, no <code>object-src</code>.</p>
+
+        <p>Week one, inventory. HAR captures across eight page types found 31 distinct third-party origins. Nine were unused: three from vendors whose contracts had ended, four loaded only by other tags that were themselves unused, two were typo'd hostnames that had never resolved. Removing them was the highest-value hour of the whole project and had nothing to do with CSP.</p>
+
+        <p>Week two, report-only pipeline. The Cloudflare Worker above, 5% sampling, writing to Workers KV. First 24 hours: 94,000 sampled reports, which extrapolates to about 1.9 million. After the extension filter, 2,300. After deduplication by directive plus blocked URI, 47 distinct violations.</p>
+
+        <p>Week three to five, fixes. 340 inline handlers refactored across the theme. Two Knockout custom bindings rewritten to drop <code>new Function</code>. GTM snippet nonced. Three Custom HTML tags in the container rewritten to use the Tag Manager's own APIs instead of <code>document.write</code>. Google Fonts self-hosted, which took an afternoon and removed two origins.</p>
+
+        <p><strong>Here is what went wrong.</strong> On the Thursday of week five I enforced on the account pages, as planned, at 09:00. At 09:20 the support queue had eleven tickets about the returns form. The returns flow rendered inside an iframe from a third-party logistics provider, and <code>frame-src</code> in my new policy listed the provider's <code>www</code> host — but their iframe redirected to a regional subdomain, <code>eu2.</code>, after a geo check. Nothing in three weeks of report-only had caught it, because <code>frame-src</code> violations were being reported and I had filtered them out. My ignore regex for extension noise had a clause matching <code>about:</code>, and the blocked URI for the redirected frame was reported as <code>about:blank</code> in the version of Chrome most of their customers ran.</p>
+
+        <p>Twenty-five minutes of broken returns, rolled back with a Cloudflare page rule, fixed properly the same afternoon. The lesson I actually took: filter noise by <em>source</em>, never by blocked URI pattern alone, and always re-read your filters as a possible cause when enforcement surprises you.</p>
+
+        <p>Final policy on checkout:</p>
+
+        <pre><code class="language-http">Content-Security-Policy:
+  default-src 'none';
+  script-src 'nonce-{RANDOM}' 'strict-dynamic' https: 'unsafe-inline';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: https://cdn.example.com;
+  font-src 'self';
+  connect-src 'self' https://api.stripe.com https://m.stripe.network;
+  frame-src https://js.stripe.com https://eu2.logistics.example;
+  form-action 'self' https://checkout.stripe.com;
+  base-uri 'none';
+  object-src 'none';
+  frame-ancestors 'none';
+  upgrade-insecure-requests;
+  report-to csp-endpoint;</code></pre>
+
+        <p>Results after six weeks of enforcement: conversion moved from 2.4% to 2.44%, which is inside noise and I claim nothing from it. Page weight dropped 180KB from the removed dead tags, which is real. Time to Interactive on the product page improved by about 400ms on the same basis. And in November a consent-management vendor pushed a build that started beaconing to a new analytics endpoint; the report-only header caught it in six hours, which is the outcome the whole exercise exists for.</p>
+
+        <h2>16. Testing and Keeping It Honest</h2>
+
+        <p>A CSP that was correct on the day you shipped it is a CSP that is slowly becoming wrong. Three checks, all cheap.</p>
+
+        <p><strong>Evaluate the policy string itself.</strong> Google's CSP Evaluator will tell you if <code>'strict-dynamic'</code> is neutered by something, if you've allowlisted a known-bypassable host, or if a directive is missing its fallback. It's a static check and it catches the class of error where a policy looks strict and isn't.</p>
+
+        <p><strong>Assert the header in CI.</strong> A synthetic request against staging on every deploy, checking that the header exists, that it contains <code>'nonce-</code>, that it does not contain <code>'unsafe-eval'</code>, and that the nonce differs between two consecutive requests. That last assertion is the one that catches a caching regression, and it is the failure mode most likely to reappear silently.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# ci/csp-check.sh — fails the build if the policy has regressed.
+set -euo pipefail
+URL="${1:?usage: csp-check.sh URL}"
+
+h1=$(curl -sSI "$URL" | grep -i '^content-security-policy:' || true)
+h2=$(curl -sSI "$URL" | grep -i '^content-security-policy:' || true)
+
+[ -n "$h1" ] || { echo "FAIL: no CSP header"; exit 1; }
+grep -q "'unsafe-eval'" &lt;&lt;&lt;"$h1" &amp;&amp; { echo "FAIL: unsafe-eval present"; exit 1; }
+grep -q "'nonce-" &lt;&lt;&lt;"$h1" || { echo "FAIL: no nonce"; exit 1; }
+grep -q "form-action" &lt;&lt;&lt;"$h1" || { echo "FAIL: form-action missing"; exit 1; }
+
+n1=$(grep -o "'nonce-[^']*'" &lt;&lt;&lt;"$h1" | head -1)
+n2=$(grep -o "'nonce-[^']*'" &lt;&lt;&lt;"$h2" | head -1)
+[ "$n1" != "$n2" ] || { echo "FAIL: nonce is cached — identical across requests"; exit 1; }
+echo "OK"</code></pre>
+
+        <p><strong>Alert on report volume, in both directions.</strong> A spike means something changed. A drop to zero usually means the reporting endpoint broke, not that you achieved perfection. I've had a collector silently 500 for three weeks and only noticed because a graph was suspiciously flat.</p>
+
+        <h2>17. The Directives Nobody Sets</h2>
+
+        <p>Beyond the big ones, a handful that cost nothing and close real paths.</p>
+
+        <p><code>frame-ancestors 'none'</code> on checkout. Supersedes <code>X-Frame-Options</code> and stops clickjacking on the one page where a clickjack is worth money. Note it is ignored in meta tags, so Shopify themes cannot set it — but Shopify sets its own on checkout.</p>
+
+        <p><code>object-src 'none'</code>. Flash is gone but plugin content is still a script execution vector through legacy handlers. There is no downside; nothing on a modern storefront uses <code>&lt;object&gt;</code> or <code>&lt;embed&gt;</code>.</p>
+
+        <p><code>upgrade-insecure-requests</code>. Rewrites <code>http://</code> subresource URLs to <code>https://</code> before the request goes out. Useful specifically on stores with a decade of CMS content containing hardcoded protocol-full image URLs. It is not a substitute for fixing the content, and it does nothing for links or for top-level navigation, but it converts a mixed-content block into a working image while you sort out the database.</p>
+
+        <p><code>sandbox</code>. Rarely appropriate for a whole page, occasionally exactly right for a user-generated-content iframe. If you render customer reviews containing HTML, or a merchant-uploaded landing page, serving it from a separate origin under <code>sandbox allow-scripts</code> is far stronger than trying to sanitise your way to safety.</p>
+
+        <p>And a directive to be careful with: <code>require-sri-for</code> was dropped from the specification. If you have it in a policy, it does nothing. Use SRI attributes directly.</p>
+
+        <h2>18. Multiple Policies, and How They Combine</h2>
+
+        <p>You can send more than one <code>Content-Security-Policy</code> header, and stores end up doing this by accident — one from the application, one from Nginx, one from a CDN worker. Everyone assumes the most specific wins, or the last one, or that they merge into a union.</p>
+
+        <p>None of that. Each policy is enforced independently, and a resource must satisfy <em>all</em> of them. The effective policy is the intersection, which means adding a second header can only ever make things stricter.</p>
+
+        <p>In practice this produces one very confusing bug. Application sets a good nonce policy. CDN, configured a year earlier by someone else, adds <code>script-src 'self'</code>. Your nonced inline scripts satisfy the first policy and fail the second, because <code>'self'</code> doesn't cover inline. Everything breaks and the header you're looking at in the browser devtools looks correct — because you're looking at one of two.</p>
+
+        <p>Check with <code>curl -sSI</code> and count the occurrences rather than trusting the devtools summary, which folds them together in some versions. And decide on a single owner for the header. Mine is the application layer wherever a nonce is needed, the edge wherever it isn't.</p>
+
+        <h2>19. Questions I Get Asked</h2>
+
+        <p><strong>"Can I just use a WAF instead?"</strong> No, and the two solve different halves. A WAF sees requests to your origin. A skimmer running in a customer's browser and posting to <code>collect.attacker.tld</code> never touches your origin — your WAF has no visibility into that request at all. Run both; they overlap far less than the vendor pitch suggests.</p>
+
+        <p><strong>"How much does CSP slow the page down?"</strong> The header itself is 300 to 800 bytes, compressed to less over HTTP/2's HPACK. Policy evaluation is microseconds. The measurable cost is zero, and the projects I've run have made pages faster on net because the inventory step deletes dead tags.</p>
+
+        <p><strong>"Do I need SRI if I have a good CSP?"</strong> Yes, and they cover different failures. CSP with <code>strict-dynamic</code> says "this script was loaded by code I trust". SRI says "this specific file has this specific content". The Polyfill case needed the second one: the script was loaded exactly as intended, from the intended host, by trusted code, and its content had changed.</p>
+
+        <p><strong>"Our policy has 'unsafe-inline'. Is it worthless?"</strong> For <code>script-src</code>, close to it — that's the directive whose whole purpose is stopping injected inline script. For <code>style-src</code>, it's a reasonable pragmatic choice. And even a <code>script-src</code> with <code>'unsafe-inline'</code> retains value if <code>connect-src</code> and <code>form-action</code> are tight, because the exfiltration path is still closed. Tighten those two first; they're an afternoon rather than a quarter.</p>
+
+        <p><strong>"Can attackers read the nonce with the same XSS they're using?"</strong> If they have full script execution, yes, and at that point it's over anyway. The threat model for nonces is injection without execution: an attacker who can insert markup into the page but has no running code. That's the overwhelming majority of real XSS. A nonce defeats it entirely.</p>
+
+        <p><strong>"What about CSP in a meta tag versus the header?"</strong> Header where you can. The meta form ignores <code>frame-ancestors</code>, <code>sandbox</code> and all reporting directives, and it only applies to resources parsed after the tag — so anything above it in the head is unprotected. Put it first if you must use it.</p>
+
+        <p><strong>"Should the admin panel have its own policy?"</strong> Yes, and it should be stricter than the storefront, because you control every line of it and there is no marketing tag to accommodate. On Magento, enforcing in the adminhtml area is usually a one-day job and it protects the account that can change your payment settings.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>If you have nothing, or something copied from a blog post two years ago, in this order.</p>
+
+        <p>One. Add <code>connect-src</code> and <code>form-action</code> to whatever policy you already have, scoped to checkout, in report-only. This is the shortest path to closing the exfiltration channel and it does not require touching a single template. If you do only one thing on this list, do this one.</p>
+
+        <p>Two. Inventory your third parties from a real HAR capture, not from memory. Delete what isn't used. Expect to find between three and ten dead tags; I always do.</p>
+
+        <p>Three. Stand up a report-only endpoint with extension filtering and 5% sampling. Prove reports arrive before you write a strict policy.</p>
+
+        <p>Four. Set <code>object-src 'none'</code> and <code>base-uri 'none'</code> in enforcing mode today. Zero risk, and <code>base-uri</code> in particular closes a bypass that survives an otherwise good policy.</p>
+
+        <p>Five. Deploy the strict nonce policy in report-only and leave it for two full weeks, including a month boundary if you can.</p>
+
+        <p>Six. Do the inline-handler refactor. It's the real work and there's no way around it. Budget days, not hours.</p>
+
+        <p>Seven. Enforce on a low-traffic path, then checkout, then everywhere, and leave a stricter report-only header running permanently afterwards.</p>
+
+        <p>The one I'd skip if the budget is tight: Trusted Types, unless you're on a modern framework where it's nearly free. The one people skip that they shouldn't: the permanent report-only header after enforcement. That's the part that tells you when your next vendor starts doing something new, and it is the only part of this that keeps working without anyone thinking about it.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
@@ -225,7 +723,6 @@ add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'nonce
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -259,6 +756,6 @@ add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'nonce
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

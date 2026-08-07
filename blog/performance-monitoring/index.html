@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Real-Time Performance Monitoring for Enterprise Ecommerce | MODRACX</title>
-  <meta name="description" content="Engineering guide on deploying Datadog APM, New Relic, Grafana, and OpenTelemetry to monitor TTFB, database query latency, and Web Vitals in real time." />
+  <meta name="description" content="RUM versus synthetic, metrics that actually predict revenue, why you cannot average percentiles, burn-rate alerting, and a dashboard people voluntarily open." />
   <meta property="og:title" content="Real-Time Performance Monitoring for Enterprise Ecommerce | MODRACX" />
   <meta property="og:description" content="Engineering guide on deploying Datadog APM and Grafana by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Real-Time Performance Monitoring for Enterprise Ecommerce</h1>
-        <p class="lede">Performance degradation happens silently. Implementing OpenTelemetry tracing, Datadog APM, and automated alert triggers catches database bottlenecks before they impact sales.</p>
+        <p class="lede">Their Grafana dashboard had 34 panels and had been opened eleven times in four months. The number that mattered was not on it. Here is how I build monitoring that gets used.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 26 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,40 +205,566 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>OpenTelemetry Node.js APM Tracing</h2>
+        <h2>1. The Dashboard Nobody Had Opened in Four Months</h2>
 
-        <pre><code class="language-javascript">// OpenTelemetry SDK Initialization for Next.js / Node.js
-import { NodeSDK } from '@opentelemetry/sdk-node';
-import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+        <p>I got called in to an outdoor equipment retailer in January because checkout felt slow and nobody could prove it. First thing I asked for was their monitoring. They had plenty: a Datadog account, a New Relic account inherited from a previous agency, synthetic checks running every five minutes from three locations, and a Grafana instance with fourteen dashboards.</p>
 
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({
-    url: 'https://otlp.datadoghq.com/v1/traces',
-  }),
-  instrumentations: [getNodeAutoInstrumentations()],
-});
+        <p>The Grafana access logs showed that the main performance dashboard had been opened eleven times in the previous four months. Nine of those were by the same contractor, in one week, in October.</p>
 
-sdk.start();</code></pre>
+        <p>It wasn't that the team was negligent. The dashboard had 34 panels. The top-left panel was average response time across all routes, which sat at a reassuring 240ms and had done for a year. There was no panel for the checkout route specifically. There were four alerts configured, two of which had been muted since a noisy deploy in August, and one of which fired on CPU above 80% — a threshold their autoscaler was designed to reach.</p>
 
-        <hr />
+        <p>The actual problem took forty minutes to find once we looked at the right thing. Their payment provider's JavaScript SDK was loading synchronously in the checkout page's head. For UK customers it resolved in about 90ms. For customers on mobile networks in Australia and Singapore — around 8% of revenue — it was taking between 1.8 and 4 seconds, and during that window the pay button was inert. The average response time was fine because the average was computed over 100% of pageviews, of which 92% were unaffected.</p>
+
+        <p>Everything I know about performance monitoring comes from variations of that afternoon. The data was there. The instrumentation was fine. What was missing was any answer to the question "which number, if it moved, would tell us we were losing money?"</p>
+
+        <p>This article is about answering that question: what to measure, how to measure it without lying to yourself, how to alert on it so that an alert means something, and how to build a dashboard that a human being will voluntarily open.</p>
+
+        <h2>2. Three Different Jobs, Often Confused</h2>
+
+        <p>Monitoring gets treated as one activity. It's three, with different tools and different success criteria, and a system that's good at one is usually mediocre at the others.</p>
+
+        <p><strong>Detection.</strong> Something is wrong right now and a human needs to know. Success is low latency to notification and near-zero false positives. This is alerting, and it should be built from a small number of metrics you trust completely.</p>
+
+        <p><strong>Diagnosis.</strong> Something is wrong and you need to know why. Success is high cardinality and deep detail — traces, per-resolver timings, waterfall charts, session replays. Expensive to collect, and you only need it while you're looking.</p>
+
+        <p><strong>Decision support.</strong> Is the site getting better or worse over months? Did the release we shipped in March help? Should we spend the next quarter on images or on the API? Success here is stability of definition over time, which is the one thing teams routinely sacrifice — you cannot trend a metric whose definition changed twice.</p>
+
+        <p>Most performance monitoring projects fail because they build one system trying to do all three. The detection system gets buried in diagnostic detail, the diagnostic system gets sampled down until it can't answer anything, and the trend data is unusable because someone changed the sampling rate in June.</p>
+
+        <p>Build them separately. Accept that they'll disagree slightly. They're measuring different populations for different reasons.</p>
+
+        <h2>3. Synthetic Monitoring: What It's Actually For</h2>
+
+        <p>A synthetic check loads your page on a schedule from a controlled environment and records what happened. Lighthouse in CI, WebPageTest runs, uptime pings, scripted checkout journeys.</p>
+
+        <p>What it's genuinely good at:</p>
+
+        <p><strong>Detecting availability failures.</strong> A page returning 500 or timing out is unambiguous, and a synthetic check catches it within a minute regardless of whether anyone happened to be visiting. This is the one job it does better than anything else.</p>
+
+        <p><strong>Comparing like with like.</strong> Same device profile, same network shaping, same location, same time of day. If your LCP moved from 2.1s to 2.6s in a controlled run, something you shipped caused it. RUM can't tell you that cleanly because the population changes underneath you.</p>
+
+        <p><strong>Testing things that haven't shipped.</strong> You cannot get field data for a branch. Synthetic runs against a preview deployment are the only way to catch a regression before users meet it, which is why performance budgets belong in CI. I go into that machinery in the piece on <a href="/blog/core-web-vitals-optimization/">measuring Core Web Vitals in CI</a>.</p>
+
+        <p><strong>Monitoring journeys nobody completes often.</strong> A scripted check that adds to cart, applies a discount code and reaches the payment step will catch a broken promotion engine at 3am on a Tuesday. Waiting for a real customer to find it is not a strategy.</p>
+
+        <p>What it is bad at, and where it actively misleads:</p>
+
+        <p>It is a sample of one, from a datacentre, on a warm cache, with no extensions, no ad blocker, no third-party consent banner in whatever state your real users leave it, and no CPU contention from the fourteen other tabs a real person has open. Every one of those makes the synthetic number better than reality, and the gap is not constant.</p>
+
+        <p>It also has a specific failure mode on cached architectures: a check that runs every five minutes against the same URL keeps that URL permanently warm. You are measuring your best case, forever, and you have arranged for it to be your best case. On a serverless or ISR-backed site this can make your synthetic numbers meaningless — the check itself prevents the cold path you're trying to detect.</p>
+
+        <h2>4. Real User Monitoring: What It's Actually For</h2>
+
+        <p>RUM instruments the real page in the real browser and reports what real people experienced. It's the only source of truth about your users, and it comes with its own set of lies.</p>
+
+        <p>What it's good at: telling you the distribution. Not the number — the distribution. RUM's value is that it shows you the 8% of Australian mobile users waiting four seconds while everyone else is fine, which no synthetic check from London is going to find.</p>
+
+        <p>What it's bad at:</p>
+
+        <p><strong>Survivorship bias.</strong> RUM only reports from sessions where the JavaScript loaded and ran. A user who gave up after five seconds and closed the tab may never send a beacon. Your worst experiences are systematically underrepresented, which means your p95 is optimistic by an amount you cannot measure. Mitigate it by sending beacons on <code>visibilitychange</code> rather than on unload, so you capture the partial session before it disappears.</p>
+
+        <p><strong>Attribution.</strong> A slow LCP in the field tells you it was slow. It doesn't tell you which element, or whether the delay was in the network or the render, unless you collect the attribution data explicitly — which most default installations don't.</p>
+
+        <p><strong>Volume on rare pages.</strong> A product page with 40 views a month has no meaningful p75. Aggregating by route template rather than by URL fixes this, and it's the first thing I do on any RUM setup.</p>
+
+        <p><strong>Cost.</strong> RUM data is high-volume and high-cardinality, and every vendor prices it in a way that punishes exactly the dimensions you need. More on that below where I talk about what this costs.</p>
+
+        <p>The right relationship between the two: synthetic tells you what changed, RUM tells you whether it mattered. Alert on RUM for anything user-facing; alert on synthetic for availability; use synthetic in CI to prevent regressions and RUM in production to find the ones you didn't predict.</p>
+
+        <h2>5. Choosing Metrics That Predict Revenue</h2>
+
+        <p>Here's where most performance programmes go wrong, and it's a strategy error rather than a technical one. Teams measure what's easy to measure, which is usually Lighthouse score and average response time, and then wonder why leadership won't fund performance work.</p>
+
+        <p>The metric you want has three properties. It moves when the user experience changes. It correlates with money. And you can attribute it to something you control.</p>
+
+        <p>Lighthouse score fails the second and third. It's a weighted composite of lab metrics, it changes when Google changes the weights — which they have done repeatedly, most disruptively when TTI came out and INP came in — and a score of 74 tells you nothing about which customer is having a bad time.</p>
+
+        <p>The set I'd actually track for an ecommerce site, in priority order:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Source</th><th>Why it earns its place</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>TTFB p75, by route template</td><td>RUM</td><td>Earliest signal, cleanly attributable to backend or cache</td></tr>
+            <tr><td>LCP p75, by route template</td><td>RUM</td><td>Correlates with bounce; a ranking input</td></tr>
+            <tr><td>INP p75, by route template</td><td>RUM</td><td>The only one that catches a janky add-to-cart</td></tr>
+            <tr><td>CLS p75, product and checkout</td><td>RUM</td><td>Mis-taps on a shifting page cost orders directly</td></tr>
+            <tr><td>Add-to-cart latency p95</td><td>Custom RUM</td><td>Business action, not a proxy for one</td></tr>
+            <tr><td>Checkout step completion time p95</td><td>Custom RUM</td><td>Where abandonment actually happens</td></tr>
+            <tr><td>Error rate by route</td><td>Server + RUM</td><td>Slow is bad; broken is worse and easier to miss</td></tr>
+            <tr><td>Cache hit ratio by route</td><td>CDN logs</td><td>The lever behind TTFB, and it drifts silently</td></tr>
+          </tbody>
+        </table>
+
+        <p>The two custom ones are the important part and they're the ones nobody has. "Time from add-to-cart click to the cart badge updating" is a number your merchandising director will care about, because it's a thing customers do, and it will not appear in any off-the-shelf dashboard. It takes about twenty lines to instrument.</p>
+
+        <pre><code class="language-javascript">// Business-action timing. Not a page metric — an action metric.
+// User Timing marks show up in most RUM tools automatically and in the
+// browser's own performance panel, which makes local debugging trivial.
+async function addToCart(variantId, quantity) {
+  performance.mark('atc:start');
+  try {
+    const res = await fetch('/api/cart/lines', {
+      method: 'POST',
+      body: JSON.stringify({ variantId, quantity }),
+      headers: { 'content-type': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`cart ${res.status}`);
+    const cart = await res.json();
+    updateBadge(cart.totalQuantity);          // the moment the user sees success
+    performance.mark('atc:end');
+    const m = performance.measure('add-to-cart', 'atc:start', 'atc:end');
+    report('add_to_cart_ms', m.duration, { outcome: 'ok', variantId });
+    return cart;
+  } catch (err) {
+    performance.mark('atc:end');
+    const m = performance.measure('add-to-cart', 'atc:start', 'atc:end');
+    // Failures matter more than successes and are usually not recorded at all.
+    report('add_to_cart_ms', m.duration, { outcome: 'error', reason: err.message });
+    throw err;
+  }
+}</code></pre>
+
+        <h2>6. Proving the Link to Revenue, Honestly</h2>
+
+        <p>Every performance vendor will sell you a "revenue impact" chart. Most of them are correlational nonsense presented as causation, and if you take one to a finance director who understands statistics you will lose credibility you need later.</p>
+
+        <p>The core problem: fast sessions and converting sessions share confounders. Returning customers have warm caches and higher intent. Desktop users have faster devices and buy more. A session that converts is longer, so it has more chance to hit a cached page. Slice your data by LCP bucket and you will absolutely see conversion falling as LCP rises. You will have proved almost nothing.</p>
+
+        <p>What I do instead, in ascending order of rigour:</p>
+
+        <p><strong>Segment-controlled comparison.</strong> Compare conversion by performance bucket <em>within</em> a single segment: same device class, same country, same traffic source, same new-versus-returning status. The effect usually shrinks by half and what's left is more believable. This is cheap and it's my default.</p>
+
+        <p><strong>Before-and-after on a shipped change, with a control route.</strong> You optimised product pages and not category pages. Did product page conversion move relative to category page conversion over the same window? A difference-in-differences comparison controls for seasonality, marketing spend and everything else that hit both.</p>
+
+        <p><strong>An actual experiment.</strong> Serve a deliberately slower variant to a random 5% for a fortnight. This is the only method that establishes causation, it is entirely feasible, and almost nobody does it because deliberately harming 5% of sessions is a difficult meeting. I've run it twice. Both times it was worth it, because the resulting number survived contact with the CFO in a way no correlation chart ever has.</p>
+
+        <pre><code class="language-sql">-- Difference-in-differences on a real deploy. Product pages got the change
+-- on 2025-04-14; category pages did not. If the improvement is real, the
+-- product-page lift should exceed the category-page drift.
+WITH sessions AS (
+  SELECT
+    session_id,
+    route_template,
+    device_class,
+    country,
+    CASE WHEN event_date &lt; DATE '2025-04-14' THEN 'before' ELSE 'after' END AS period,
+    MAX(CASE WHEN event = 'purchase' THEN 1 ELSE 0 END) AS converted
+  FROM web_events
+  WHERE event_date BETWEEN DATE '2025-03-17' AND DATE '2025-05-12'
+    AND route_template IN ('/products/[handle]', '/collections/[handle]')
+  GROUP BY 1, 2, 3, 4, 5
+)
+SELECT
+  route_template,
+  period,
+  device_class,
+  COUNT(*)                        AS sessions,
+  AVG(converted) * 100            AS cvr_pct
+FROM sessions
+GROUP BY 1, 2, 3
+ORDER BY 1, 3, 2;</code></pre>
+
+        <p>Whatever method you use, state the caveats in the same slide as the number. "Product page conversion rose 4.1% against a 0.6% drift on category pages over the same period, on mobile, excluding paid traffic" is a sentence people trust. "Performance improvements delivered £340,000" is a sentence people quietly discount, and rightly.</p>
+
+        <h2>7. Averages Are Worse Than Useless</h2>
+
+        <p>The outdoor equipment retailer's average of 240ms was not wrong. It was accurate, current, and completely uninformative, and that combination is more dangerous than a broken metric because nobody suspects it.</p>
+
+        <p>Performance distributions are not normal. They're right-skewed with a long tail: most requests are fast, a few are catastrophic, and the mean sits near the mode while the interesting behaviour lives in the last few percent. A bimodal distribution — cache hits at 40ms, cache misses at 1.4s — has a mean of about 250ms if the hit rate is 85%, and that mean describes no request that ever happened.</p>
+
+        <p>So: percentiles, everywhere, and specifically p75 for the Core Web Vitals (because that's what Google reports and what your competitors are being judged on) and p95 or p99 for anything operational.</p>
+
+        <p>Which percentile for which purpose:</p>
+
+        <p>p50 tells you about the typical experience and is useful only alongside a high percentile. On its own it hides everything.</p>
+
+        <p>p75 is the Core Web Vitals convention and a reasonable target for user-facing metrics. It's high enough to include the tail and low enough not to be dominated by outliers.</p>
+
+        <p>p95 and p99 are where you find broken things — the timeouts, the cold starts, the one region with a misconfigured route. Alert on these for backend metrics, not for field metrics, because at p99 field data is mostly people on broken networks and you can't fix those.</p>
+
+        <p>Maximum is noise. Somebody's laptop went to sleep mid-request. Ignore it.</p>
+
+        <h2>8. The Percentile Trap Nobody Warns You About</h2>
+
+        <p>This one costs teams weeks and I've never seen it in a monitoring vendor's onboarding docs: <strong>you cannot average percentiles</strong>.</p>
+
+        <p>If your monitoring records p95 per minute and your dashboard shows a one-hour window, something has to combine sixty p95 values into one. Almost every tool does this by averaging them, and the result is not the p95 of the hour. It's systematically lower, and it gets more wrong as the traffic distribution across minutes becomes more uneven.</p>
+
+        <p>A concrete example from a build I audited. Nine minutes with 1,000 requests each, all fast, p95 of 200ms. One minute with 50 requests during a deploy, all slow, p95 of 5,000ms. Average of the ten per-minute p95s: 680ms. True p95 across all 9,050 requests: 210ms, because the 50 slow requests are 0.55% of the population and don't reach the 95th percentile at all. The dashboard reported a problem three times worse than the reality.</p>
+
+        <p>It cuts the other way too, and worse. Take a route that's fast for 55 minutes and badly broken for 5. The averaged p95 dilutes the broken window into the calm ones and your alert never fires, because the number that would have triggered it was averaged away by fifty-five minutes of nothing happening.</p>
+
+        <p>The fix is to store a structure that can be merged: histograms, or a sketch like t-digest or HDRHistogram, rather than a pre-computed percentile per bucket. Then a query over an hour merges sixty histograms and computes the percentile once, correctly, over the whole population.</p>
+
+        <pre><code class="language-javascript">// Store bucket counts, not percentiles. Merging is then just addition, and
+// any time window can be computed exactly rather than approximated by
+// averaging numbers that do not average.
+const BOUNDS = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, Infinity];
+
+function observe(hist, ms) {
+  const i = BOUNDS.findIndex(b =&gt; ms &lt;= b);
+  hist.counts[i]++;
+  hist.total++;
+}
+
+function merge(a, b) {
+  return {
+    counts: a.counts.map((c, i) =&gt; c + b.counts[i]),
+    total: a.total + b.total,
+  };
+}
+
+function percentile(hist, p) {
+  const target = hist.total * p;
+  let seen = 0;
+  for (let i = 0; i &lt; hist.counts.length; i++) {
+    seen += hist.counts[i];
+    if (seen &gt;= target) return BOUNDS[i];  // upper bound of the bucket
+  }
+  return BOUNDS[BOUNDS.length - 2];
+}</code></pre>
+
+        <p>Prometheus histograms, Datadog distributions and OpenTelemetry's explicit-bucket histograms all do this properly if you use them properly. Datadog's ordinary <code>histogram</code> type does not merge correctly across hosts and its <code>distribution</code> type does; that distinction is a paragraph in the docs and a fortnight of confusion in practice. Check which one your dashboard is using before you trust a number on it.</p>
+
+        <h2>9. Segment Before You Aggregate</h2>
+
+        <p>A site-wide p75 is a single number describing a population that has nothing in common. Fixing that is the highest-value change most monitoring setups can make, and it costs nothing but discipline about dimensions.</p>
+
+        <p>The dimensions that consistently earn their cardinality on an ecommerce site:</p>
+
+        <p><strong>Route template, never URL.</strong> <code>/products/[handle]</code>, not <code>/products/oak-side-table</code>. Templates give you enough volume for stable percentiles and they map to the code you'd change. This is the single most important dimension and the one most often missing.</p>
+
+        <p><strong>Device class.</strong> Three buckets — mobile, tablet, desktop — is enough. Four if you separate low-end Android, which on some catalogues is 20% of traffic and 60% of the INP problem.</p>
+
+        <p><strong>Country, or region.</strong> Country if you sell in fewer than twenty; continent otherwise. This is what found the Australian payment SDK problem.</p>
+
+        <p><strong>New versus returning.</strong> Cache state changes everything and this is the cheapest proxy for it.</p>
+
+        <p>What I deliberately don't dimension on: user ID, session ID, exact URL, full user agent string, referrer. Each of those multiplies your cardinality by thousands and your bill by a similar factor, and none of them changes what you'd do about a problem. Keep them in your diagnostic store, where you query them on demand, not in your metrics store where every combination is a time series you pay rent on.</p>
+
+        <pre><code class="language-javascript">// Route templates from the router, not from location.pathname.
+// Getting this wrong is how a metrics bill goes from $400 to $9,000.
+function routeTemplate() {
+  // Next.js app router exposes the matched pattern; other frameworks vary.
+  const p = window.__NEXT_DATA__?.page;
+  if (p) return p;
+  // Fallback: collapse the segments that are obviously identifiers.
+  return location.pathname
+    .replace(/\/[0-9a-f]{8,}/gi, '/[id]')
+    .replace(/\/\d+/g, '/[id]')
+    .replace(/\/products\/[^/]+/, '/products/[handle]')
+    .replace(/\/collections\/[^/]+/, '/collections/[handle]') || '/';
+}</code></pre>
+
+        <h2>10. Collecting Web Vitals Without Getting It Wrong</h2>
+
+        <p>Most RUM installations collect Core Web Vitals incorrectly in one of a small number of ways, and the errors all bias the numbers optimistic.</p>
+
+        <p>Use the <code>web-vitals</code> library rather than reading the performance entries yourself. The metric definitions have changed several times — LCP's handling of removed elements, CLS's session windowing, INP replacing FID entirely in March 2024 — and the library tracks those changes. Hand-rolled collection written in 2022 is measuring something that no longer matches what Google reports, and you'll spend a day reconciling your dashboard against Search Console before you work out why.</p>
+
+        <p>Report on <code>visibilitychange</code>, not <code>beforeunload</code>. Mobile Safari frequently never fires unload events, so an unload-based beacon systematically drops iOS sessions — which are usually your highest-value ones.</p>
+
+        <p>Handle back/forward cache restores. A bfcache restore is a new pageview to the user and no pageview at all to your instrumentation unless you listen for it, and it will have a near-zero LCP that flatters your numbers if you count it wrong.</p>
+
+        <p>Collect attribution. The base metric tells you LCP was 3.4s; the attribution tells you the LCP element was the hero image and 2.9s of it was resource load delay. Without it, field data can identify a problem and never diagnose one.</p>
+
+        <pre><code class="language-javascript">import { onLCP, onINP, onCLS, onTTFB } from 'web-vitals/attribution';
+
+const queue = new Set();
+const meta = {
+  route: routeTemplate(),
+  device: deviceClass(),
+  country: document.documentElement.dataset.country, // set server-side
+  returning: document.cookie.includes('rv=1') ? 1 : 0,
+};
+
+function push(metric) {
+  queue.add({
+    name: metric.name,
+    value: Math.round(metric.value),
+    rating: metric.rating,
+    // The attribution shape differs per metric; keep the useful field only.
+    target: metric.attribution?.element
+      ?? metric.attribution?.largestShiftTarget
+      ?? metric.attribution?.interactionTarget
+      ?? null,
+    ttfb: Math.round(metric.attribution?.timeToFirstByte ?? 0),
+    loadDelay: Math.round(metric.attribution?.resourceLoadDelay ?? 0),
+    navType: metric.navigationType,   // 'back-forward-cache' shows up here
+    ...meta,
+  });
+}
+
+// reportAllChanges: false is right for most metrics — you want the final value.
+onLCP(push);
+onCLS(push);
+onINP(push);
+onTTFB(push);
+
+// Flush when the page is backgrounded. This fires on iOS; unload does not.
+addEventListener('visibilitychange', () =&gt; {
+  if (document.visibilityState !== 'hidden' || queue.size === 0) return;
+  const body = JSON.stringify([...queue]);
+  queue.clear();
+  // sendBeacon survives the page going away. fetch with keepalive is the fallback.
+  navigator.sendBeacon('/rum', body) ||
+    fetch('/rum', { body, method: 'POST', keepalive: true });
+});</code></pre>
+
+        <p>One more: sample deliberately and record the rate. If you sample 10% of sessions, your beacon should say so, so that when you change it to 25% in six months your historical comparison still works. I've seen a "50% performance improvement" that was entirely a sampling rate change, presented in good faith, believed for a month.</p>
+
+        <h2>11. Connecting the Browser to the Backend</h2>
+
+        <p>Field data tells you TTFB was 1.4 seconds. Your APM tells you the p75 server time was 180ms. Both are right and neither is actionable, because you can't join them.</p>
+
+        <p>The join is a trace ID emitted by the server and picked up by the client. Then a slow field session has a server trace attached to it, and the question "was that 1.4s our backend or their network?" has an answer.</p>
+
+        <pre><code class="language-javascript">// Server: emit the trace id into the document. Server-Timing is the standard
+// mechanism and it is readable from JavaScript via the navigation entry.
+response.headers.set(
+  'Server-Timing',
+  `db;dur=${dbMs}, render;dur=${renderMs}, cache;desc=${cacheStatus}, trace;desc=${traceId}`,
+);</code></pre>
+
+        <pre><code class="language-javascript">// Client: read it back and attach it to every metric from this pageview.
+function serverTiming() {
+  const nav = performance.getEntriesByType('navigation')[0];
+  const out = {};
+  for (const t of nav?.serverTiming ?? []) {
+    out[t.name] = t.duration || t.description;
+  }
+  return out;   // { db: 42, render: 18, cache: 'HIT', trace: '4bf92f...' }
+}</code></pre>
+
+        <p>You need <code>Timing-Allow-Origin</code> set if the document is served from a different origin than the one running the script, which on a CDN-fronted site is more often than you'd think. Without it the <code>serverTiming</code> array is silently empty, which is a fun thirty minutes.</p>
+
+        <p>The payoff is specific: when a customer complains, or when your p95 alert fires, you take the trace ID from a slow session and open the full server-side trace. Cache status in the same header tells you immediately whether the slow response was a cache miss, which on a statically-generated storefront answers most questions before you open anything else.</p>
+
+        <h2>12. Alerting That Means Something</h2>
+
+        <p>An alert should mean: a human needs to act, now. Everything else is a dashboard.</p>
+
+        <p>That standard is harsh and it's the only one that works, because the alternative — alerts as a general notification stream — produces exactly what the outdoor equipment retailer had, which is muted channels and two-year-old thresholds nobody remembers setting.</p>
+
+        <p>The rules I apply:</p>
+
+        <p><strong>Alert on symptoms, not causes.</strong> "Checkout p95 above 3s for 10 minutes" is a symptom. "Database CPU above 80%" is a cause, and it might be a completely healthy cause — that's what autoscaling looks like. Cause-alerts fire during normal operation and train people to ignore them.</p>
+
+        <p><strong>Alert on percentiles with a duration.</strong> A single bad minute is noise. Require the condition to hold for a window — 5 to 15 minutes depending on traffic volume — and require a minimum sample count so a quiet 3am period with four requests can't trigger anything.</p>
+
+        <p><strong>Use burn rates for anything with a target.</strong> If your objective is "95% of checkout responses under 2 seconds over 30 days", the useful alert is not "we're below target" but "we are consuming the error budget fast enough to miss the target". A fast burn — 14 times budget over an hour — pages someone. A slow burn — 3 times budget over six hours — opens a ticket. Two severities, one metric, no arbitrary thresholds.</p>
+
+        <pre><code class="language-yaml"># Prometheus. Two windows on the same objective: the short one catches
+# sharp incidents, the long one catches slow degradation, and requiring
+# both to fire suppresses the single-spike false positive.
+groups:
+  - name: checkout-latency
+    rules:
+      - record: checkout:slow_ratio:1h
+        expr: |
+          sum(rate(http_request_duration_seconds_count{route="/checkout",le="+Inf"}[1h]))
+            -
+          sum(rate(http_request_duration_seconds_bucket{route="/checkout",le="2"}[1h]))
+          /
+          sum(rate(http_request_duration_seconds_count{route="/checkout"}[1h]))
+
+      - alert: CheckoutLatencyBudgetBurningFast
+        # 14.4x burn on a 5% budget exhausts 30 days in about 2 days.
+        expr: checkout:slow_ratio:1h &gt; (14.4 * 0.05)
+              and checkout:slow_ratio:5m &gt; (14.4 * 0.05)
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Checkout latency budget burning 14x — 2 days to exhaustion"
+          runbook: "https://wiki.internal/runbooks/checkout-latency"
+
+      - alert: CheckoutLatencyBudgetBurningSlow
+        expr: checkout:slow_ratio:6h &gt; (3 * 0.05)
+              and checkout:slow_ratio:30m &gt; (3 * 0.05)
+        for: 30m
+        labels: { severity: ticket }
+</code></pre>
+
+        <p><strong>Every paging alert has a runbook link.</strong> Not a wiki homepage — a specific document that says what this alert means, what to check first, and what "resolved" looks like. If you can't write that document, the alert isn't ready to page anyone.</p>
+
+        <p><strong>Review alerts quarterly and delete ruthlessly.</strong> Pull the fire history. Any alert that fired more than a handful of times without anyone acting on it is either wrongly thresholded or shouldn't exist. Any alert that has never fired in a year is either perfectly calibrated or broken, and you should check which by breaking something on purpose.</p>
+
+        <h2>13. Seasonality Will Make a Fool of You</h2>
+
+        <p>Ecommerce traffic is not stationary and static thresholds don't survive contact with it. A threshold set in a quiet July fires continuously through Black Friday. A threshold set during Black Friday is deaf for the rest of the year.</p>
+
+        <p>Three defences, roughly in order of how much I trust them:</p>
+
+        <p><strong>Compare to the same time last week.</strong> Traffic is strongly weekly-periodic. Alerting on "p75 is 40% above the same hour last Tuesday" handles day-of-week and hour-of-day patterns for free, and it's dramatically more robust than any absolute number.</p>
+
+        <p><strong>Rate-based objectives rather than absolute latency.</strong> "Fewer than 95% of requests under 2s" is meaningful at any traffic volume. "p95 above 2s" behaves very differently at 40 requests per minute and 4,000.</p>
+
+        <p><strong>Anomaly detection, cautiously.</strong> Every vendor sells it. It works reasonably for smooth periodic signals and badly for anything with promotional spikes, and it produces alerts nobody can explain, which is corrosive to trust. I use it as a secondary, ticket-severity signal and never as a pager.</p>
+
+        <p>And plan for the known events. Before a peak trading period I widen thresholds deliberately, in a documented change, with a date to revert. Doing it reactively at 9am on Black Friday, by muting the channel, is how alerts stay muted until March.</p>
+
+        <h2>14. A Dashboard People Actually Open</h2>
+
+        <p>The 34-panel dashboard failed because it answered no question anyone had. Here's the structure I've landed on after building a lot of these badly.</p>
+
+        <p><strong>One screen. No scrolling.</strong> If it doesn't fit, it's two dashboards.</p>
+
+        <p><strong>Top row: four numbers, big, with a comparison.</strong> Not sparklines. Numbers, each with "vs last week" beside it, coloured only when outside target. For an ecommerce site: checkout p75, product page LCP p75, error rate, conversion rate. Someone should be able to look at this row from a doorway and know if today is fine.</p>
+
+        <p><strong>Second row: the same metrics split by the dimension that matters most.</strong> Usually device class or country. This is where "everything is fine" becomes "everything is fine except mobile in Australia".</p>
+
+        <p><strong>Third row: the leading indicators.</strong> Cache hit ratio, backend p95, third-party script timing. These move before the user-facing metrics do and they're the first place you look when the top row goes red.</p>
+
+        <p><strong>Bottom: deploy markers and incident annotations.</strong> An overlay of releases on the time axis. This one panel answers "did we cause it?" faster than any amount of investigation, and it's usually a fifteen-minute integration with your CI system.</p>
+
+        <p>What I leave off: anything nobody has ever acted on. CPU. Memory. Request counts, unless capacity is a live concern. Individual third-party vendor uptimes. Those go on a second dashboard that gets opened during an incident and ignored otherwise, which is the correct amount of attention for them.</p>
+
+        <p>Then the part that actually determines whether it gets used: put it somewhere people already are. A weekly automated post into the team's channel with the four top-row numbers and their week-on-week deltas gets read by more people than any dashboard, because it arrives rather than waiting. Three sentences of automated text beats a beautiful Grafana instance nobody has bookmarked.</p>
+
+        <pre><code class="language-javascript">// Weekly digest. Deliberately boring, deliberately short. This gets read.
+const rows = await query(`
+  SELECT route_template,
+         approx_percentile(lcp_ms, 0.75) AS lcp_p75,
+         approx_percentile(inp_ms, 0.75) AS inp_p75,
+         count(*)                        AS samples
+  FROM rum_events
+  WHERE ts &gt; now() - interval '7 days' AND device_class = 'mobile'
+  GROUP BY 1 HAVING count(*) &gt; 500
+  ORDER BY lcp_p75 DESC LIMIT 5
+`);
+
+const lines = rows.map(r =&gt;
+  `${r.route_template}: LCP ${r.lcp_p75}ms, INP ${r.inp_p75}ms (${r.samples} samples)`
+);
+
+await postToChat({
+  text: [
+    `*Mobile field data, last 7 days* — worst five routes by LCP p75`,
+    ...lines,
+    deltaSentence(rows, lastWeek),   // "checkout LCP up 210ms week on week"
+  ].join('\n'),
+});</code></pre>
+
+        <h2>15. What This Costs</h2>
+
+        <p>Nobody budgets for observability properly and then everybody is surprised by the invoice. Some real numbers to calibrate against.</p>
+
+        <p>RUM beacons at 100% sampling on a site doing 3 million pageviews a month, with four Core Web Vitals plus attribution per pageview, is roughly 12 million data points a month. Priced per custom metric with high cardinality, mainstream APM vendors will charge somewhere between £600 and £3,000 a month for that, and the variance is almost entirely about how many dimensions you attach.</p>
+
+        <p>Cardinality is the cost driver and it's multiplicative. Four metrics times 40 route templates times 3 device classes times 20 countries is 9,600 time series. Add "returning" and it's 19,200. Add exact URL instead of route template and it's several million, and your bill goes with it. Every dimension you add multiplies; every dimension you add should have a specific question it answers.</p>
+
+        <p>What I do to keep it sane: sample RUM at 10–25% for routine metrics and 100% for the two or three business-action metrics that matter. Keep raw beacons in cheap object storage for 90 days for ad-hoc analysis, aggregate to hourly histograms for anything older, and keep those histograms for two years so the trend data survives. Traces sampled at 1–5% with tail sampling so that errors and slow requests are always kept, which is where the value is anyway.</p>
+
+        <p>The self-hosted option — Prometheus, Grafana, Loki, an OpenTelemetry collector — costs less in licence and more in engineering time. For a team of three it's usually the wrong trade. For a team of thirty with an existing platform group it's often the right one. What I'd avoid is the middle: a half-maintained self-hosted stack that nobody owns, which is worse than either extreme, and which is what I find most often.</p>
+
+        <h2>16. A Worked Example: Finding £40,000 in a Consent Banner</h2>
+
+        <p>Back to the outdoor equipment retailer. 3.4 million sessions a year, average order value £68, conversion 1.9%.</p>
+
+        <p>Week one we changed nothing about the site and only changed the measurement. Route templates as a dimension, device class, country, p75 instead of average, and the two custom business timings. Three days of data made the picture obvious in a way a year of the old dashboard hadn't.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Segment</th><th>LCP p75</th><th>INP p75</th><th>Sessions/mo</th><th>CVR</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Desktop, UK</td><td>1.6 s</td><td>110 ms</td><td>96,000</td><td>3.1%</td></tr>
+            <tr><td>Mobile, UK</td><td>2.9 s</td><td>340 ms</td><td>158,000</td><td>1.7%</td></tr>
+            <tr><td>Mobile, AU/NZ</td><td>5.8 s</td><td>620 ms</td><td>21,000</td><td>0.6%</td></tr>
+            <tr><td>Mobile, low-end Android</td><td>6.4 s</td><td>1,140 ms</td><td>34,000</td><td>0.4%</td></tr>
+            <tr><td><strong>Site average</strong></td><td><strong>2.4 s</strong></td><td><strong>290 ms</strong></td><td><strong>283,000</strong></td><td><strong>1.9%</strong></td></tr>
+          </tbody>
+        </table>
+
+        <p>The site-wide row is the one they'd been reporting for two years. It describes nobody.</p>
+
+        <p>Attribution data pointed at two things. The LCP element on mobile product pages was the hero image, and 2.4 seconds of its delay was resource load delay — it wasn't discovered until the CSS had parsed, because it was a background image on a lazily-hydrated component. And the INP was dominated by the consent management platform, which ran a 340ms synchronous task on every first interaction, on the main thread, on a device with a fraction of a desktop's single-core performance.</p>
+
+        <p>Three changes over five weeks: preload the hero image with a proper <code>fetchpriority</code> hint and move it out of the hydrated component, load the consent platform's script with a deferred initialisation that yielded to the main thread, and lazy-load the payment SDK on checkout rather than blocking the head.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Segment</th><th>LCP p75 after</th><th>INP p75 after</th><th>CVR after</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Mobile, UK</td><td>1.9 s</td><td>180 ms</td><td>2.0%</td></tr>
+            <tr><td>Mobile, AU/NZ</td><td>2.6 s</td><td>210 ms</td><td>1.4%</td></tr>
+            <tr><td>Mobile, low-end Android</td><td>3.1 s</td><td>390 ms</td><td>1.1%</td></tr>
+          </tbody>
+        </table>
+
+        <p>Using the difference-in-differences approach against desktop as a control, the defensible attributable uplift was about 0.21 percentage points of conversion on mobile, which on their volumes is roughly £41,000 a year. I would not claim more than that, and the raw before-and-after numbers look considerably better than the defensible ones, which is exactly why you do the control.</p>
+
+        <p><strong>What went wrong.</strong> Two things.</p>
+
+        <p>We shipped the RUM collector with a bug that recorded every bfcache restore as a fresh pageview with an LCP of about 12ms. Roughly 9% of mobile sessions in the UK are bfcache restores. For eleven days our mobile LCP p75 read 200ms better than it was, and I nearly declared victory on the hero image change before the numbers were real. The tell was that desktop, which we hadn't touched, had improved by a similar amount. Any time a control group improves alongside your treatment, suspect your instrument first.</p>
+
+        <p>The second: we set a p95 alert on checkout latency with a five-minute window and no minimum sample count. Between 2am and 5am the retailer gets maybe thirty checkout requests an hour, so a single slow request would occasionally be the p95, and the alert paged someone at 3:40am twice in the first fortnight. Both times nothing was wrong. Adding <code>and sum(rate(...)) &gt; 0.2</code> to the expression fixed it, but the damage to people's willingness to trust the pager took longer to repair than the config change did.</p>
+
+        <p><strong>What I'd do differently.</strong> I'd validate the collector against a known-good source before trusting a single number from it. Comparing your RUM p75 to the CrUX data in Search Console for the same period is a free sanity check — they measure slightly different populations so they won't match exactly, but if yours is 40% better than CrUX, yours is wrong. That comparison would have caught the bfcache bug on day one instead of day eleven.</p>
+
+        <h2>17. Monitoring Versus Budgets in CI</h2>
+
+        <p>These are complementary and teams often build one and assume it covers the other.</p>
+
+        <p>A budget in CI prevents a regression from shipping. It's synthetic, it's deterministic, it runs against a preview build, and it fails a pull request. Its scope is what you can measure before users exist: bundle size, lab LCP on a throttled profile, request count, third-party weight.</p>
+
+        <p>Production monitoring catches everything CI can't predict: a third party getting slower, a CDN configuration drift, a traffic mix shift toward low-end devices, a database that got slower as a table grew. None of those involve a deploy, so no CI gate would ever have caught them.</p>
+
+        <p>The number I'd put on it from experience: about 60% of the performance regressions I've investigated had no associated deploy. Which means a team with excellent CI gates and no production monitoring is protected against a minority of their problems, and — worse — believes they're covered.</p>
+
+        <p>Bundle size is the one place I'd make CI strict to the point of being annoying, because it only ever grows and nobody notices any individual increase. A hard failure at a fixed kilobyte ceiling, adjusted deliberately when there's a reason, catches a class of problem that field data would take months to surface. The mechanics of that, and of thresholding lab metrics without flakiness, are the subject of the piece on <a href="/blog/core-web-vitals-optimization/">Core Web Vitals in CI</a>.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"How much should we sample?"</strong> Enough for a stable percentile on your smallest segment of interest. As a rough guide, a p75 needs a few hundred samples per bucket per period to stop bouncing; a p95 needs a few thousand. Work backwards: if you want daily p75 for mobile Australia and that's 700 sessions a day, sample it at 100% and sample your UK desktop traffic at 10%. Uniform sampling rates are convenient and almost always wrong.</p>
+
+        <p><strong>"Our RUM data doesn't match Search Console."</strong> It won't. CrUX only includes Chrome users who've opted into usage reporting, only on sufficiently-visited URLs, and it's a 28-day rolling window. Your RUM includes Safari and Firefox, has no volume threshold, and is probably a shorter window. Expect your numbers to be somewhat better than CrUX's because Chrome-on-Android skews slower. Expect the trend lines to move together — if they diverge, something in your collection is wrong.</p>
+
+        <p><strong>"Should we use an APM vendor or build it?"</strong> Buy the RUM and the tracing. Build the business-action metrics, because nobody sells those and they're the ones that get you funded. That split has served me well across quite different team sizes.</p>
+
+        <p><strong>"What's a good LCP target?"</strong> Under 2.5s at p75 gets you the "good" bucket, and that's a floor rather than a goal. What I'd actually target is your closest competitor's number, which you can look up in CrUX for any public origin. It's a more motivating target than an abstract threshold and it's the one your customers experience as a comparison. The specific techniques for getting there are the subject of the piece on <a href="/blog/core-web-vitals/">fixing Core Web Vitals</a>.</p>
+
+        <p><strong>"How do I get the business to care?"</strong> Stop reporting Lighthouse scores. Report "mobile customers in these three countries wait 6 seconds and convert at a third of the rate of everyone else". Then propose an experiment rather than a project. The framing that works is a specific segment, a specific number, and a testable claim — not a general appeal to speed.</p>
+
+        <p><strong>"Do we need session replay?"</strong> It's diagnostic, not detection, and it's excellent for the class of problem where a number is fine but the experience isn't — a button that works on the second tap, a layout that's technically stable and visually chaotic. It's also expensive, privacy-sensitive, and easy to leave collecting things it shouldn't. I'd enable it on checkout and error sessions only, with strict masking, and I would not run it site-wide.</p>
+
+        <p><strong>"Our p75 is fine but customers complain."</strong> Then your segmentation is too coarse, or the complaints are about a metric you don't collect. Interaction latency after the page has loaded is the usual culprit: everything Google measures happens in the first few seconds, and a filter that takes 900ms to apply on the fortieth interaction shows up in none of it. This is what custom action timings are for.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>Handed an ecommerce site with no useful monitoring and two weeks, this is the order I work in.</p>
+
+        <p><strong>One.</strong> Add route template, device class and country as dimensions to whatever you already collect. Change nothing else. This is usually a day's work and it's where the largest single insight comes from — almost every site has a segment that's twice as slow as the average and invisible in it.</p>
+
+        <p><strong>Two.</strong> Switch every dashboard from average to p75, and confirm your tooling merges histograms rather than averaging pre-computed percentiles. If it doesn't, fix that before you trust any number on the screen.</p>
+
+        <p><strong>Three.</strong> Instrument two business actions — add-to-cart and the slowest checkout step — with real timings and outcome labels. These will be the numbers that get performance work funded.</p>
+
+        <p><strong>Four.</strong> Emit a trace ID and cache status in <code>Server-Timing</code> and capture them in your RUM beacon. This is what turns "the page was slow" into "the page was slow because it missed cache and the origin took 900ms".</p>
+
+        <p><strong>Five.</strong> Delete every alert that has fired without action in the past quarter. Then write two: one burn-rate alert on checkout latency and one on error rate. Two alerts that people trust beat forty that they mute, and the trust is the asset.</p>
+
+        <p><strong>Six.</strong> Build the one-screen dashboard, and set up the weekly automated digest into the team's chat. The digest matters more than the dashboard. It arrives; the dashboard waits.</p>
+
+        <p><strong>Seven.</strong> Validate the whole thing against CrUX before you make a single decision with it. Compare your p75 against Search Console for the same origin and period. If they disagree by more than about 20%, you have an instrumentation bug, and every hour you spend optimising before you find it is an hour spent on the wrong thing.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/core-web-vitals-optimization/">Monitoring & Optimizing Core Web Vitals for E-commerce</a></strong>
+              <strong><a href="/blog/core-web-vitals-optimization/">Monitoring &amp; Optimizing Core Web Vitals for E-commerce</a></strong>
               <p>Field data tracking and beacon analytics.</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify Stores</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
               <p>Varnish caching and sub-100ms TTFB.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -270,6 +798,6 @@ sdk.start();</code></pre>
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

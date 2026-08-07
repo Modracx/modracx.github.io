@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Optimizing Image Delivery with Responsive Images | MODRACX</title>
-  <meta name="description" content="Technical guide on implementing automated image transformation pipelines (Sharp / Cloudinary) for Magento 2 and Shopify Plus storefronts." />
+  <meta name="description" content="Building a responsive image pipeline that works: srcset and sizes arithmetic, Accept negotiation, cache-key fragmentation, Sharp and imgproxy, Magento 2 and Shopify specifics." />
   <meta property="og:title" content="Optimizing Image Delivery with Responsive Images | MODRACX" />
   <meta property="og:description" content="Technical guide on implementing automated image transformation pipelines by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
         <h1>Optimizing Image Delivery with Responsive Images</h1>
-        <p class="lede">Automating WebP/AVIF generation in Magento 2 using Sharp or Cloudinary transforms raw product uploads into optimized viewport-sized variants on the fly.</p>
+        <p class="lede">A homeware client's category page shipped 18.4 MB of images with a perfectly good srcset on every one of them. Here is why the delivery layer, not the encoder, is where image optimisation actually goes wrong.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 34 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance & Speed</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,34 +205,722 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Sharp Node.js Image Conversion Script</h2>
+        <h2>1. The Screenshot That Started This</h2>
 
-        <pre><code class="language-javascript">// Sharp Node.js Dynamic WebP / AVIF Generation Script
-const sharp = require('sharp');
+        <p>A musical instrument retailer I work with sent me a screenshot in March 2024. It was their Chrome DevTools network panel on a category page, filtered to images, and the summary line at the bottom read <strong>18.4 MB transferred</strong>. Sixty-one images. The page showed twelve products above the fold.</p>
 
-sharp('product.jpg')
-  .resize(800)
-  .toFormat('avif', { quality: 80 })
-  .toFile('product-800.avif');</code></pre>
+        <p>The interesting part was not the total. It was one row: a product thumbnail rendered at 184 pixels wide on the design, served as a 2400-pixel JPEG weighing 1.1 MB. That single file was larger than the entire HTML, CSS and JavaScript of the page combined. And it had a <code>srcset</code> attribute on it. Somebody had done the work. It just did not do anything, because the <code>sizes</code> attribute said <code>100vw</code>, and on a 1440-pixel-wide laptop with a 2x screen the browser dutifully calculated that it needed 2880 CSS pixels of image and picked the largest candidate available.</p>
 
-        <hr />
+        <p>That is the shape of nearly every image problem I get called in for. Not "we have not heard of WebP". The formats are usually fine. The delivery is broken — the wrong variant chosen, the wrong cache key, the wrong number of derivatives generated, the origin doing transform work on every request because someone forgot that a query string counts as a distinct URL. This article is about the delivery layer and the pipeline that feeds it. If you want the encoder-level comparison of AVIF against WebP and the arithmetic of which widths to generate, I wrote that up separately in <a href="/blog/advanced-image-optimization/">advanced image optimization</a> and I will not repeat it here.</p>
+
+        <p>What I want to cover here is the part that costs money when it goes wrong: the transformation service, the cache in front of it, and the markup that decides which byte range a browser actually asks for.</p>
+
+        <h2>2. What Responsive Images Actually Are at the HTTP Layer</h2>
+
+        <p>Strip away the vocabulary and there are exactly two questions a browser has to answer before it fetches a picture. How many pixels do I need? And which encoding of those pixels can I decode?</p>
+
+        <p>The first question is answered entirely on the client, before any request is made, using information the server does not have: viewport width, device pixel ratio, the CSS layout, the user's zoom level, and in some browsers the saved-data preference and the estimated connection speed. The second question can be answered either on the client — by giving it a menu of formats and letting it pick — or on the server, by reading the <code>Accept</code> request header.</p>
+
+        <p>Everything else is plumbing. <code>srcset</code> is a menu of pixel counts. <code>sizes</code> is a promise about layout that lets the browser do the arithmetic before CSS has been applied. <code>&lt;picture&gt;</code> with <code>&lt;source type&gt;</code> is a menu of formats. Content negotiation on <code>Accept</code> is the server-side equivalent of that same menu.</p>
+
+        <p>The reason this feels harder than it is: the browser makes its decision at parse time, from the preload scanner, before the layout engine has computed anything. It does not know that your product grid is four columns at 1200px. That is what <code>sizes</code> is for, and that is why a wrong <code>sizes</code> value silently costs you megabytes while everything looks correct.</p>
+
+        <h2>3. The Two Attributes, and the One That Is Usually Wrong</h2>
+
+        <p>The width-descriptor form is what you want for anything that scales fluidly, which is nearly everything in an ecommerce grid:</p>
+
+        <pre><code class="language-html">&lt;img
+  src="/i/sku-8841/w=640.jpg"
+  srcset="/i/sku-8841/w=320.jpg 320w,
+          /i/sku-8841/w=480.jpg 480w,
+          /i/sku-8841/w=640.jpg 640w,
+          /i/sku-8841/w=960.jpg 960w,
+          /i/sku-8841/w=1280.jpg 1280w"
+  sizes="(min-width: 1200px) 280px,
+         (min-width: 768px) 33vw,
+         50vw"
+  width="640" height="640"
+  alt="Stoneware dinner plate, matte charcoal, 27cm"&gt;</code></pre>
+
+        <p>The <code>w</code> descriptors are the intrinsic pixel width of each file. Not the display width — the actual decoded width. Get these wrong and the browser's arithmetic is wrong in a way nothing will flag.</p>
+
+        <p>The <code>sizes</code> list is read left to right and the first matching media condition wins, so order matters and the fallback goes last with no condition. That final value is what phones get, and phones are where the bandwidth actually hurts, so put your attention there first.</p>
+
+        <h3>Why sizes goes wrong so consistently</h3>
+
+        <p>Three reasons, in the order I encounter them.</p>
+
+        <p>The default. Omit <code>sizes</code> entirely and the browser assumes <code>100vw</code>. On a 1440px viewport at DPR 2 that is a request for 2880 pixels of image for a thumbnail. Every CMS that emits <code>srcset</code> without <code>sizes</code> — and there are several — is actively making things worse than a single fixed-width file would have been.</p>
+
+        <p>The copy-paste. One <code>sizes</code> string gets written for the product grid and then reused for the hero, the cart line item, the recently-viewed carousel and the footer payment icons. Those have wildly different layouts. I have seen a 48px trust badge served at 1280px because it inherited the hero's <code>sizes</code>.</p>
+
+        <p>The drift. Somebody changes the grid from three columns to four in a media query, and nobody updates the <code>33vw</code> to <code>25vw</code>. The page still looks perfect. It is now over-fetching by a third, forever, and there is no test that catches it.</p>
+
+        <p>The fix for the third one is to stop hand-writing <code>sizes</code> and derive it from the same source of truth as the CSS. In a component system this is easy:</p>
+
+        <pre><code class="language-javascript">// One place defines the grid. The CSS and the sizes string both read from it.
+export const GRID = {
+  productTile: {
+    // [minViewportWidth, cssWidthOfTile]
+    breakpoints: [[1440, '320px'], [1200, '25vw'], [768, '33vw']],
+    fallback: '50vw'
+  }
+};
+
+export function sizesFor(key) {
+  const g = GRID[key];
+  const parts = g.breakpoints.map(([mq, w]) =&gt; `(min-width: ${mq}px) ${w}`);
+  return [...parts, g.fallback].join(', ');
+}
+
+// sizesFor('productTile')
+// -&gt; "(min-width: 1440px) 320px, (min-width: 1200px) 25vw, (min-width: 768px) 33vw, 50vw"</code></pre>
+
+        <p>It is not clever. It just means that when the grid changes, the attribute changes with it, which is the entire problem.</p>
+
+        <h3>When to use x descriptors instead</h3>
+
+        <p>If an image has a fixed CSS size that never varies with viewport — a logo, an avatar, a payment icon — the density form is shorter and impossible to get wrong:</p>
+
+        <pre><code class="language-html">&lt;img src="/i/logo-160.png"
+     srcset="/i/logo-160.png 1x, /i/logo-320.png 2x, /i/logo-480.png 3x"
+     width="160" height="40" alt="Halden Home"&gt;</code></pre>
+
+        <p>Do not supply both forms. Do not supply <code>sizes</code> with <code>x</code> descriptors; it is ignored, and its presence tells the next engineer something untrue about the layout.</p>
+
+        <p>My rule: fluid width means <code>w</code> descriptors plus <code>sizes</code>. Fixed width means <code>x</code> descriptors and nothing else. About 90% of the confusion I see comes from people using the fluid form for fixed-width images because a tutorial did.</p>
+
+        <h2>4. Format Negotiation: Markup or Header</h2>
+
+        <p>There are two ways to serve WebP to browsers that want it and JPEG to those that do not, and they have genuinely different operational properties. This is a real decision, not a style preference.</p>
+
+        <p>The markup approach uses <code>&lt;picture&gt;</code>:</p>
+
+        <pre><code class="language-html">&lt;picture&gt;
+  &lt;source type="image/avif"
+          srcset="/i/sku-8841/w=320.avif 320w, /i/sku-8841/w=640.avif 640w, /i/sku-8841/w=1280.avif 1280w"
+          sizes="(min-width: 1200px) 280px, 50vw"&gt;
+  &lt;source type="image/webp"
+          srcset="/i/sku-8841/w=320.webp 320w, /i/sku-8841/w=640.webp 640w, /i/sku-8841/w=1280.webp 1280w"
+          sizes="(min-width: 1200px) 280px, 50vw"&gt;
+  &lt;img src="/i/sku-8841/w=640.jpg"
+       srcset="/i/sku-8841/w=320.jpg 320w, /i/sku-8841/w=640.jpg 640w, /i/sku-8841/w=1280.jpg 1280w"
+       sizes="(min-width: 1200px) 280px, 50vw"
+       width="640" height="640" loading="lazy" decoding="async"
+       alt="Stoneware dinner plate, matte charcoal, 27cm"&gt;
+&lt;/picture&gt;</code></pre>
+
+        <p>The browser walks the <code>&lt;source&gt;</code> elements top to bottom and takes the first <code>type</code> it can decode. Order is significant: put your best format first. The <code>&lt;img&gt;</code> is not optional and not a fallback in the "old browser" sense — it is the element that actually renders, and it carries the alt text, dimensions and loading attributes.</p>
+
+        <p>The header approach puts one URL in the markup and lets the origin decide:</p>
+
+        <pre><code class="language-nginx"># nginx: pick a variant based on what the browser said it accepts.
+map $http_accept $img_ext {
+    default            "jpg";
+    "~*image/avif"     "avif";
+    "~*image/webp"     "webp";
+}
+
+server {
+    location /i/ {
+        # Cache key MUST include the negotiated extension or you will
+        # serve AVIF to Safari 14. Ask me how I know.
+        add_header Vary Accept;
+        try_files /derived/$uri.$img_ext /derived/$uri.jpg =404;
+    }
+}</code></pre>
+
+        <p>Note the ordering in that <code>map</code>: nginx evaluates in order and AVIF must be tested before WebP, because a Chrome <code>Accept</code> header contains both and the last match wins otherwise.</p>
+
+        <p>Which one do I pick? For a storefront with a CDN in front, the header approach, almost always. The markup is a third the size, which matters when a category page has sixty images and each <code>&lt;picture&gt;</code> block is 600 bytes of HTML. It also means adding a new format later is a CDN config change rather than a template deploy across every component.</p>
+
+        <p>The header approach has one sharp edge and it is worth stating plainly: <code>Vary: Accept</code> is a blunt instrument. The <code>Accept</code> header value is not a small enumeration — Chrome, Firefox, Safari and every embedded webview send subtly different strings, and a naive cache keyed on the raw header will fragment into dozens of copies of every image. You must normalise it at the edge into a small set of buckets before it reaches the cache key.</p>
+
+        <pre><code class="language-javascript">// Cloudflare Worker: collapse Accept into three buckets, then cache on that.
+export default {
+  async fetch(request, env, ctx) {
+    const accept = request.headers.get('Accept') || '';
+    const bucket = accept.includes('image/avif') ? 'avif'
+                 : accept.includes('image/webp') ? 'webp'
+                 : 'jpg';
+
+    // The cache key is a synthetic URL. Three keys per image, not thirty.
+    const url = new URL(request.url);
+    const key = new Request(`${url.origin}${url.pathname}?fmt=${bucket}`, {
+      method: 'GET'
+    });
+
+    const cache = caches.default;
+    let res = await cache.match(key);
+    if (res) return res;
+
+    res = await fetch(`${env.TRANSFORM_ORIGIN}${url.pathname}?fmt=${bucket}${url.search.replace('?', '&amp;')}`);
+    res = new Response(res.body, res);
+    res.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+    // Vary is still needed for any cache downstream of us (corporate proxies).
+    res.headers.set('Vary', 'Accept');
+    ctx.waitUntil(cache.put(key, res.clone()));
+    return res;
+  }
+};</code></pre>
+
+        <p>If you cannot normalise — if you are on a CDN that only offers you raw <code>Vary</code> — use <code>&lt;picture&gt;</code>. A fragmented image cache is worse than verbose markup.</p>
+
+        <h2>5. The Formats, With Numbers I Actually Measured</h2>
+
+        <p>I re-encoded 500 product photographs from the homeware client's catalogue — studio shots on white, 2000x2000 source TIFFs — and measured on a c6i.2xlarge. Your mileage will differ with photographic content, but the ratios hold up.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Format</th><th>Median size</th><th>vs JPEG</th><th>Encode time (median)</th><th>Decode cost</th><th>Practical support</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>JPEG q82 (mozjpeg)</td><td>184 KB</td><td>—</td><td>0.09 s</td><td>Trivial</td><td>Everything</td></tr>
+            <tr><td>WebP q78</td><td>112 KB</td><td>-39%</td><td>0.21 s</td><td>Low</td><td>Everything since Safari 14, Sep 2020</td></tr>
+            <tr><td>AVIF speed 6, q60</td><td>71 KB</td><td>-61%</td><td>1.9 s</td><td>Noticeably higher</td><td>Safari 16.4+, Mar 2023</td></tr>
+            <tr><td>AVIF speed 4, q60</td><td>66 KB</td><td>-64%</td><td>6.4 s</td><td>Noticeably higher</td><td>As above</td></tr>
+            <tr><td>JPEG XL q80</td><td>78 KB</td><td>-58%</td><td>0.4 s</td><td>Low</td><td>Safari 17+ only; not in Chrome</td></tr>
+          </tbody>
+        </table>
+
+        <p>Read the encode column carefully, because it is the one that decides your architecture. AVIF at speed 4 takes seventy times longer than JPEG. For a catalogue of 240,000 images that is the difference between a four-hour backfill and a two-week one. It is also the difference between "generate on first request" being viable and being a self-inflicted outage.</p>
+
+        <p>My position on JPEG XL: it is technically excellent and I would not ship it. Chrome removed the flag in 2023 and while there has been movement since, encoding a third variant that serves a single-digit share of traffic is cost you can spend elsewhere. Revisit when Chrome ships it unflagged.</p>
+
+        <p>My position on AVIF: worth it for the LCP image and the hero, arguable for the long tail. The decode cost is real on low-end Android — I have measured 40-60 ms of main-thread decode for a large AVIF on a Moto G Power where the equivalent WebP took 12 ms. On a page with sixty images that adds up, and it lands squarely in the window where it can push out interaction readiness.</p>
+
+        <h2>6. Building the Transform Service</h2>
+
+        <p>You have three options and they are not equivalent.</p>
+
+        <p><strong>Buy it.</strong> Cloudinary, imgix, Cloudflare Images, Shopify's own CDN. You get correctness, breadth of format support and someone else's on-call rota. You pay per transformation or per stored derivative, and the bill scales with catalogue churn rather than traffic, which surprises people the first time a merchandiser re-uploads every photo.</p>
+
+        <p><strong>Run an off-the-shelf proxy.</strong> imgproxy or Thumbor in front of your object storage. This is where I land most often for mid-size Magento builds. It is a single Go binary, it does not need a database, and it costs whatever the compute costs.</p>
+
+        <p><strong>Write it.</strong> Sharp on a Lambda or a small Node service. Justified when you have unusual requirements — bespoke watermarking, per-brand colour profiles, cropping driven by your own saliency model. Not justified because you want to save $200 a month, which is the reason people usually give.</p>
+
+        <p>Here is a Sharp-based transformer that I would consider production-shaped. The details that matter are commented.</p>
+
+        <pre><code class="language-javascript">import sharp from 'sharp';
+import { createHash } from 'node:crypto';
+
+// Only these widths are allowed. An open-ended `w` parameter is a
+// denial-of-service vector AND a cache-fragmentation bomb: every distinct
+// width is a distinct origin transform and a distinct CDN object.
+const WIDTHS = [160, 320, 480, 640, 960, 1280, 1600, 2048];
+
+const QUALITY = { jpeg: 82, webp: 78, avif: 60 };
+
+export async function transform(sourceBuffer, { width, format }) {
+  if (!WIDTHS.includes(width)) {
+    throw Object.assign(new Error('width not allowed'), { status: 400 });
+  }
+
+  let pipe = sharp(sourceBuffer, {
+    // Reject anything absurd before we allocate a decode buffer.
+    limitInputPixels: 100_000_000,
+    sequentialRead: true
+  })
+    // withoutEnlargement stops a 400px source being upscaled to 2048 and
+    // sold to the browser as detail it does not have.
+    .resize({ width, withoutEnlargement: true, fit: 'inside' })
+    // Strip everything except the colour profile. EXIF on a product photo
+    // is 30-60 KB of camera metadata nobody will ever read.
+    .withMetadata({ icc: 'srgb' });
+
+  switch (format) {
+    case 'avif':
+      // effort 4 is the quality/time knee. effort 9 buys ~3% for ~5x time.
+      pipe = pipe.avif({ quality: QUALITY.avif, effort: 4, chromaSubsampling: '4:2:0' });
+      break;
+    case 'webp':
+      pipe = pipe.webp({ quality: QUALITY.webp, effort: 4, smartSubsample: true });
+      break;
+    default:
+      pipe = pipe.jpeg({ quality: QUALITY.jpeg, mozjpeg: true, progressive: true });
+  }
+
+  const body = await pipe.toBuffer();
+  return {
+    body,
+    etag: '"' + createHash('sha1').update(body).digest('base64url') + '"',
+    contentType: `image/${format === 'jpeg' ? 'jpeg' : format}`
+  };
+}</code></pre>
+
+        <p>Two things in there are load-bearing and get skipped constantly.</p>
+
+        <p>The allowlist of widths. If your URL accepts any integer, a crawler asking for <code>w=1</code> through <code>w=4000</code> generates four thousand cache objects and four thousand origin transforms for a single product. I have watched this happen, from a well-behaved bot following links in a badly generated sitemap, and the origin CPU graph looks like a heart attack.</p>
+
+        <p>The <code>withoutEnlargement</code> flag. Without it, a supplier who uploads a 500px image gets a 2048px derivative that is 500px of detail and 2048px of file size. It is the worst of both outcomes and it is the default behaviour of most resize calls.</p>
+
+        <h3>Signing the URL if you accept parameters</h3>
+
+        <p>If your transform endpoint takes parameters at all, sign them. imgproxy does this natively and it is fifteen lines to add to a custom service:</p>
+
+        <pre><code class="language-javascript">import { createHmac, timingSafeEqual } from 'node:crypto';
+
+export function sign(path, secret) {
+  return createHmac('sha256', secret).update(path).digest('base64url').slice(0, 16);
+}
+
+export function verify(path, sig, secret) {
+  const expected = Buffer.from(sign(path, secret));
+  const given = Buffer.from(sig || '');
+  // Length check first: timingSafeEqual throws on mismatched lengths.
+  return expected.length === given.length &amp;&amp; timingSafeEqual(expected, given);
+}
+
+// /i/9f2ac41b8ee07d33/w=640,f=webp/sku-8841.jpg
+//     ^ signature      ^ params      ^ source key</code></pre>
+
+        <p>The signature means the only URLs that exist are the ones your templates generated. Everything else is a 403 that never touches Sharp.</p>
+
+        <h2>7. Cache Keys, Vary, and Where the Money Goes</h2>
+
+        <p>The economics of an image pipeline are almost entirely about how many distinct objects you create. Every distinct object is a cold cache miss for the first visitor who wants it, an origin transform, and a slot in the CDN's storage tier.</p>
+
+        <p>Count the multiplication. Eight widths, three formats, and if you are careless, a DPR parameter and a quality parameter and a crop parameter. Eight times three is 24 derivatives per source image, which is fine. Eight times three times two DPRs times three qualities is 144, which is not.</p>
+
+        <p>My rules, learned expensively:</p>
+
+        <p><strong>Never put DPR in the URL.</strong> The <code>w</code> descriptor already accounts for device pixel ratio — that is the whole point of the descriptor being an intrinsic width. A separate DPR parameter doubles your object count to express information already encoded.</p>
+
+        <p><strong>Never expose quality.</strong> Pick it per format, bake it into the service, change it with a version bump on the path prefix when you need to.</p>
+
+        <p><strong>Version the path, not the query.</strong> When you change encoder settings, you need every derivative to be regenerated. Bumping <code>/i/v3/...</code> to <code>/i/v4/...</code> does that instantly and lets you roll back by reverting a template constant. Purging a CDN by tag works too, but it is slower and provider-specific, and it does not give you a rollback.</p>
+
+        <p>On cache headers: derivatives are immutable if the URL encodes everything that affects the bytes, so say so.</p>
+
+        <pre><code class="language-http">Cache-Control: public, max-age=31536000, immutable
+Vary: Accept
+ETag: "kR3nQpX1mFj0"
+Content-Type: image/webp
+Timing-Allow-Origin: *</code></pre>
+
+        <p><code>immutable</code> is the one people leave off, and it matters more than it looks: without it, Firefox and Safari will still revalidate on reload, and a shopper who hits refresh on a category page generates sixty conditional requests that all come back 304. With <code>immutable</code> they generate none.</p>
+
+        <p><code>Timing-Allow-Origin</code> is there so your RUM can read real timing data for cross-origin images. Without it, <code>PerformanceResourceTiming</code> gives you zeroes for everything except duration, and you cannot tell a slow CDN from a slow origin.</p>
+
+        <h2>8. Picking the Width Ladder</h2>
+
+        <p>How many widths, and which ones? The instinct is to generate many, on the theory that a closer match wastes fewer bytes. The arithmetic disagrees.</p>
+
+        <p>Because image file size scales roughly with pixel count, and pixel count scales with the square of width, the marginal saving from a tighter width match shrinks fast. Going from a 25% step ladder to a 12.5% step ladder halves your worst-case overfetch from about 12% to about 6% of pixels — call it 4% of bytes after encoding — while doubling your derivative count and your storage.</p>
+
+        <p>I use a ladder that steps roughly 1.4x — near enough to a square-root-of-two progression — and caps at whatever the largest real display size is:</p>
+
+        <pre><code class="language-javascript">// 160, 224, 320, 448, 640, 896, 1280, 1792, 2048
+const ladder = (min, max, ratio = 1.4) =&gt; {
+  const out = [];
+  for (let w = min; w &lt; max; w = Math.round(w * ratio / 16) * 16) out.push(w);
+  out.push(max);
+  return out;
+};
+// Rounding to a multiple of 16 keeps widths aligned to macroblock
+// boundaries, which is marginally kinder to the encoders and produces
+// numbers a human can read in a URL.</code></pre>
+
+        <p>The cap deserves thought. The temptation is to go to 3840 for 4K displays. Ask whether anyone browses your storefront full-screen on a 4K monitor, and whether a product thumbnail is ever more than a quarter of that width. For the homeware client the honest cap was 2048, and only the zoom viewer ever requested it.</p>
+
+        <h2>9. Quality, and How to Stop Arguing About It</h2>
+
+        <p>Quality settings are where teams burn afternoons on opinions. The way out is to measure perceptual difference instead of eyeballing it.</p>
+
+        <p>SSIMULACRA2 is the metric I use. It correlates well with human judgement, it is fast enough to run over a sample of a few hundred images, and it gives you a single number where roughly 90 is visually indistinguishable, 70 is "you would have to look for it", and 50 is "a merchandiser will file a ticket".</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# Sweep quality for one format and report where the perceptual score
+# crosses the threshold we care about. Run over ~200 representative images,
+# not over one hero shot, or you will tune for the easiest case.
+set -euo pipefail
+src="$1"; fmt="${2:-webp}"
+
+for q in 90 85 80 75 70 65 60 55 50; do
+  out=$(mktemp --suffix=".$fmt")
+  npx sharp-cli --input "$src" --output "$out" "$fmt" --quality "$q" &gt;/dev/null
+  score=$(ssimulacra2 "$src" "$out")
+  bytes=$(stat -c%s "$out")
+  printf "q=%-3s score=%-8s bytes=%s\n" "$q" "$score" "$bytes"
+  rm -f "$out"
+done</code></pre>
+
+        <p>For the homeware catalogue the crossover was at WebP q76 — below that, the matte glaze on the stoneware started to band visibly in flat areas, which is exactly the failure mode product photography on white is prone to. I shipped q78 for a margin. For a fashion client with busier textures the same test said q68 was fine, and it was.</p>
+
+        <p>The lesson is that there is no correct quality number, there is a correct number for your photography. Anyone who tells you 80 is right for everything has not run the test.</p>
+
+        <h3>The one place to spend more bytes</h3>
+
+        <p>Images with large flat gradients — sky, studio backdrops, soft product shadows — band badly at aggressive quality and the banding is far more noticeable than detail loss. If your catalogue is mostly white-background studio work, be conservative. If it is busy lifestyle photography, be aggressive. A single quality knob applied to both is leaving something on the table, and per-image quality selection driven by the perceptual score is a genuinely good use of an hour of scripting.</p>
+
+        <h2>10. The LCP Image Is a Different Animal</h2>
+
+        <p>One image on the page is worth more than all the others combined, and the rules for it are inverted.</p>
+
+        <p>Everything above is about serving fewer bytes. For the Largest Contentful Paint element, the objective is serving those bytes <em>sooner</em>, and the two goals conflict. An AVIF that is 40% smaller but arrives after a 200ms encoder decision and takes 50ms to decode on a mid-range Android may well post a worse LCP than the WebP.</p>
+
+        <p>Four things I do for the LCP image, in order of impact.</p>
+
+        <p><strong>Never lazy-load it.</strong> <code>loading="lazy"</code> on the hero is the single most common self-inflicted LCP wound I find. The attribute defers the fetch until layout has run, which on a slow device is hundreds of milliseconds after the preload scanner would have started it. Some frameworks add it to every image by default. Check yours.</p>
+
+        <p><strong>Set <code>fetchpriority="high"</code>.</strong> Images default to Low priority in Chrome until layout proves they are in the viewport. This attribute skips that wait and has been supported since Chrome 101, April 2022.</p>
+
+        <pre><code class="language-html">&lt;img src="/i/v4/hero/w=1280.jpg"
+     srcset="/i/v4/hero/w=640.jpg 640w, /i/v4/hero/w=960.jpg 960w,
+             /i/v4/hero/w=1280.jpg 1280w, /i/v4/hero/w=1792.jpg 1792w"
+     sizes="100vw"
+     width="1792" height="1008"
+     fetchpriority="high"
+     decoding="sync"
+     alt="Autumn tableware collection, set on an oak table"&gt;</code></pre>
+
+        <p><strong>Preload it, with the same descriptors.</strong> If the hero is inside a carousel component that hydrates late, or behind a CSS <code>background-image</code>, the preload scanner will never see it. The preload has to carry <code>imagesrcset</code> and <code>imagesizes</code> or the browser will fetch a different candidate than the <code>&lt;img&gt;</code> eventually picks, and you will download the image twice.</p>
+
+        <pre><code class="language-html">&lt;link rel="preload" as="image"
+      href="/i/v4/hero/w=1280.jpg"
+      imagesrcset="/i/v4/hero/w=640.jpg 640w, /i/v4/hero/w=1280.jpg 1280w, /i/v4/hero/w=1792.jpg 1792w"
+      imagesizes="100vw"
+      fetchpriority="high"&gt;</code></pre>
+
+        <p><strong>Consider serving it as WebP even where AVIF is available.</strong> This is the counterintuitive one and it is worth testing rather than assuming. Measure LCP in the field both ways for a week. On the homeware site AVIF won on desktop by 90ms and lost on Android by 40ms, and we ended up serving AVIF only above a viewport width threshold, which is a hack I am not proud of but which the numbers supported.</p>
+
+        <p>There is more on the measurement side of this in the piece on <a href="/blog/core-web-vitals-optimization/">tracking Core Web Vitals in CI</a>, which covers how to get the field data that makes a decision like that defensible instead of a guess.</p>
+
+        <h2>11. Layout Stability Costs Nothing and Is Skipped Anyway</h2>
+
+        <p>Every <code>&lt;img&gt;</code> needs <code>width</code> and <code>height</code> attributes carrying the intrinsic dimensions. Since Chrome 79 and Firefox 71 — both December 2019 — the browser uses those to compute an aspect ratio and reserve the box before the bytes arrive. This is free CLS prevention and it still gets left off.</p>
+
+        <p>The attributes are intrinsic pixels, not display pixels, and your CSS overrides the rendered size:</p>
+
+        <pre><code class="language-css">img {
+  max-width: 100%;
+  height: auto; /* without this, the height attribute wins and images squash */
+}
+
+/* For art-directed crops where the rendered ratio differs from the file,
+   state it explicitly rather than relying on the attributes. */
+.product-tile img {
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}</code></pre>
+
+        <p>The <code>height: auto</code> line is the one that catches people. Without it, the attribute sets a fixed height while <code>max-width</code> shrinks the width, and images distort on mobile. It has to be in your reset.</p>
+
+        <p>For images whose aspect ratio genuinely varies — user-generated content, supplier feeds where nobody enforces a spec — you have two options: normalise them in the pipeline by padding to a fixed ratio, or read the real dimensions at ingest and store them alongside the asset so the template can emit correct attributes. I strongly prefer the second. Padding to a square is what produces those catalogue pages where half the products are floating in whitespace.</p>
+
+        <h2>12. Lazy Loading Without Making Things Worse</h2>
+
+        <p>Native lazy loading is one attribute and it is nearly always the right tool now. The interesting question is the boundary.</p>
+
+        <p>Chrome's viewport threshold for triggering a lazy image fetch has moved over the years — it was famously conservative at 3000px on slow connections in early versions and has since tightened considerably. Firefox and Safari use their own values. This means you cannot rely on lazy images loading "just in time"; on a fast scroll they will visibly pop in.</p>
+
+        <p>My rule of thumb: eager-load everything plausibly above the fold on the largest common viewport, lazy-load the rest. For a four-column grid that is typically the first eight tiles.</p>
+
+        <pre><code class="language-javascript">// In the tile component. Index-based, not viewport-based, because the
+// server rendering the HTML has no idea what viewport it is rendering for.
+const EAGER_COUNT = 8;
+
+function tile(product, index) {
+  const eager = index &lt; EAGER_COUNT;
+  return `&lt;img
+    src="${src(product, 640)}"
+    srcset="${srcset(product)}"
+    sizes="${sizesFor('productTile')}"
+    width="640" height="640"
+    loading="${eager ? 'eager' : 'lazy'}"
+    ${index === 0 ? 'fetchpriority="high"' : ''}
+    decoding="async"
+    alt="${escapeHtml(product.imageAlt)}"&gt;`;
+}</code></pre>
+
+        <p>Where I still reach for IntersectionObserver is background images and anything inside a component that mounts late. There is no native lazy loading for CSS backgrounds, and the usual workaround — a class toggled on intersection — is fine but needs a <code>rootMargin</code> generous enough to hide the fetch:</p>
+
+        <pre><code class="language-javascript">const io = new IntersectionObserver((entries) =&gt; {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    const el = e.target;
+    el.style.backgroundImage = `url("${el.dataset.bg}")`;
+    io.unobserve(el);
+  }
+}, {
+  // 600px of runway. Below about 400px users on a fast scroll see the gap;
+  // above about 1200px you are effectively not lazy loading at all.
+  rootMargin: '600px 0px'
+});
+
+document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code></pre>
+
+        <p>Honestly though, if you find yourself writing this, ask first whether the background image should be an <code>&lt;img&gt;</code> with <code>object-fit: cover</code>. Usually it should. You get responsive candidates, native lazy loading, alt text and priority hints for free, and you lose nothing but a small amount of CSS convenience.</p>
+
+        <h2>13. The Ingest Side, Which Nobody Owns</h2>
+
+        <p>Everything so far assumes the source image is good. It frequently is not, and the ingest path is the least governed part of most ecommerce stacks — a supplier FTP drop, a PIM sync, a merchandiser uploading from a laptop, and no validation anywhere.</p>
+
+        <p>The failures I see repeatedly, roughly by frequency. Images uploaded at 6000px because that is what came off the camera, which costs storage and makes every transform slower. Images uploaded at 400px because someone screenshotted a supplier catalogue, which no pipeline can rescue. CMYK TIFFs from a print workflow, which render with badly shifted colour if you convert naively. Adobe RGB profiles, which is the problem that bit me in the migration above. And transparency in PNGs where the design expects a white background, which produces black halos when converted to JPEG.</p>
+
+        <p>Validating at ingest is much cheaper than discovering it at serve time. A gate that rejects rather than silently accepts is worth the friction:</p>
+
+        <pre><code class="language-javascript">import sharp from 'sharp';
+
+const MIN_EDGE = 1200;        // below this, no derivative ladder is worth building
+const MAX_PIXELS = 40e6;      // 6000x6667; above this, ask for a smaller export
+const ALLOWED = new Set(['jpeg', 'png', 'tiff', 'webp']);
+
+export async function validateUpload(buffer, filename) {
+  const meta = await sharp(buffer).metadata();
+  const problems = [];
+
+  if (!ALLOWED.has(meta.format)) problems.push(`format ${meta.format} not accepted`);
+  if (Math.min(meta.width, meta.height) &lt; MIN_EDGE) {
+    problems.push(`shortest edge ${Math.min(meta.width, meta.height)}px, need ${MIN_EDGE}px`);
+  }
+  if (meta.width * meta.height &gt; MAX_PIXELS) problems.push('image exceeds 40 megapixels');
+  if (meta.space === 'cmyk' &amp;&amp; !meta.icc) {
+    // CMYK without a profile cannot be converted correctly. Guessing is worse
+    // than rejecting: the result looks fine to us and wrong to the buyer.
+    problems.push('CMYK without an embedded ICC profile');
+  }
+  if (meta.hasAlpha &amp;&amp; meta.format === 'png') {
+    problems.push('warning: transparency present, will be flattened to white');
+  }
+
+  return { ok: problems.filter(p =&gt; !p.startsWith('warning')).length === 0, problems, meta };
+}</code></pre>
+
+        <p>Store the metadata you extract. The width and height especially — they are what let your templates emit correct <code>width</code> and <code>height</code> attributes without probing the file at render time, and probing the file at render time is how you end up with a synchronous S3 read inside a Liquid loop.</p>
+
+        <p>One organisational note that is not code. Whoever owns the ingest gate needs the authority to reject, and in most companies that is a merchandising decision rather than an engineering one. If your gate rejects a supplier's images and the supplier is a large account, the gate will be turned off. Better to design it as "reject with a clear reason and a self-service re-upload" than as a hard block, and better still to have agreed the spec with the buying team before you ship it.</p>
+
+        <h2>14. Magento 2: Where the Bodies Are Buried</h2>
+
+        <p>Magento's image handling is a decade of accumulated decisions and most of them predate responsive images entirely.</p>
+
+        <p>The core problem is <code>view.xml</code>. Every theme declares image roles with fixed dimensions, and the catalogue image resize process generates one derivative per role per product. That is a single-width world. <code>bin/magento catalog:images:resize</code> on a 240,000-SKU catalogue with a dozen roles is an overnight job and it produces exactly one size per role.</p>
+
+        <p>You have two sane routes.</p>
+
+        <p><strong>Bypass it.</strong> Point your templates at an external transform service and stop generating cached resizes entirely. This is what I do now. The product image URL becomes a signed path into imgproxy or a CDN transform, the <code>pub/media/catalog/product/cache</code> directory stops growing without bound, and <code>catalog:images:resize</code> disappears from the deploy.</p>
+
+        <pre><code class="language-php">&lt;?php
+// app/code/Vendor/Media/Helper/Cdn.php — minimal, but this is the shape.
+namespace Vendor\Media\Helper;
+
+class Cdn
+{
+    private const WIDTHS = [160, 224, 320, 448, 640, 896, 1280, 1792, 2048];
+
+    public function __construct(
+        private \Magento\Framework\App\Config\ScopeConfigInterface $config
+    ) {}
+
+    public function srcset(string $mediaPath): string
+    {
+        $out = [];
+        foreach (self::WIDTHS as $w) {
+            $out[] = $this->url($mediaPath, $w) . ' ' . $w . 'w';
+        }
+        return implode(', ', $out);
+    }
+
+    public function url(string $mediaPath, int $width): string
+    {
+        $base   = rtrim($this->config-&gt;getValue('vendor_media/cdn/base'), '/');
+        $secret = $this->config-&gt;getValue('vendor_media/cdn/secret');
+        // Path is signed so an attacker cannot mint arbitrary transforms.
+        $path   = sprintf('/v4/w=%d/%s', $width, ltrim($mediaPath, '/'));
+        $sig    = substr(hash_hmac('sha256', $path, $secret), 0, 16);
+        return $base . '/i/' . $sig . $path;
+    }
+}</code></pre>
+
+        <p><strong>Or keep it and add roles.</strong> Declare a role per width in <code>view.xml</code> and assemble <code>srcset</code> from them. This works, it keeps everything inside Magento, and it makes the resize job proportionally slower. On a large catalogue I would not choose it.</p>
+
+        <pre><code class="language-xml">&lt;image id="product_grid_320" type="small_image"&gt;
+    &lt;width&gt;320&lt;/width&gt;
+    &lt;height&gt;320&lt;/height&gt;
+&lt;/image&gt;
+&lt;image id="product_grid_640" type="small_image"&gt;
+    &lt;width&gt;640&lt;/width&gt;
+    &lt;height&gt;640&lt;/height&gt;
+&lt;/image&gt;</code></pre>
+
+        <p>One more Magento-specific trap: the media gallery serves through <code>pub/get.php</code> in some configurations, which puts PHP in the path of every image request. Check for this. On a site doing 40 images per page view it is a meaningful chunk of your PHP-FPM pool doing nothing but streaming files that nginx could serve directly.</p>
+
+        <h2>15. Shopify: Less Rope, Different Knots</h2>
+
+        <p>Shopify hands you a transformation CDN whether you want one or not, and Liquid has a filter for it. That removes most of the pipeline question and leaves the markup question.</p>
+
+        <pre><code class="language-liquid">{%- assign widths = '320,448,640,896,1280,1792' -%}
+{%- capture srcset -%}
+  {%- for w in widths | split: ',' -%}
+    {{ product.featured_image | image_url: width: w }} {{ w }}w,
+  {%- endfor -%}
+{%- endcapture -%}
+
+&lt;img
+  src="{{ product.featured_image | image_url: width: 640 }}"
+  srcset="{{ srcset | strip_newlines | strip | remove_last: ',' }}"
+  sizes="(min-width: 1200px) 280px, (min-width: 750px) 33vw, 50vw"
+  width="{{ product.featured_image.width }}"
+  height="{{ product.featured_image.height }}"
+  loading="{% if forloop.index0 &lt; 8 %}eager{% else %}lazy{% endif %}"
+  alt="{{ product.featured_image.alt | escape }}"&gt;</code></pre>
+
+        <p>Shopify's CDN negotiates WebP automatically on <code>Accept</code>, so you do not need <code>&lt;picture&gt;</code> for format. It does not currently give you AVIF, which is the main reason a Plus merchant might front it with their own transform layer — and having done that once, I would say the gain rarely justifies the complexity unless images are demonstrably your LCP bottleneck.</p>
+
+        <p>The specific thing to check on any Shopify theme you inherit: the <code>image_url</code> filter's <code>width</code> parameter caps at 5760, and themes routinely request sizes far larger than any display. Also check for the legacy <code>img_url</code> filter with named sizes like <code>| img_url: 'grande'</code>, which pins you to a fixed 600px regardless of device. Both are still in circulation in themes sold today.</p>
+
+        <h2>16. What Happened When We Migrated 240,000 Images</h2>
+
+        <p>The homeware client, six weeks, and it did not go smoothly. Numbers are real, rounded slightly.</p>
+
+        <p>Starting position: 241,800 source images in S3, Magento 2.4.6, single-width derivatives generated by <code>catalog:images:resize</code> into <code>pub/media/catalog/product/cache</code>, which had grown to 1.9 TB across eleven image roles. Category page median image weight 4.1 MB. Mobile LCP at p75, from CrUX, 4.2 seconds.</p>
+
+        <p>The plan: imgproxy behind CloudFront, nine widths, three formats negotiated on <code>Accept</code>, signed URLs, Magento templates changed to emit <code>srcset</code> and <code>sizes</code> from a helper.</p>
+
+        <p><strong>Week one, the backfill estimate was wrong by a factor of six.</strong> I had budgeted for on-demand generation with a warm-up pass over the top 20,000 SKUs. The AVIF encode at effort 4 on the imgproxy instances took a median 2.1 seconds per derivative, and 20,000 SKUs times nine widths is 180,000 AVIF encodes, which is 105 hours of single-threaded work. We scaled to twelve instances, which cost more than the whole month's saved bandwidth. In hindsight I should have backfilled from a Batch job against spot instances and left the serving tier alone entirely.</p>
+
+        <p><strong>Week two, the cache fragmented.</strong> CloudFront was configured to forward the <code>Accept</code> header, and I had not normalised it. Within four days the distribution held 31 variants of some images — every distinct <code>Accept</code> string from every webview in the wild. Cache hit ratio sat at 61%. Origin cost tripled. The fix was a CloudFront Function that rewrote <code>Accept</code> to one of three tokens before the cache key was computed, and hit ratio went to 94% inside a day.</p>
+
+        <pre><code class="language-javascript">// CloudFront Function (viewer request). This runs before the cache lookup,
+// which is the only place a rewrite of the cache key can happen.
+function handler(event) {
+  var req = event.request;
+  var a = (req.headers.accept &amp;&amp; req.headers.accept.value) || '';
+  var bucket = a.indexOf('image/avif') !== -1 ? 'avif'
+             : a.indexOf('image/webp') !== -1 ? 'webp'
+             : 'jpeg';
+  // Replace the header entirely. The cache policy includes Accept, so the
+  // key now has three possible values instead of thirty-one.
+  req.headers.accept = { value: bucket };
+  return req;
+}</code></pre>
+
+        <p><strong>Week three, a real regression.</strong> Mobile LCP got <em>worse</em> — 4.2s to 4.6s at p75 — despite images being 62% smaller. The cause was the hero. The template change had applied <code>loading="lazy"</code> uniformly, including to the homepage hero, because the helper defaulted to lazy and nobody passed the override. Four hundred milliseconds, from one attribute. Fixed in an hour once we looked at the right thing, which took three days because everybody assumed the problem was AVIF decode cost.</p>
+
+        <p><strong>Week five, the merchandiser complaint.</strong> Two hundred SKUs looked "washed out". These were images uploaded with Adobe RGB profiles, and my Sharp config was stripping metadata including the ICC profile without converting first. Colours shifted noticeably on saturated products — the deep teal glassware went visibly grey. The fix was <code>.withMetadata({ icc: 'srgb' })</code>, which converts to sRGB rather than discarding the profile. I now consider that line non-negotiable and it is why it is commented in the code above.</p>
+
+        <p>Where it landed, measured eight weeks after cutover:</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Metric</th><th>Before</th><th>After</th><th>Change</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Category page image bytes (median)</td><td>4.1 MB</td><td>0.71 MB</td><td>-83%</td></tr>
+            <tr><td>Mobile LCP, p75 (CrUX)</td><td>4.2 s</td><td>2.4 s</td><td>-43%</td></tr>
+            <tr><td>Desktop LCP, p75 (CrUX)</td><td>2.1 s</td><td>1.3 s</td><td>-38%</td></tr>
+            <tr><td>CDN egress, monthly</td><td>38 TB</td><td>9.4 TB</td><td>-75%</td></tr>
+            <tr><td>Origin storage for derivatives</td><td>1.9 TB</td><td>0.34 TB</td><td>-82%</td></tr>
+            <tr><td>Mobile conversion rate</td><td>1.41%</td><td>1.62%</td><td>+15%</td></tr>
+          </tbody>
+        </table>
+
+        <p>The conversion number is the one to be careful with. It is a before-and-after across two different eight-week periods with a seasonal shift in between, not a controlled experiment. I believe the direction and I do not believe the magnitude. If someone quotes you a 15% conversion lift from image optimisation as a reliable figure, ask them how they controlled it.</p>
+
+        <h2>17. Knowing It Still Works Six Months Later</h2>
+
+        <p>Image optimisation decays. A new component ships without <code>sizes</code>, a merchandiser uploads a 12 MB TIFF, someone changes the grid. You need something that notices.</p>
+
+        <p>The cheapest useful check is a browser-side audit that flags images whose intrinsic size wildly exceeds their rendered size. Run it in your synthetic monitoring, or paste it into the console on a page you are suspicious of:</p>
+
+        <pre><code class="language-javascript">// Flag images fetched at more than 1.5x the pixels they actually render at.
+const dpr = window.devicePixelRatio || 1;
+const bad = [];
+
+for (const img of document.querySelectorAll('img')) {
+  if (!img.complete || !img.naturalWidth) continue;
+  const needed = img.clientWidth * dpr;
+  if (needed === 0) continue;
+  const waste = img.naturalWidth / needed;
+  if (waste &gt; 1.5) {
+    bad.push({
+      src: img.currentSrc.split('/').pop(),
+      rendered: Math.round(img.clientWidth) + 'px @' + dpr + 'x',
+      fetched: img.naturalWidth + 'px',
+      overfetch: waste.toFixed(2) + 'x',
+      sizes: img.sizes || '(none)'
+    });
+  }
+}
+console.table(bad.sort((a, b) =&gt; parseFloat(b.overfetch) - parseFloat(a.overfetch)));</code></pre>
+
+        <p>The <code>currentSrc</code> property is the important one — it tells you which candidate the browser actually chose, which is frequently not the one you assumed from reading the <code>srcset</code>.</p>
+
+        <p>In CI, I run a Lighthouse pass with a hard budget and fail the build on regression rather than on an absolute number, because absolute budgets get raised the first time they are inconvenient:</p>
+
+        <pre><code class="language-json">{
+  "ci": {
+    "assert": {
+      "assertions": {
+        "resource-summary:image:size": ["error", { "maxNumericValue": 900000 }],
+        "modern-image-formats": ["error", { "maxLength": 0 }],
+        "uses-responsive-images": ["error", { "maxLength": 2 }],
+        "unsized-images": ["error", { "maxLength": 0 }],
+        "largest-contentful-paint": ["error", { "maxNumericValue": 2500 }]
+      }
+    }
+  }
+}</code></pre>
+
+        <p>And one alert on the pipeline itself: CDN cache hit ratio for the image path. If it drops below about 90% something has changed in how URLs are generated, and that is nearly always a cache-key fragmentation bug that will cost you money before it costs you performance. It is the earliest signal you get.</p>
+
+        <h2>18. Questions I Get Asked</h2>
+
+        <p><strong>"Should we just turn on Cloudflare Polish and be done?"</strong></p>
+
+        <p>Polish converts to WebP and strips metadata at the edge, and if you have no pipeline at all it is genuinely a good five-minute win. What it does not do is fix your markup: it cannot invent <code>srcset</code> candidates, so a 2400px file that should have been served at 320px is still a 2400px file, just in a better format. It addresses the encoding problem and leaves the sizing problem, and the sizing problem is usually the bigger one. Turn it on, then do the real work.</p>
+
+        <p><strong>"Is AVIF worth the encode cost yet?"</strong></p>
+
+        <p>For your hero and top-of-funnel imagery, yes. For a 240,000-image long tail where 80% of derivatives are never requested, generate lazily on first request with a WebP fallback served immediately, and let the AVIF fill in behind. Pre-generating AVIF for a catalogue where most SKUs get single-digit views a month is spending real compute on files nobody will fetch.</p>
+
+        <p><strong>"Can we skip JPEG entirely now?"</strong></p>
+
+        <p>Almost. WebP has been in every current browser since Safari 14 in September 2020, so the population without it is old iOS devices and embedded webviews. Check your own analytics rather than caniuse — for one B2B client with a lot of Windows 8 desktops in warehouses the WebP-less share was 3.1%, which was too many to break. For a DTC brand it was 0.2%, and we dropped JPEG generation entirely. The cost of keeping JPEG is one extra derivative per width, so the bar for dropping it should be high.</p>
+
+        <p><strong>"Our CMS generates the srcset. Is that enough?"</strong></p>
+
+        <p>Look at what it emits for <code>sizes</code>. Most of them either omit it or hardcode <code>100vw</code>, and either is worse than useless — you have paid the storage cost for nine derivatives and the browser is picking the biggest one anyway. This is the single most common thing I find on sites that believe they have already solved images.</p>
+
+        <p><strong>"Should the transform service be in front of the CDN or behind it?"</strong></p>
+
+        <p>Behind, always. The CDN is your cache; the transform service is your origin. Putting a transform in the request path in front of the cache means every hit pays for a transform. Some edge platforms blur this by running transforms at the edge with their own cache — that is fine, because there is still a cache in front of the compute. What is not fine is a Lambda that resizes on every invocation because someone wired the CDN to a function URL and did not set cache headers.</p>
+
+        <p><strong>"What about art direction — different crops per breakpoint?"</strong></p>
+
+        <p>That is the one thing <code>&lt;picture&gt;</code> with <code>media</code> attributes does that nothing else can, and it is legitimately useful for editorial banners where a wide desktop crop is unusable on a phone. It is not useful for product tiles. Reach for it deliberately, for a handful of images, not as your default markup.</p>
+
+        <h2>19. What I'd Do First</h2>
+
+        <p>If you have one afternoon, in this order.</p>
+
+        <p><strong>One.</strong> Open your highest-traffic category page and your product page, and run the overfetch audit from earlier in this article. You are looking for the ratio column. Anything above 2x on a page that receives real traffic is bytes you are paying to send and users are paying to receive, and it will tell you within a minute whether your problem is sizing or encoding.</p>
+
+        <p><strong>Two.</strong> Find your LCP element in the field — the CrUX API or your RUM will name it — and check three attributes on it: no <code>loading="lazy"</code>, a <code>fetchpriority="high"</code>, and explicit <code>width</code> and <code>height</code>. This is a ten-minute fix with a larger effect than anything else on this list.</p>
+
+        <p><strong>Three.</strong> Grep your templates for <code>srcset</code> without an accompanying <code>sizes</code>, and for <code>sizes="100vw"</code> on anything that is not full-bleed. Fix the worst offender. Do not try to fix all of them yet.</p>
+
+        <p><strong>Four.</strong> Check your CDN's cache hit ratio on the image path. If it is under 90%, stop and find out why before you optimise anything else, because you are currently paying origin costs for work you already did.</p>
+
+        <p><strong>Five.</strong> Only now, look at formats. Turn on WebP negotiation if it is not on. Leave AVIF until you have measured whether it helps your LCP on the devices your customers actually use — and be prepared for the answer to be different on Android and desktop.</p>
+
+        <p>The order matters because the first four are free and the last one costs compute. I have watched teams spend a quarter building an AVIF pipeline for a site whose real problem was one missing attribute on a hero image. Measure the thing before you build the thing.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/advanced-image-optimization/">Advanced Image Optimization for SEO & Performance</a></strong>
+              <strong><a href="/blog/advanced-image-optimization/">Advanced Image Optimization for SEO &amp; Performance</a></strong>
               <p>AVIF/WebP srcset attribute math.</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify Stores</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
               <p>Varnish caching and sub-100ms TTFB.</p>
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -264,6 +954,6 @@ sharp('product.jpg')
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

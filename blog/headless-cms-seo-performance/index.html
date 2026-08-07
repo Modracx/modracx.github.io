@@ -57,9 +57,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Leveraging Headless CMS for SEO & Performance | MODRACX</title>
-  <meta name="description" content="Technical guide on integrating Headless CMS platforms (Sanity, Strapi, Contentful) into Next.js ecommerce storefronts for dynamic landing pages and SEO performance." />
+  <meta name="description" content="The content layer for headless commerce: modelling in Sanity, Strapi and Contentful, preview and draft workflows, webhook revalidation, and keeping editors productive." />
   <meta property="og:title" content="Leveraging Headless CMS for SEO & Performance | MODRACX" />
   <meta property="og:description" content="Technical guide on integrating Headless CMS platforms into Next.js storefronts by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -166,17 +168,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Leveraging Headless CMS for SEO & Performance</h1>
-        <p class="lede">Combining a Headless CMS (Sanity, Strapi, Contentful) with Next.js edge rendering empowers marketing teams to publish rich SEO landing pages without touching backend code.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Leveraging Headless CMS for SEO &amp; Performance</h1>
+        <p class="lede">A landing page went live with the wrong offer to an email list of 340,000 because preview was reading published content. Content modelling, preview that tells the truth, and webhook-driven revalidation.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -201,377 +203,542 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-<h2>The Structural Mandate for E-commerce Flexibility</h2>
-<p>In modern e-commerce systems, technical rigidity directly throttles revenue. Traditional monolithic platforms tightly bind content management capabilities to backend transaction processing. This architectural constraint creates a severe operational bottleneck. Marketing and merchandising teams remain entirely dependent on engineering cycles merely to update a home page hero banner, launch an editorial lookbook, or optimize an individual product category page for organic search. The cost of this friction is measured in delayed campaigns and compromised search engine visibility.</p>
+        <h2>1. The Preview That Lied</h2>
 
-<p>Implementing a <a href="/blog/headless-architecture/">headless architecture</a> fundamentally resolves this friction. By extracting content modeling and presentation layers away from commerce engines like Magento, Shopify, or BigCommerce, organizations unlock unprecedented velocity. Headless Content Management Systems—specifically Sanity, Strapi, and Contentful—provide robust, API-first environments where content schemas are engineered explicitly for reusability. When coupled with edge-rendered Next.js frontends, the result is an ecosystem capable of serving rich, highly optimized documents at sub-100 millisecond latency. The goal of this engineering guide is to dismantle the mechanics of connecting a headless CMS to a Next.js App Router application, optimizing deeply for technical SEO and Core Web Vitals performance metrics.</p>
+        <p>A skincare brand I worked with launched a Black Friday landing page at 6am on a Thursday in November 2023. The content editor had built it in Sanity the day before, checked it in preview, and scheduled it. It looked right. It went live and the hero showed the wrong offer — 20% instead of 30% — for two hours and eleven minutes, across an email send to 340,000 people.</p>
 
-<h2>Data Orchestration and the Next.js App Router</h2>
-<p>The introduction of React Server Components (RSC) and the Next.js App Router has radically transformed the methodology for fetching and caching external content. Historically, static site generation (SSG) required exhaustive rebuild times for large catalogs, while server-side rendering (SSR) introduced unacceptable latency spikes during peak traffic events.</p>
+        <p>The cause was not the editor. She had changed the figure, saved, and looked at preview. Preview rendered from the published dataset because someone had wired the preview route to the production CDN endpoint six months earlier while debugging something else, and nobody had noticed because until that morning nobody had previewed a change that mattered within the cache window.</p>
 
-<p>The App Router abstracts this complexity through granular caching and on-demand revalidation. We can execute complex GraphQL queries against our headless CMS directly within server components without shipping any data-fetching JavaScript to the client browser. This architectural pattern dramatically reduces main-thread blocking time, a critical factor for achieving optimal Interaction to Next Paint (INP) and Largest Contentful Paint (LCP) scores.</p>
+        <p>What the incident actually exposed was that the content layer had been built as a data source and not as a tool. It answered "can the front end fetch content" — yes, quickly — and never answered "can an editor see what they are about to publish, and trust it". Those are different projects and the second one is the one editors judge you on.</p>
 
-<p>Consider the structural implementation of fetching a dynamic SEO landing page from a Strapi or Sanity backend. The requirement is to resolve a URL slug, request the corresponding document schema, and render the hierarchical block content. Here is a production-ready implementation of a dynamic route `app/[slug]/page.tsx` utilizing standard `fetch` with Next.js specific caching parameters.</p>
+        <p>This article is about the content layer specifically: modelling content so it survives a redesign, wiring preview so it tells the truth, draft and approval workflows that editors will actually use, and webhook-driven revalidation that keeps pages fast without serving yesterday's campaign. It is not about the commerce backend — products, cart, pricing and the Storefront or GraphQL layer are a different problem, covered in <a href="/blog/headless-architecture/">the headless architecture piece</a> and, for Shopify specifically, in <a href="/blog/headless-shopify-hydrogen/">the Hydrogen build</a>. Here I am only concerned with the words and pictures, and with keeping the people who write them productive.</p>
 
-<pre><code class="language-tsx">import { notFound } from 'next/navigation';
-import { Metadata } from 'next';
-import { BlockRenderer } from '@/components/BlockRenderer';
+        <h2>2. What a Headless CMS Actually Replaces</h2>
 
-interface PageProps {
-  params: { slug: string };
+        <p>Worth being precise, because teams routinely buy one to solve a problem it does not address.</p>
+
+        <p>A headless CMS replaces the authoring interface, the content database, and the asset pipeline. It gives editors a place to create structured content, a place to put images, an API to read it, and — this is the part people underestimate — a permission model and a revision history.</p>
+
+        <p>It does not replace rendering, routing, caching, or your commerce data. It has no opinion about your URLs. It does not know a product exists. It will not make your site fast; a badly-cached CMS query is exactly as slow as a badly-cached anything else.</p>
+
+        <p>The problems it genuinely solves, in the order they usually justify the purchase:</p>
+
+        <p><strong>Editors are blocked on developers.</strong> Every campaign page is a ticket, a branch, and a deployment. This is the real reason most teams buy one, and it is a good reason.</p>
+
+        <p><strong>Content is trapped in page-shaped HTML.</strong> A product description written as a blob of markup in a commerce platform cannot be reused in an app, an email, or a redesigned template. Structured content can.</p>
+
+        <p><strong>Multiple front ends need the same content.</strong> Web, app, in-store screen, partner feed.</p>
+
+        <p><strong>Governance.</strong> Who changed the returns policy, when, and who approved it. In a theme, that answer is in git and unreadable by the legal team.</p>
+
+        <p>If your actual problem is "the homepage is slow", a CMS is not the fix and buying one will add a network hop.</p>
+
+        <h2>3. Sanity, Strapi, Contentful: The Honest Comparison</h2>
+
+        <p>I have shipped production sites on all three. They are not interchangeable and the differences that matter are mostly about who is going to operate the thing.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th></th><th>Sanity</th><th>Strapi</th><th>Contentful</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Hosting</td><td>SaaS, content lake</td><td>Self-hosted (or their cloud)</td><td>SaaS</td></tr>
+            <tr><td>Schema defined in</td><td>Code, versioned in git</td><td>Code plus admin UI</td><td>Admin UI, or CLI migrations</td></tr>
+            <tr><td>Query language</td><td>GROQ (and GraphQL)</td><td>REST and GraphQL</td><td>REST and GraphQL</td></tr>
+            <tr><td>Editing interface</td><td>Customisable React app</td><td>Fixed admin, some extension</td><td>Fixed, well-polished</td></tr>
+            <tr><td>Live preview quality</td><td>Best of the three</td><td>You build it</td><td>Good, via preview API</td></tr>
+            <tr><td>Approval workflow</td><td>Needs custom or higher tier</td><td>Review workflows on paid tiers</td><td>Built in on higher tiers</td></tr>
+            <tr><td>Realistic annual cost</td><td>£0–£15k</td><td>Hosting plus your time</td><td>£10k–£60k+</td></tr>
+            <tr><td>Where it hurts</td><td>GROQ learning curve, per-seat pricing</td><td>You are now running a database</td><td>Pricing at scale, rigid modelling</td></tr>
+          </tbody>
+        </table>
+
+        <p>My defaults, stated plainly so you can disagree with a specific claim rather than a vibe.</p>
+
+        <p><strong>Sanity</strong> for most commerce work. Schema in code means content modelling goes through pull requests, which is the single biggest determinant of whether the model stays coherent after eighteen months. The Studio being a React app you own means you can build editing interfaces that match how the team actually works — a campaign editor with a live side-by-side preview of the real page is a day's work, and it changes the relationship between editors and the system more than any other feature.</p>
+
+        <p><strong>Strapi</strong> when data residency or cost control is the constraint, or when the content model is genuinely simple and you already run infrastructure. It is a good product and self-hosting means you own a Postgres instance, its backups, its upgrades and its uptime. Teams underestimate that; the licence being free is not the same as the system being free.</p>
+
+        <p><strong>Contentful</strong> when the organisation already has it, or when procurement wants an enterprise contract with an SLA and a support desk. It is the most polished editing experience out of the box and the least flexible to shape. The pricing model has caught out every client I have seen on it — the jump between tiers arrives suddenly and is usually triggered by content types or API calls rather than by anything the business perceives as growth.</p>
+
+        <p>What I would not do is pick on feature-matrix comparison. All three can store a landing page. The question is who defines the schema, who operates the infrastructure, and whether an editor can see their change before it ships.</p>
+
+        <h2>4. Content Modelling Is the Whole Project</h2>
+
+        <p>Everything else in this article is plumbing. The model is where projects are made good or unrecoverable, and the decision gets made in week two by whoever is fastest at typing schema files.</p>
+
+        <p>There is a spectrum, and both ends are wrong.</p>
+
+        <p>At one end, the <strong>free-form page builder</strong>: a page document with an array of arbitrary blocks, each block carrying its own layout, spacing, colour and column settings. Editors love it in the demo. Eighteen months later you have 400 pages using 31 block types with no consistency, a redesign is impossible because every page is bespoke, and the content is unusable anywhere but the web template it was built against.</p>
+
+        <p>At the other end, the <strong>rigid template</strong>: a landing page type with exactly a hero, three features and a CTA. Clean, reusable, and within a month there is a ticket asking for a video section, and every campaign after that is a schema change and a deployment. You have rebuilt the bottleneck the CMS was bought to remove.</p>
+
+        <p>The shape that has held up for me is a constrained block model. A page is an ordered array of sections; sections come from a fixed, curated set; each section has content fields and at most two or three presentational choices from an enumerated list. Editors compose freely from a vocabulary the design system actually supports.</p>
+
+        <pre><code class="language-javascript">// sanity/schemas/page.js
+export default {
+  name: 'page',
+  type: 'document',
+  fields: [
+    {name: 'title', type: 'string', validation: (R) =&gt; R.required()},
+    {
+      name: 'slug',
+      type: 'slug',
+      options: {source: 'title', maxLength: 96},
+      // Without this, two campaigns collide on /sale and the second one
+      // silently wins depending on query order.
+      validation: (R) =&gt; R.required(),
+    },
+    {
+      name: 'sections',
+      type: 'array',
+      // A closed list. Adding a section type is a deliberate act with a
+      // matching React component, not something an editor can improvise.
+      of: [
+        {type: 'heroSection'},
+        {type: 'productRowSection'},
+        {type: 'editorialSection'},
+        {type: 'faqSection'},
+        {type: 'testimonialSection'},
+      ],
+    },
+    {name: 'seo', type: 'seoFields'},   // shared object, reused everywhere
+  ],
+  preview: {
+    // What the editor sees in the document list. Sounds cosmetic; on a site
+    // with 300 pages it is the difference between finding a page and not.
+    select: {title: 'title', subtitle: 'slug.current'},
+  },
+};</code></pre>
+
+        <p>Three modelling rules I would defend in any review.</p>
+
+        <p><strong>Model the meaning, not the appearance.</strong> A field called <code>backgroundColour</code> with a hex picker is a design decision leaking into content. A field called <code>emphasis</code> with values <code>standard</code>, <code>promotional</code>, <code>clearance</code> lets the design system decide what those look like and lets you restyle 400 pages by changing CSS. The first version is faster to build and permanently expensive.</p>
+
+        <p><strong>Reference, do not copy.</strong> If a piece of content appears on six pages, it is one document referenced six times. Copy-paste content is how you end up with a discontinued product still promoted on a page nobody remembers.</p>
+
+        <p><strong>Validate at the schema level.</strong> Required fields, max lengths on anything that renders into a meta tag, image alt text mandatory. Every constraint you do not encode becomes a thing somebody has to remember, and they will not.</p>
+
+        <h3>The rename you will regret</h3>
+
+        <p>Field names are permanent in a way people do not expect. Renaming <code>heading</code> to <code>title</code> across 900 documents means a migration script, a coordinated front-end deploy, and a window where preview is broken. Not impossible — I have written a dozen of these — but it takes a day and it is entirely avoidable by spending an extra hour on naming at the start. Name fields for what the content is, never for where it currently appears. <code>heroHeading</code> is a trap the moment somebody reuses the section elsewhere.</p>
+
+        <h2>5. Joining Content to Commerce Without Copying the Catalogue</h2>
+
+        <p>Every commerce content model hits this. An editor building a campaign page wants to feature eight products. Where do those products come from?</p>
+
+        <p>The wrong answer, which I have seen shipped three times: copy product data into the CMS. Title, image, price, link. It works on day one. By month three the prices are wrong, two products are discontinued and still promoted, and someone is manually reconciling a spreadsheet.</p>
+
+        <p>The right answer: the CMS stores an identifier and nothing else. A reference document holding the SKU or handle, with a title cached purely so the editor can see what they picked. Everything rendered comes from the commerce API at request or build time.</p>
+
+        <pre><code class="language-javascript">// sanity/schemas/productRef.js
+// The CMS holds the key. It does not hold the product.
+export default {
+  name: 'productRef',
+  type: 'object',
+  fields: [
+    {name: 'handle', type: 'string', validation: (R) =&gt; R.required()},
+    {
+      name: 'label',
+      type: 'string',
+      // Denormalised for the editor's benefit only. Never rendered on the
+      // storefront — if it were, it would go stale and nobody would notice.
+      description: 'Cached title, shown in the editor. Not used on the site.',
+      readOnly: true,
+    },
+  ],
+};</code></pre>
+
+        <p>Then the front end resolves them. Which raises the question everybody asks next: what happens when the product no longer exists? Decide it explicitly, because the default behaviour of most implementations is to render a broken card or crash the page.</p>
+
+        <pre><code class="language-typescript">// Resolve CMS product references against the commerce API, dropping any that
+// have gone. A campaign page with seven products is fine; a page that 500s
+// because one SKU was archived is not.
+export async function resolveProductRefs(refs: {handle: string}[]) {
+  const results = await commerce.productsByHandle(refs.map((r) =&gt; r.handle));
+
+  const found = results.filter(Boolean);
+  const missing = refs.length - found.length;
+  if (missing &gt; 0) {
+    // Surface it. A silent drop means an editor's curated row of eight
+    // quietly becomes five and nobody finds out for a month.
+    logger.warn('cms.product_refs.missing', {missing, total: refs.length});
+  }
+  return found;
+}</code></pre>
+
+        <p>The editor experience matters here too. A plain text field where somebody types a product handle is a source of typos and dead references. In Sanity, a custom input component that searches the live catalogue and stores the handle takes about half a day and eliminates the entire class of problem. That half-day has paid for itself on every project where I have built it.</p>
+
+        <h2>6. Rich Text Is Not HTML, and Should Not Be</h2>
+
+        <p>The temptation is a WYSIWYG field that stores HTML. It is familiar, editors understand it, and it renders trivially. It is also a decision you cannot reverse cheaply.</p>
+
+        <p>Stored HTML means editors can paste arbitrary markup from Word, including inline styles and font tags. It means a redesign cannot restyle body content because the styling is embedded in the content. It means you must sanitise on render or accept an injection risk. It means the same content cannot go into an app or an email without parsing HTML. And it means links to internal pages are hardcoded strings that break when a slug changes, with nothing to warn you.</p>
+
+        <p>Structured rich text — Portable Text in Sanity, the rich text field in Contentful, blocks in Strapi — stores an array of typed nodes. Rendering is your job, which is the point: you decide what a heading looks like, links to internal documents are references that survive a slug change, and you can embed typed objects like a product card or a callout inside a paragraph flow.</p>
+
+        <pre><code class="language-typescript">// components/PortableText.tsx — the renderer is where design control lives.
+const components = {
+  types: {
+    // A typed embed, not a snippet of HTML. The editor picks a product;
+    // the component decides what a product looks like this season.
+    productCard: ({value}) =&gt; &lt;ProductCard handle={value.handle} /&gt;,
+    calloutBox: ({value}) =&gt; &lt;Callout tone={value.tone}&gt;{value.text}&lt;/Callout&gt;,
+  },
+  marks: {
+    internalLink: ({value, children}) =&gt; (
+      // Resolved from a reference, so renaming the target's slug updates
+      // every link to it. This alone justifies structured rich text.
+      &lt;Link href={hrefFor(value.reference)}&gt;{children}&lt;/Link&gt;
+    ),
+    externalLink: ({value, children}) =&gt; (
+      &lt;a href={value.href} rel="noopener nofollow" target="_blank"&gt;{children}&lt;/a&gt;
+    ),
+  },
+  block: {
+    // Editors get H2 and H3 only. H1 is the page title, and letting an editor
+    // add a second one is a document-outline problem you will find in an audit.
+    h2: ({children}) =&gt; &lt;h2 className="prose-h2"&gt;{children}&lt;/h2&gt;,
+    h3: ({children}) =&gt; &lt;h3 className="prose-h3"&gt;{children}&lt;/h3&gt;,
+  },
+};</code></pre>
+
+        <p>The one honest cost: editors who have used WordPress for a decade find structured rich text more restrictive, and the first two weeks generate complaints. They stop when somebody reorganises the design system without breaking a single page.</p>
+
+        <h2>7. Assets, and Why Image Handling Belongs to the CMS</h2>
+
+        <p>All three platforms ship an asset CDN with on-the-fly transforms, and using it properly removes an entire category of performance work.</p>
+
+        <p>What matters: request explicit dimensions rather than the original, serve modern formats through the format parameter or automatic negotiation, and store the intrinsic dimensions in the content model so you can set width and height attributes and avoid layout shift.</p>
+
+        <pre><code class="language-typescript">// lib/image.ts — one place that builds asset URLs. If this logic is spread
+// across components, some of them will ship 3000px originals and you will
+// find out from a field CWV report rather than from code review.
+import imageUrlBuilder from '@sanity/image-url';
+
+const builder = imageUrlBuilder(sanityClient);
+
+export function srcFor(source, width: number) {
+  return builder
+    .image(source)
+    .width(width)
+    .quality(78)         // 78 is the point where further loss stops being free
+    .auto('format')      // AVIF/WebP by Accept header, no picture element needed
+    .fit('max')
+    .url();
 }
 
-// 1. Define the GraphQL Query
-const PAGE_QUERY = `
-  query GetPageBySlug($slug: String!) {
-    pageCollection(where: { slug: $slug }, limit: 1) {
-      items {
-        title
-        seoDescription
-        canonicalUrl
-        noIndex
-        contentBlocksCollection {
-          items {
-            __typename
-            ... on HeroBlock {
-              heading
-              subheading
-              primaryImage {
-                url
-                width
-                height
-                description
-              }
-            }
-            ... on ProductGridBlock {
-              collectionId
-              limit
-            }
-          }
-        }
-      }
-    }
-  }
-`;
+// Sanity stores dimensions in the asset id, so width and height are available
+// without an extra request. Emitting them is what prevents CLS.
+export function dimensionsFor(source) {
+  const [, , dims] = source.asset._ref.split('-');
+  const [w, h] = dims.split('x').map(Number);
+  return {width: w, height: h};
+}</code></pre>
 
-// 2. Execute the Server-Side Fetch
-async function fetchPageData(slug: string) {
-  const res = await fetch(process.env.CMS_GRAPHQL_ENDPOINT!, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.CMS_ACCESS_TOKEN}`,
-    },
-    body: JSON.stringify({
-      query: PAGE_QUERY,
-      variables: { slug },
-    }),
-    // Cache configuration: Revalidate this specific request when the 'pages' tag is invalidated
-    next: { tags: ['pages', `page-${slug}`] },
+        <p>Two rules that cover most of it. Alt text is a required field in the schema, not a suggestion — if it is optional, roughly 60% of images will ship without it, which I have counted on more than one site. And cap the upload size in the Studio, because an editor uploading a 24MB print-resolution TIFF is not a hypothetical and the transform will be slow the first time every variant is requested.</p>
+
+        <h2>8. Preview, and Making It Tell the Truth</h2>
+
+        <p>This is the feature editors judge the whole system by, and the one most likely to be half-built. There are three levels and they cost very different amounts.</p>
+
+        <p><strong>Level one: a preview URL.</strong> A route that reads drafts instead of published content. Editor clicks a link, sees the page in a new tab. An afternoon's work and enough for many teams.</p>
+
+        <p><strong>Level two: side-by-side.</strong> The preview renders in an iframe inside the editing interface. Editor sees the page next to the fields. In Sanity this is Presentation mode and is mostly configuration.</p>
+
+        <p><strong>Level three: live, per-keystroke.</strong> The preview updates as the editor types, without saving. Genuinely delightful and adds real complexity, because the front end must subscribe to a live document stream rather than fetching once.</p>
+
+        <p>I would build level two on almost every project. Level three when a merchandising team is composing long campaign pages daily and the round trip of save-then-refresh is genuinely costing them time.</p>
+
+        <pre><code class="language-typescript">// app/api/draft/route.ts — the endpoint that enables draft mode.
+import {draftMode} from 'next/headers';
+import {redirect} from 'next/navigation';
+
+export async function GET(request: Request) {
+  const {searchParams} = new URL(request.url);
+  const secret = searchParams.get('secret');
+  const slug = searchParams.get('slug');
+
+  // Without this check, anyone can read unpublished content — including
+  // next season's pricing, which is a commercially real problem.
+  if (secret !== process.env.SANITY_PREVIEW_SECRET) {
+    return new Response('Invalid token', {status: 401});
+  }
+  if (!slug) return new Response('Missing slug', {status: 400});
+
+  draftMode().enable();
+  redirect(`/${slug}`);
+}</code></pre>
+
+        <pre><code class="language-typescript">// lib/sanity/client.ts — the bit the skincare brand got wrong.
+// Draft reads MUST bypass the CDN and carry a token. Reading drafts from the
+// CDN endpoint returns published content and preview silently lies.
+export function clientFor({preview}: {preview: boolean}) {
+  return createClient({
+    projectId: process.env.SANITY_PROJECT_ID,
+    dataset: process.env.SANITY_DATASET,
+    apiVersion: '2024-10-01',        // pin it; 'v1' drifts under you
+    useCdn: !preview,                // false in preview, always
+    token: preview ? process.env.SANITY_READ_TOKEN : undefined,
+    perspective: preview ? 'previewDrafts' : 'published',
   });
+}</code></pre>
 
-  if (!res.ok) {
-    throw new Error('Failed to fetch CMS data');
+        <p>And test it. A single integration test that creates a draft, hits the preview route, and asserts the draft value appears would have caught the Black Friday incident. It is twenty lines. Nobody writes it because preview feels like a developer convenience rather than a production feature, which is precisely the misunderstanding that causes the outage.</p>
+
+        <h2>9. Draft Workflows That Editors Will Actually Use</h2>
+
+        <p>The gap between "the CMS supports workflows" and "the team uses the workflow" is enormous, and it is mostly about whether the workflow matches how they already work.</p>
+
+        <p>Ask three questions before configuring anything. Who is allowed to publish? Does anything need approval before it goes live, and by whom — legal, brand, a manager? And does anything need to publish at a specific time without a human present?</p>
+
+        <p>Most mid-market teams need less than they think. Two roles — editor and publisher — plus scheduled publishing covers a large majority. Multi-stage approval chains get configured, then bypassed within a month because a campaign is late and somebody has the publisher role.</p>
+
+        <p>Scheduled publishing is the one that reliably matters and the one most likely to be implemented badly, because it interacts with caching. A page scheduled for midnight publishes in the CMS at midnight and appears on the site whenever the cache next revalidates — which, if you set a one-hour window, could be 00:58.</p>
+
+        <pre><code class="language-typescript">// A scheduled publish must trigger a purge, not wait for revalidation.
+// Sanity's scheduled publishing fires the same webhook a manual publish does,
+// so one handler covers both — as long as the handler purges rather than
+// relying on time-based expiry.
+export async function POST(req: Request) {
+  const body = await req.text();
+  if (!(await isValidSignature(body, req.headers.get('sanity-webhook-signature')))) {
+    return new Response('bad signature', {status: 401});
   }
 
-  const json = await res.json();
-  return json.data?.pageCollection?.items?.[0] || null;
-}
+  const {_type, slug, _id} = JSON.parse(body);
 
-// 3. Generate Dynamic SEO Metadata
-export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const page = await fetchPageData(params.slug);
-  
-  if (!page) {
-    return { title: 'Not Found' };
-  }
+  revalidateTag(`${_type}:${_id}`);
+  if (slug?.current) revalidatePath(`/${slug.current}`);
 
+  // Anything that lists this document — the blog index, a campaign hub —
+  // is stale too. Forgetting the listing is the most common revalidation bug.
+  revalidateTag(`list:${_type}`);
+
+  return Response.json({revalidated: true, at: Date.now()});
+}</code></pre>
+
+        <p>One process note worth more than the configuration. Give editors a written answer to "how long until my change is live". If the honest answer is "within thirty seconds of publishing", say so and make it true. If it is "up to an hour", say that instead and watch them stop publishing at 09:58 for a 10:00 campaign. Uncertainty is what generates the panicked Slack message and the emergency cache purge.</p>
+
+        <h2>10. Revalidation: Granularity Is the Whole Design</h2>
+
+        <p>Time-based revalidation alone forces a choice between stale content and origin load. Webhook-driven purging removes the choice: set long windows and purge precisely when something changes.</p>
+
+        <p>The design question is granularity, and there are three levels with very different failure modes.</p>
+
+        <p><strong>Purge everything on any change.</strong> Simple, always correct, and turns a routine typo fix into a full cache flush. On a large site that means a traffic spike to the origin and several minutes of slow pages. Acceptable under a few hundred pages, painful above that.</p>
+
+        <p><strong>Purge by path.</strong> The webhook knows the slug, so purge that URL. Correct for the page, wrong for everything referencing it — the listing page, the navigation, the related-articles block.</p>
+
+        <p><strong>Purge by tag.</strong> Every fetch is tagged with the documents it depends on; a change purges every page that used that document, wherever it appears. This is the correct answer and it requires discipline at every fetch site.</p>
+
+        <pre><code class="language-typescript">// Tag at the point of fetch, with every document the result depends on.
+// A tag applied inconsistently is worse than no tag, because it produces
+// pages that are usually fresh and occasionally, inexplicably, not.
+export async function getPage(slug: string) {
+  const page = await sanity.fetch(
+    PAGE_QUERY,
+    {slug},
+    {
+      next: {
+        revalidate: 3600,
+        tags: [
+          `page:${slug}`,
+          'list:navigation',        // the header is on this page too
+          ...referencedIds(slug),   // every referenced doc, resolved at build
+        ],
+      },
+    },
+  );
+  return page;
+}</code></pre>
+
+        <p>The failure mode nobody plans for is fan-out. A shared document — a global promotional banner, the footer, a site settings singleton — is referenced by every page. Change it and you purge the entire cache. That is correct behaviour and it means a settings change behaves like a full flush. Know which documents have that property, and if a full flush is expensive, consider fetching global content on a separate short-lived cache rather than tagging it into every page.</p>
+
+        <p>Two operational habits. Log every revalidation with what triggered it, because "the page did not update" is the most common CMS complaint and without a log you cannot tell whether the webhook fired. And put a manual purge button somewhere an editor can reach, with a confirmation. They will need it at some point, and the alternative is a phone call to an engineer at 7pm.</p>
+
+        <h2>11. Querying Without Over-Fetching</h2>
+
+        <p>Content queries are cheap enough that people stop thinking about them, and then a page assembles itself from nine separate requests because each component fetches its own data. On a cached route that costs you nothing most of the time and a great deal during revalidation, which is exactly when a burst of traffic is most likely to hit the origin.</p>
+
+        <p>The discipline is one query per route, composed in the loader, returning exactly the shape the page renders. GROQ is unusually good at this because projections let you reshape and resolve references in a single round trip.</p>
+
+        <pre><code class="language-groq">// One query, one round trip, one payload shaped like the page.
+*[_type == "page" &amp;&amp; slug.current == $slug][0]{
+  title,
+  "seo": seo{metaTitle, metaDescription, noIndex, "og": ogImage.asset-&gt;url},
+  sections[]{
+    _type,
+    _key,
+    // Only the fields each section type actually renders. A bare sections[]
+    // returns every field of every block, including editor-only metadata.
+    _type == "heroSection" =&gt; {heading, emphasis, "image": image{asset-&gt;{url, metadata}}},
+    _type == "productRowSection" =&gt; {heading, "handles": products[].handle},
+    _type == "faqSection" =&gt; {heading, items[]{question, answer}}
+  },
+  // Resolved in the same query rather than a second request from a component.
+  "related": *[_type == "article" &amp;&amp; references(^._id)][0..3]{title, "slug": slug.current}
+}</code></pre>
+
+        <p>Three things go wrong repeatedly. Fetching a document with <code>...</code> or no projection at all, which returns editor-only fields and every reference key and can triple the payload. Resolving references inside a loop in the component rather than in the query, which is the content-layer version of an N+1. And listing queries with no slice, which is fine at twelve documents and a real problem at six hundred — always bound a list query, even when you are certain the collection is small, because collections grow and nobody revisits the query.</p>
+
+        <p>Contentful's equivalent trap is include depth. The REST API resolves linked entries to a configurable depth and the default pulls more than you need; the GraphQL API is better behaved but has its own complexity limit that a deeply nested page model will hit. Either way, ask for the shape you render.</p>
+
+        <h2>12. When You Do Not Need One of These</h2>
+
+        <p>I have talked two clients out of buying a headless CMS in the last three years and I would do it again, so here is the case honestly.</p>
+
+        <p>If your storefront is a Shopify theme and your content need is a handful of pages plus a blog, Shopify's own pages, blogs and metaobjects will cover it. Metaobjects in particular are structured content with typed fields, available through the Storefront API, editable in the admin, and free. What they lack is draft state, scheduling, approvals and preview — so if nobody has asked for those, you are buying a workflow nobody wants.</p>
+
+        <p>If your content need is genuinely one landing page a quarter, the CMS licence and the day-a-month of maintenance cost more than the developer time it replaces. That arithmetic is easy to do and nobody does it.</p>
+
+        <p>And if you are on a monolithic platform with a decent page-building extension that your team already knows, the honest comparison is against what that extension does today, not against your memory of it from two years ago. Magento's page builder is not good, but it is present, and replacing it with a CMS integration is a project, not a purchase.</p>
+
+        <p>The signal that you do genuinely need one: editors describing their job in terms of waiting. Waiting for a deployment, waiting for a developer, waiting for a release window. When the sentence "I can't do that myself" appears three times in an hour of watching someone work, the tooling is the constraint and a CMS is a good answer.</p>
+
+        <h2>13. SEO Fields Belong in the Model</h2>
+
+        <p>Once rendering leaves the platform, nothing generates meta tags for you. The instinct is to give editors a free-text field per tag. That produces 400-character meta descriptions, three pages claiming to be canonical for the same URL, and a page accidentally marked noindex two days before a campaign.</p>
+
+        <p>Model it as a constrained object, reused across every document type, with validation and sensible fallbacks.</p>
+
+        <pre><code class="language-javascript">// sanity/schemas/seoFields.js
+export default {
+  name: 'seoFields',
+  type: 'object',
+  options: {collapsible: true, collapsed: true},
+  fields: [
+    {
+      name: 'metaTitle',
+      type: 'string',
+      description: 'Falls back to the page title. Aim for under 60 characters.',
+      validation: (R) =&gt; R.max(70).warning('Google truncates beyond ~60 characters'),
+    },
+    {
+      name: 'metaDescription',
+      type: 'text',
+      rows: 3,
+      validation: (R) =&gt; R.max(165).warning('Truncated in results beyond ~160'),
+    },
+    {name: 'ogImage', type: 'image', description: '1200x630 recommended'},
+    {
+      name: 'noIndex',
+      type: 'boolean',
+      initialValue: false,
+      // Deliberately blunt wording. This checkbox has cost people real traffic.
+      description: 'Hides this page from search engines. Rarely correct.',
+    },
+  ],
+};</code></pre>
+
+        <p>Note the choices. Warnings rather than errors on length, because an editor who cannot save is an editor who works around you. No canonical field at all — canonicals are computed from routing and should never be hand-typed. And the noindex flag is present but described honestly, because there are legitimate uses and an editor who cannot find it will ask a developer to deploy one.</p>
+
+        <p>The rest of the SEO surface — JSON-LD, sitemaps, hreflang — should be generated from the model rather than authored. An <code>faqSection</code> in the content model can emit FAQPage structured data automatically, and an editor adding a question gets the markup for free without knowing schema.org exists. That is the argument for structured content in one sentence.</p>
+
+        <pre><code class="language-typescript">// Structured data derived from the model, so it cannot drift from the page.
+export function faqJsonLd(section: FaqSection) {
   return {
-    title: `${page.title} | Premium Store`,
-    description: page.seoDescription,
-    alternates: {
-      canonical: page.canonicalUrl || `https://store.com/${params.slug}`,
-    },
-    robots: {
-      index: !page.noIndex,
-      follow: !page.noIndex,
-    },
-    openGraph: {
-      title: page.title,
-      description: page.seoDescription,
-      type: 'website',
-    },
-  };
-}
-
-// 4. Render the Server Component
-export default async function CMSPage({ params }: PageProps) {
-  const page = await fetchPageData(params.slug);
-
-  if (!page) {
-    notFound();
-  }
-
-  return (
-    <main className="cms-layout-container">
-      <h1 className="sr-only">{page.title}</h1>
-      
-      {/* 
-        The BlockRenderer component maps GraphQL __typename 
-        to specific React Client or Server Components 
-      */}
-      {page.contentBlocksCollection.items.map((block: any, index: number) => (
-        <BlockRenderer key={`${block.__typename}-${index}`} block={block} />
-      ))}
-    </main>
-  );
-}
-</code></pre>
-
-<p>This implementation guarantees that the initial HTML payload delivered to the client contains all necessary textual content and metadata for search engine crawlers. The data is fetched directly from the edge network or origin server during the request phase, but because we utilize Next.js data caching mechanisms, subsequent requests hit the localized edge cache, resulting in TTFB (Time to First Byte) metrics frequently under 50 milliseconds.</p>
-
-<h2>On-Demand Incremental Static Regeneration (ISR) via Webhooks</h2>
-<p>The inherent limitation of aggressive caching is stale data. If a merchandising team corrects a typographic error on a highly trafficked landing page, they cannot wait for a scheduled global cache purge. Next.js resolves this operational challenge through On-Demand Incremental Static Regeneration (ISR).</p>
-
-<p>Instead of relying on time-based revalidation (e.g., `revalidate: 3600`), modern infrastructures configure their Headless CMS to emit a secure HTTP webhook payload whenever a document transitions from a draft state to published. A dedicated API route on the Next.js application receives this webhook, authenticates the cryptographic signature, and programmatically purges specific cache tags. This approach achieves the absolute zenith of web architecture: entirely static performance with instant dynamic updates.</p>
-
-<p>Below is a strictly typed production implementation of a Next.js App Router webhook handler designed to consume a Sanity or Contentful publication event and execute precise cache invalidation.</p>
-
-<pre><code class="language-typescript">// app/api/revalidate/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { revalidateTag } from 'next/cache';
-import crypto from 'crypto';
-
-// Secret token established in both the CMS webhook config and Next.js environment
-const WEBHOOK_SECRET = process.env.CMS_WEBHOOK_SECRET!;
-
-export async function POST(request: NextRequest) {
-  try {
-    const signature = request.headers.get('x-cms-signature');
-    const rawBody = await request.text();
-
-    // 1. Cryptographic Verification
-    // Prevent malicious actors from arbitrarily wiping your edge cache
-    const expectedSignature = crypto
-      .createHmac('sha256', WEBHOOK_SECRET)
-      .update(rawBody)
-      .digest('hex');
-
-    if (signature !== expectedSignature) {
-      console.warn('Unauthorized webhook payload rejected.');
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // 2. Payload Parsing
-    const body = JSON.parse(rawBody);
-    const { documentType, slug } = body;
-
-    if (!documentType) {
-      return NextResponse.json({ error: 'Missing document type' }, { status: 400 });
-    }
-
-    // 3. Precision Cache Invalidation
-    if (documentType === 'page' && slug) {
-      // Invalidate the specific page
-      revalidateTag(`page-${slug}`);
-      return NextResponse.json({ 
-        revalidated: true, 
-        message: `Purged cache for page-${slug}` 
-      });
-    }
-
-    if (documentType === 'globalConfig') {
-      // Invalidate all pages if global header/footer navigation changes
-      revalidateTag('pages');
-      return NextResponse.json({ 
-        revalidated: true, 
-        message: 'Purged global layout cache' 
-      });
-    }
-
-    return NextResponse.json({ 
-      revalidated: false, 
-      message: 'No matching tag for document type' 
-    });
-
-  } catch (error) {
-    console.error('Revalidation error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error during revalidation' }, 
-      { status: 500 }
-    );
-  }
-}
-</code></pre>
-
-<p>This architecture is transformative for <a href="/blog/performance-optimization/">performance optimization</a>. The Next.js server serves pre-rendered HTML from the Vercel Edge Network for 99.9% of requests. Only when the specific `revalidateTag` command is executed does the framework asynchronously rebuild that specific HTML document in the background. The user experiencing the site during the rebuild still receives the fast, stale cache, while subsequent requests instantly receive the updated content.</p>
-
-<h2>Image Optimization and Asset Delivery</h2>
-<p>In high-fidelity e-commerce environments, imagery accounts for the vast majority of network payload weight. A headless CMS typically returns high-resolution raw assets directly from a primary storage bucket (such as AWS S3). Serving these directly to end-users on constrained mobile networks devastates Core Web Vitals.</p>
-
-<p>To construct a performant visual layer, developers must intercept these raw URLs and process them through Next.js built-in Image Optimization API or a specialized CDN (like Cloudinary or Imgix). Sanity provides a highly efficient `@sanity/image-url` builder that generates precise queries for cropping, formatting, and quality adjustments directly on their edge network before the image ever reaches the Next.js server.</p>
-
-<p>Consider a modular Hero Block fetched from the CMS. We extract the asset reference and construct a responsive image component that automatically generates WebP or AVIF formats based on browser `Accept` headers, while calculating accurate `srcSet` intervals.</p>
-
-<pre><code class="language-tsx">import Image from 'next/image';
-import { urlForImage } from '@/lib/sanity';
-
-interface HeroBlockProps {
-  heading: string;
-  subheading?: string;
-  imageRef: any;
-}
-
-export function HeroBlock({ heading, subheading, imageRef }: HeroBlockProps) {
-  // Generate the highly optimized source URL from the CMS asset reference
-  const imageSrc = urlForImage(imageRef).width(1920).format('webp').url();
-  
-  // Extract blur data for Immediate LCP placeholder rendering
-  const blurHash = imageRef.metadata?.lqip;
-
-  return (
-    <section className="relative w-full h-[70vh] flex items-center justify-center overflow-hidden">
-      <div className="absolute inset-0 z-0">
-        <Image
-          src={imageSrc}
-          alt={heading}
-          fill
-          priority // Critical for LCP elements
-          sizes="(max-width: 768px) 100vw, 1920px"
-          className="object-cover"
-          placeholder={blurHash ? 'blur' : 'empty'}
-          blurDataURL={blurHash}
-        />
-        {/* Optical overlay for text contrast */}
-        <div className="absolute inset-0 bg-black/40" />
-      </div>
-      
-      <div className="relative z-10 text-center px-4 max-w-4xl mx-auto">
-        <h2 className="text-4xl md:text-6xl font-bold text-white mb-4 tracking-tight">
-          {heading}
-        </h2>
-        {subheading && (
-          <p className="text-xl text-gray-200 font-medium">
-            {subheading}
-          </p>
-        )}
-      </div>
-    </section>
-  );
-}
-</code></pre>
-
-<p>The strategic deployment of the `priority` attribute on above-the-fold imagery instructs the browser to preload the asset immediately during document parsing. By injecting a lightweight base64 `blurDataURL` (LQIP - Low Quality Image Placeholder) directly into the initial HTML response, we achieve an immediate visual structure that heavily mitigates Cumulative Layout Shift (CLS) and drastically improves perceived loading speed.</p>
-
-<h2>Advanced SEO Metadata Orchestration</h2>
-<p>While generic `<title>` and `<meta name="description">` tags are foundational, modern search engine optimization demands highly structured JSON-LD data. E-commerce platforms specifically require granular schema definitions to secure rich results in Google SERPs. When content is decoupled, the responsibility of generating valid Schema.org syntax falls entirely on the frontend application.</p>
-
-<p>Instead of manually constructing nested JSON strings, we architect a dynamic schema generator that interprets the hierarchical blocks retrieved from the headless CMS. If a page contains a `FAQBlock`, the system automatically injects an `FAQPage` schema. If the page is an editorial review of a product, we inject an `Article` and `Product` review schema.</p>
-
-<p>This dynamic injection ensures maximum compliance with Google's structured data guidelines without requiring manual JSON authoring from the marketing team. They simply input their content into the CMS forms, and the Next.js application orchestrates the strict technical output.</p>
-
-<pre><code class="language-tsx">import Script from 'next/script';
-
-export function SchemaOrchestrator({ blocks, pageData }: { blocks: any[], pageData: any }) {
-  // Base Article Schema
-  const schema: any = {
     '@context': 'https://schema.org',
-    '@type': 'Article',
-    headline: pageData.title,
-    description: pageData.seoDescription,
-    image: pageData.ogImage,
-    datePublished: pageData.publishedAt,
-    dateModified: pageData.updatedAt,
-    author: {
-      '@type': 'Organization',
-      name: 'Premium E-commerce Brand',
-    }
+    '@type': 'FAQPage',
+    mainEntity: section.items.map((item) =&gt; ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: {
+        '@type': 'Answer',
+        // Portable Text to plain text. Emitting raw markup here is invalid
+        // and Google's rich results test will reject the whole block.
+        text: toPlainText(item.answer),
+      },
+    })),
   };
+}</code></pre>
 
-  // Inspect blocks to enhance schema
-  const faqBlocks = blocks.filter(b => b.__typename === 'FAQBlock');
-  
-  if (faqBlocks.length > 0) {
-    // Append highly valuable FAQPage schema for Rich Snippet targeting
-    schema['@type'] = ['Article', 'FAQPage'];
-    schema.mainEntity = faqBlocks.flatMap(faq => 
-      faq.questions.map((q: any) => ({
-        '@type': 'Question',
-        name: q.questionText,
-        acceptedAnswer: {
-          '@type': 'Answer',
-          text: q.answerText
-        }
-      }))
-    );
-  }
+        <h2>14. Localisation: Field-Level or Document-Level</h2>
 
-  return (
-    <Script
-      id="page-schema-orchestrator"
-      type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
-    />
-  );
-}
-</code></pre>
+        <p>A decision that is genuinely hard to reverse, and both answers are defensible.</p>
 
+        <p><strong>Field-level</strong> stores every language inside one document — <code>title: {en: '...', fr: '...'}</code>. One document per concept, easy to see what is missing, and non-translatable fields like images and product references stay shared automatically. It gets unwieldy past four or five languages and it forces every market to have the same page structure.</p>
 
-<h2>Advanced Middleware Routing and Personalization</h2>
-<p>Personalization has traditionally required heavy client-side JavaScript execution, leading to delayed rendering, jarring visual layout shifts, and degraded Core Web Vitals. In a modern Next.js headless architecture, we migrate this personalization logic to the Edge using Next.js Middleware. Middleware executes immediately before a request is processed, allowing us to inspect cookies, geo-IP headers, and user agent strings to rewrite or redirect the request to a highly tailored static route.</p>
-<p>For example, an enterprise brand running an A/B test on a critical landing page hero banner can use Middleware to assign a variant cookie to a new visitor. The Middleware then seamlessly rewrites the internal request to a specific path—such as `/home-variant-b`—which has already been statically generated and cached by the build system. The user receives personalized content with zero client-side processing penalty and absolute edge performance.</p>
+        <p><strong>Document-level</strong> creates a separate document per locale, linked by a translation reference. Markets can diverge — a French campaign page that has no English equivalent is natural — and translation vendors work with whole documents, which is what their tooling expects. The cost is that a structural change must be applied to every locale, and drift between markets is easy and invisible.</p>
 
-<pre><code class="language-typescript">
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+        <p>My rule: two or three languages that mirror each other, field-level. Four or more, or markets that operate independently with their own merchandising teams, document-level. A retailer running the UK, France and Germany with a single central marketing function is field-level. The same retailer where each country has its own team is document-level, and forcing them into a shared document produces constant conflict over structure.</p>
 
-export function middleware(request: NextRequest) {
-  const url = request.nextUrl.clone();
-  
-  // Intercept requests to the root homepage
-  if (url.pathname === '/') {
-    // Check for an existing A/B test cohort cookie
-    let bucket = request.cookies.get('ab-bucket')?.value;
-    
-    // Assign cohort if none exists
-    if (!bucket) {
-      bucket = Math.random() < 0.5 ? 'control' : 'experimental';
-    }
-    
-    // Rewrite the URL to serve the statically generated variant secretly
-    url.pathname = `/${bucket}`;
-    const response = NextResponse.rewrite(url);
-    
-    // Persist the cohort cookie for subsequent visits
-    if (!request.cookies.has('ab-bucket')) {
-      response.cookies.set('ab-bucket', bucket, { maxAge: 60 * 60 * 24 * 30 });
-    }
-    
-    return response;
-  }
-  
-  return NextResponse.next();
-}
+        <p>Whichever you pick, generate hreflang from the translation links rather than hand-authoring it, and make sure the fallback behaviour is explicit — a French page with an untranslated field should either show English or be excluded from the sitemap, and doing neither is how half-translated pages get indexed.</p>
 
-export const config = {
-  matcher: '/',
-};
-</code></pre>
-<p>This edge-level interception dramatically simplifies the frontend codebase. React components remain deterministic and highly cacheable, entirely oblivious to the complex routing mechanics happening at the network boundary. Consequently, marketing teams can deploy sophisticated multivariate tests orchestrated through their Headless CMS while engineering teams maintain strict performance baselines.</p>
+        <h2>15. Measuring Whether Editors Are Actually Productive</h2>
 
-<h2>Architectural Synthesis</h2>
-<p>Navigating the transition from monolithic legacy systems to a decoupled, headless architecture requires profound strategic alignment between engineering, marketing, and operations teams. The technical complexities of distributed data fetching, cache invalidation, and edge rendering are immense, but the resulting gains in performance, agility, and search engine visibility are undeniable.</p>
+        <p>The business case for a CMS is almost always editor throughput, and almost nobody measures it. Four numbers, none hard to collect.</p>
 
-<p>By adhering to the strict architectural patterns detailed in this guide—leveraging Next.js App Router capabilities, implementing precision webhook revalidation, orchestrating dynamic SEO metadata, and maintaining rigorous content models—organizations can construct a digital foundation capable of scaling limitlessly. The era of static, rigid e-commerce platforms is definitively over, replaced by a dynamic, API-driven ecosystem where performance is the ultimate competitive advantage.</p>
+        <p><strong>Time from brief to live for a standard campaign page.</strong> Measure it before the migration and three months after. On the skincare project it went from six working days to about four hours, which is the number that justified the whole exercise and the one nobody had thought to capture beforehand.</p>
 
-        <hr />
+        <p><strong>Developer tickets raised for content changes.</strong> Should approach zero. If it does not, the model is too rigid or the editing interface is too confusing, and both are fixable.</p>
+
+        <p><strong>Pages published per month.</strong> If it does not rise, the bottleneck was never the tooling and you have solved the wrong problem.</p>
+
+        <p><strong>Rollbacks and emergency fixes.</strong> A rising number means editors have power they do not have confidence in — usually a preview problem.</p>
+
+        <p>Sit with an editor for an hour, twice: once a month after launch and once six months later. The first session finds the obvious usability problems. The second finds the workarounds they have invented, which are the most valuable diagnostic in the whole system, because every workaround is a place where the model does not match the work.</p>
+
+        <h2>16. A Worked Example, With the Parts That Went Wrong</h2>
+
+        <p>The skincare brand from the opening. Around 200 products, £4m online revenue, Shopify Plus with a Liquid theme for the commerce routes and a Next.js app for editorial and campaign pages, Sanity as the content layer. Two content editors, one designer, and a marketing lead who published two or three campaigns a month.</p>
+
+        <p>Deliberately, this was not a full headless rebuild. Products, collections, cart and checkout stayed on the theme. Only <code>/journal</code>, <code>/campaigns/*</code> and about forty evergreen pages moved, routed by path prefix at Cloudflare. That kept the project to eleven weeks and meant the commerce risk was zero.</p>
+
+        <p><strong>Model.</strong> A page type with an array of nine section types, a shared SEO object, an author type, an article type, and a settings singleton. Product references by handle, resolved at request time against the Storefront API.</p>
+
+        <p><strong>Caching.</strong> One-hour revalidation with tag-based purging on the Sanity webhook. Global settings fetched separately on a five-minute cache rather than tagged into every page, specifically to avoid a footer edit flushing everything.</p>
+
+        <p><strong>Numbers after six months.</strong> Campaign page build time six days to four hours. Developer tickets for content changes went from about eleven a month to two. Median TTFB on editorial pages 38ms. Organic traffic to <code>/journal</code> up 34% over two quarters, which had as much to do with actually publishing regularly as with the technology.</p>
+
+        <p><strong>What went wrong, item one.</strong> The preview incident described at the top. Two hours of the wrong offer to an email list of 340,000. Root cause: <code>useCdn</code> was true in the preview client. The fix was four characters and an integration test that should have existed from week one.</p>
+
+        <p><strong>What went wrong, item two.</strong> We modelled an <code>imageWithText</code> section with a boolean for image position. Within four months there were three more booleans — reversed on mobile, full bleed, tinted overlay — and eight combinations, of which three looked broken. We collapsed it into a single <code>layout</code> enumeration with four named options and deleted the combinations nobody should have been able to choose. Booleans in a content model multiply; enumerations do not.</p>
+
+        <p><strong>What went wrong, item three.</strong> Nobody had thought about the journal index at 60 articles. It fetched every article to render a paginated list, which was fine at twelve and a 900ms query at sixty. Paginating properly in GROQ took an hour; noticing took four months, because the page was cached and only the revalidation was slow, which means nobody experienced it directly and it showed up as an occasional origin latency spike.</p>
+
+        <p><strong>What I would do differently.</strong> Build the custom product-picker input in week one rather than week nine. For eight weeks editors typed product handles by hand into a text field, and we found four typos in live pages, one of which had a broken product row on a campaign page for eleven days. It was half a day of work and it was scheduled after everything else because it looked like polish.</p>
+
+        <h2>17. Questions That Come Up</h2>
+
+        <p><strong>"Will a headless CMS make our site faster?"</strong> Not by itself. It moves content behind an API, which adds a network call. Sites get faster because the front end caches HTML at the edge, and you can do that with or without a CMS. What it reliably improves is asset delivery, because the CMS asset CDN handles transforms and modern formats properly, which most theme setups do not.</p>
+
+        <p><strong>"Sanity or Contentful?"</strong> Sanity if you want the schema in git and the ability to shape the editing interface, which is most engineering-led teams. Contentful if procurement wants an enterprise contract and the model is straightforward. Do not pick on the feature matrix; pick on who defines the schema and how change gets reviewed.</p>
+
+        <p><strong>"Should product descriptions live in the CMS?"</strong> Usually no. They belong with the product, in the commerce platform or a PIM, because that is where merchandising manages them and where every other channel reads them. The exception is genuinely editorial product content — an ingredient story, a provenance piece — which is a separate document referenced from the product, not a replacement for the description field.</p>
+
+        <p><strong>"How do we stop editors breaking the design?"</strong> Constrain the model. Enumerated presentation options, no colour pickers, no free-form spacing, no arbitrary HTML. If an editor can produce something the design system does not support, that is a modelling bug and not a training problem.</p>
+
+        <p><strong>"What about migrating existing content?"</strong> Budget more than you think and expect the mapping to be the work, not the transfer. Exporting a thousand WordPress posts is an afternoon; converting their HTML bodies into structured rich text with references resolved and images re-uploaded is two to three weeks. Run the migration script repeatedly against a scratch dataset until the diff is clean, and keep the source system readable for six months.</p>
+
+        <p><strong>"Do we need a preview environment per branch?"</strong> Helpful, not essential. What is essential is that preview reads drafts correctly and that somebody has tested it. The number of teams with elaborate preview infrastructure that shows published content is higher than you would guess.</p>
+
+        <p><strong>"How do we handle content in emails and the app?"</strong> This is where structured content pays off, and it only works if you resisted storing HTML. A Portable Text document renders to email-safe markup with a different renderer and to native components in an app with a third. If you stored HTML, you are parsing and rewriting it, badly.</p>
+
+        <p><strong>"What is the realistic ongoing cost?"</strong> Licence plus roughly a day a month of engineering for schema changes, renderer updates and the occasional migration. The licence is the visible number and the engineering is the larger one. Contentful clients are the ones who get surprised, usually by a tier change triggered by content type count rather than by traffic.</p>
+
+        <h2>18. What I'd Do First</h2>
+
+        <p>In this order, and the first three are not engineering:</p>
+
+        <p>Sit with the people who will use it. Watch them build a campaign page in the current system. Note every place they wait for somebody else. That list is your requirements document and it is more accurate than anything a workshop produces.</p>
+
+        <p>Write the content model on paper before touching a schema file. Every document type, every field, every reference. Show it to an editor and ask them to describe how they would build last month's campaign with it. The gaps surface in twenty minutes and cost nothing to fix at that stage.</p>
+
+        <p>Decide the commerce join. Which content references products, how it stores them, and what happens when a referenced product disappears. Build the picker input early — it is half a day and it prevents a whole class of live errors.</p>
+
+        <p>Then build preview before building pages, and write the test that proves it reads drafts. This is the inversion of how it normally goes, and it is the single change I would make to how these projects are sequenced.</p>
+
+        <p>Then one page type, end to end: model, renderer, preview, webhook purge, SEO fields, structured data. Get an editor to publish something real with it. Everything you learn there applies to the next eight types, and everything you skip there gets replicated eight times.</p>
+
+        <p>The skincare brand's editors now publish campaign pages in an afternoon without asking anyone. That is the entire value of the exercise and it came from the model and the preview, not from the platform choice. The two hours of wrong pricing came from treating preview as a developer convenience. Both lessons point the same way: a content layer is a tool for people, and it should be built and tested as one.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed & SEO</a></strong>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
               <p>Building modern Next.js storefronts connected to GraphQL APIs.</p>
             </li>
             <li>
@@ -584,7 +751,6 @@ export const config = {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -618,6 +784,6 @@ export const config = {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

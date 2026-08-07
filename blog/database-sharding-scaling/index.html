@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Database Sharding & Read-Replica Architecture for E-Commerce | MODRACX</title>
-  <meta name="description" content="Technical guide on scaling MySQL/PostgreSQL databases for high-volume e-commerce stores using read-replicas, primary-secondary failover, and Vitess database sharding." />
+  <meta name="description" content="Read replicas, replication lag, when sharding is warranted, shard key mistakes you cannot undo, cross-shard queries and the operational cost nobody budgets." />
   <meta property="og:title" content="Database Sharding & Read-Replica Architecture for E-Commerce | MODRACX" />
   <meta property="og:description" content="Technical guide on database sharding and read-replicas by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Database Sharding & Read-Replica Architecture for E-Commerce</h1>
-        <p class="lede">Database bottlenecks are the #1 cause of e-commerce checkout crashes. Splitting read traffic across RDS MySQL Read Replicas offloads high-volume catalog queries from the primary write master.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Database Sharding &amp; Read-Replica Architecture for E-Commerce</h1>
+        <p class="lede">A fashion retailer sharded 340GB of orders across eight instances. The actual problem was a missing composite index. Unpicking it took eleven weeks and £70,000.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,41 +205,533 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Magento 2 env.php Read-Replica Configuration</h2>
+        <h2>1. The Shard Key That Cost £70,000</h2>
+
+        <p>In 2023 I was brought in to a cookware retailer whose previous team had sharded their order database by <code>customer_id</code>, modulo eight. Eight MySQL instances, a routing layer in the application, and about four months of engineering to build it.</p>
+
+        <p>The problem they had been solving was real: their orders table was 340GB and queries against it were slow. The problem they actually had was a missing composite index on <code>(customer_id, created_at)</code> and a reporting query that scanned the whole table every fifteen minutes.</p>
+
+        <p>Sharding did fix the symptom. It also made four things impossible that had previously been trivial.</p>
+
+        <p>Finance could no longer run a revenue report without a cross-shard aggregation, so somebody wrote one that queried all eight instances and summed the results in PHP, which took nine minutes and timed out during peak. The admin's order grid, which searched by email, order number, postcode and date, had to fan out to every shard for every search, so a page that took 200ms took 1.4 seconds. Their B2B customers — three accounts representing 31% of revenue — landed on shard 3, which ran at four times the load of the others and needed its own bigger instance. And a marketplace integration that needed orders by date range across all customers became a scheduled batch job that ran overnight, because it could not be done live.</p>
+
+        <p>The engagement was to undo it. Consolidating back to a single instance took eleven weeks, cost roughly £70,000 in engineering time, and the resulting single database — with the right indexes and a read replica — handled the load at a p99 of 40ms.</p>
+
+        <p>I want to be careful here, because I am not saying sharding is wrong. I am saying that in fourteen years of ecommerce work I have seen it warranted three times and attempted eleven, and the eight unwarranted attempts each cost more than the problem they were solving.</p>
+
+        <p>I have also been on the wrong side of it. On a marketplace build in 2019 I recommended sharding by <code>seller_id</code> for a client whose growth projections said they would hit 200 million rows within eighteen months. They hit 40 million. The sharded architecture stayed, because unpicking it was never quite urgent enough, and for four years every feature took longer than it should have because of an architecture I had recommended on the basis of a spreadsheet.</p>
+
+        <p>So this article is deliberately structured as a ladder. Indexing, caching, vertical scaling, read replicas, functional splitting — and only then sharding, with a hard look at the parts that are unrecoverable if you get them wrong. Most merchants reading this should stop at rung three.</p>
+
+        <h2>2. What "The Database Is Slow" Actually Means</h2>
+
+        <p>Before touching architecture, find out which of five different problems you have, because the fixes do not overlap.</p>
+
+        <p><strong>Too many queries.</strong> Usually N+1: a category page loading 48 products and issuing 48 separate queries for stock, then 48 for prices. The database is not slow; it is being asked 200 questions to render one page. Fix the queries.</p>
+
+        <p><strong>Slow individual queries.</strong> Missing index, a function applied to an indexed column, an implicit type conversion, a query the optimiser plans badly. One query, hundreds of milliseconds. Fix the index or the query.</p>
+
+        <p><strong>Lock contention.</strong> Queries are individually fast but wait on each other. Classic on Magento's <code>cataloginventory_stock_item</code> during a sale, and on any table where an update pattern serialises. Fix the transaction shape.</p>
+
+        <p><strong>Connection exhaustion.</strong> Queries are fast, the database is idle, and the application cannot get a connection. Almost always a pooling problem, and it gets dramatically worse the moment you introduce functions that scale horizontally — something I have written about in the context of <a href="/blog/serverless-architecture-ecommerce/">serverless architecture and connection management</a>.</p>
+
+        <p><strong>Genuine capacity limits.</strong> CPU pinned, disk IOPS saturated, working set exceeding RAM. This is the only one where more or bigger hardware is the answer, and it is by far the least common of the five.</p>
+
+        <p>Measure before you decide. Slow query log with <code>long_query_time = 0.2</code>, Performance Schema, and half an hour with <code>pt-query-digest</code> will tell you which of those you have.</p>
+
+        <pre><code class="language-sql">-- The single most useful query on a struggling MySQL instance.
+-- Ranks statement patterns by total time spent, not by slowest
+-- single execution -- which is the distinction that matters.
+SELECT
+  DIGEST_TEXT                                   AS query_pattern,
+  COUNT_STAR                                    AS executions,
+  ROUND(SUM_TIMER_WAIT / 1e12, 2)               AS total_seconds,
+  ROUND(AVG_TIMER_WAIT / 1e9, 2)                AS avg_ms,
+  ROUND(SUM_ROWS_EXAMINED / NULLIF(SUM_ROWS_SENT,0), 1) AS examined_per_row
+FROM performance_schema.events_statements_summary_by_digest
+WHERE SCHEMA_NAME = 'magento'
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT 20;</code></pre>
+
+        <p>The column that matters most is <code>examined_per_row</code>. A query examining 40,000 rows to return one is missing an index, whatever its average duration says. And ordering by total time rather than average is what surfaces the query that takes 12ms and runs four thousand times a minute — which is almost always the real problem, and which a slow query log with a one-second threshold will never show you.</p>
+
+        <h2>3. Indexing, Which Fixes More Than Everything Else Combined</h2>
+
+        <p>If I had to attribute the database improvements I have made over the last decade, indexing would be more than half. It is unglamorous and it is where you should spend your first week.</p>
+
+        <p>The rules that matter, stated compactly.</p>
+
+        <p>Composite index column order follows equality, then range, then sort. A query filtering <code>status = 'processing'</code>, ranging on <code>created_at</code>, and sorting by <code>created_at</code> wants <code>(status, created_at)</code>. The reverse order cannot serve the equality efficiently.</p>
+
+        <p>A function on an indexed column disables the index. <code>WHERE DATE(created_at) = '2026-03-17'</code> scans; <code>WHERE created_at &gt;= '2026-03-17' AND created_at &lt; '2026-03-18'</code> seeks. I still find this in production code every month.</p>
+
+        <p>Implicit type conversion does the same thing silently. A <code>VARCHAR</code> column compared to an integer literal converts every row. This one is genuinely invisible in the query text and shows up only in <code>EXPLAIN</code>.</p>
+
+        <p>Covering indexes are underused. If an index contains every column the query needs, MySQL never touches the table data at all. On a hot query this is often a 5–10x improvement for the cost of one extra column in an index.</p>
+
+        <pre><code class="language-sql">-- Before: index on (customer_id) only. MySQL seeks the index, then
+-- reads 900 table rows to get status and total. ~180ms.
+SELECT entity_id, increment_id, status, grand_total, created_at
+FROM sales_order
+WHERE customer_id = 55123
+ORDER BY created_at DESC
+LIMIT 20;
+
+-- After: a covering index. Every column the query needs is in the
+-- index, so the table is never read. ~4ms.
+ALTER TABLE sales_order
+  ADD INDEX idx_cust_created_cover
+  (customer_id, created_at, status, grand_total, increment_id);
+
+-- Confirm with EXPLAIN: Extra must say "Using index", not
+-- "Using index condition" or "Using where".</code></pre>
+
+        <p>Two warnings, because indexes are not free. Every index slows writes, and on an order table taking a thousand inserts a minute during a sale that is measurable. And redundant indexes are common — an index on <code>(a)</code> is entirely covered by an index on <code>(a, b)</code> and can be dropped. On the cookware retailer we dropped nine redundant indexes from <code>sales_order</code> and write throughput improved 18%.</p>
+
+        <p>On a large table, add indexes online. MySQL 8's <code>ALGORITHM=INPLACE, LOCK=NONE</code> handles most cases; where it does not, <code>pt-online-schema-change</code> or <code>gh-ost</code> will. Locking a 300GB order table during business hours is a self-inflicted outage and I have watched someone do it.</p>
+
+        <h2>4. Caching, Which Fixes Most of the Rest</h2>
+
+        <p>The cheapest query is the one you do not run. Before any architectural change, work out what proportion of your database load exists only because something is not cached.</p>
+
+        <p>Four layers, in descending order of value per unit of effort.</p>
+
+        <p><strong>Full-page cache.</strong> Varnish or a CDN in front of the storefront. A cached category page issues zero queries. On a typical Magento install this removes 70–90% of read load outright, and if your hit rate is below 80% that is where your week should go rather than on database architecture.</p>
+
+        <p><strong>Object cache.</strong> Redis holding blocks, config, and collection results. Magento does this by default and it is frequently misconfigured — a store with the default cache backend on the filesystem is doing enormous unnecessary work.</p>
+
+        <p><strong>Query result cache in the application.</strong> Short-TTL caching of things that are expensive and tolerate staleness: category counts, layered navigation aggregates, bestseller lists. Sixty seconds of staleness on a "customers also bought" block is invisible to customers and removes a genuinely expensive query.</p>
+
+        <p><strong>Search offload.</strong> Elasticsearch or OpenSearch taking catalogue search, filtering and faceting off MySQL entirely. On any catalogue past a few thousand SKUs this is the single largest reduction in database load available, because faceted navigation queries are the worst-shaped queries in ecommerce.</p>
+
+        <p>What I would say plainly: a store that has not exhausted these four has no business discussing shard keys. Caching well is a fortnight of work. Sharding is a quarter, permanently, plus every quarter afterwards.</p>
+
+        <h2>5. Vertical Scaling Is Not Cheating</h2>
+
+        <p>There is a cultural bias in engineering against buying a bigger machine, and it costs businesses a great deal of money.</p>
+
+        <p>The numbers are worth stating. An AWS db.r6g.2xlarge gives you 8 vCPU and 64GB of RAM for roughly $700 a month on demand in eu-west-2. A db.r6g.8xlarge gives you 32 vCPU and 256GB for about $2,800. A db.r6g.16xlarge reaches 64 vCPU and 512GB.</p>
+
+        <p>512GB of RAM holds an enormous ecommerce working set. I have seen exactly one merchant whose orders and catalogue genuinely did not fit, and they were doing north of £400m.</p>
+
+        <p>So the honest comparison for most stores is: $2,100 a month more for a bigger instance, against a quarter of engineering time and permanent architectural complexity. At UK rates a quarter of one engineer is around £25,000, which buys about a year of the larger instance. And the instance requires no code changes, no migration risk, and can be undone in a maintenance window.</p>
+
+        <p>The ceiling is real and worth knowing: you run out of vertical scaling when your working set exceeds available RAM and the disk cannot keep up, or when a single write stream saturates the CPU. On modern hardware with NVMe storage, both of those are a long way up.</p>
+
+        <p>Before you scale up, check that you would benefit. If your buffer pool hit rate is 99.9% and your CPU is at 30%, a bigger machine does nothing and your problem is query shape.</p>
+
+        <pre><code class="language-sql">-- Buffer pool efficiency. Below ~99% on a read-heavy store means
+-- the working set does not fit in RAM and more memory will help.
+SELECT
+  ROUND(100 - (Innodb_buffer_pool_reads / Innodb_buffer_pool_read_requests * 100), 3) AS hit_pct
+FROM (
+  SELECT
+    MAX(IF(VARIABLE_NAME='Innodb_buffer_pool_reads', VARIABLE_VALUE, 0))         AS Innodb_buffer_pool_reads,
+    MAX(IF(VARIABLE_NAME='Innodb_buffer_pool_read_requests', VARIABLE_VALUE, 0)) AS Innodb_buffer_pool_read_requests
+  FROM performance_schema.global_status
+) s;</code></pre>
+
+        <h2>6. Read Replicas, and the Lag Nobody Plans For</h2>
+
+        <p>Ecommerce read-to-write ratios sit somewhere between 20:1 and 200:1 depending on how much of the read traffic your cache absorbs. Replicas are therefore the highest-leverage architectural change available, and they are straightforward: one primary takes writes, several replicas take reads.</p>
+
+        <p>Everything difficult about them is replication lag.</p>
+
+        <p>A write goes to the primary and takes somewhere between 5ms and several seconds to appear on a replica. Under normal load on MySQL 8 with parallel replication, expect 20–100ms. Under a bulk operation — a price import, a reindex, a mass status update — expect seconds, and I have seen twenty minutes during a badly written catalogue update.</p>
+
+        <p>The bug this produces is the read-your-own-writes failure, and it is the one your customers notice. Customer changes their delivery address, the write hits the primary, the confirmation page reads from a replica, and shows the old address. The customer changes it again. Now you have two support tickets and a customer who does not trust the site.</p>
+
+        <p>There are four ways to handle it and you will use several.</p>
+
+        <p><strong>Route by operation type, with stickiness after a write.</strong> The default rule is reads to replicas, writes to primary. The addition that actually makes it safe is that once a session has written, its reads go to the primary for a window longer than your worst-case lag.</p>
 
         <pre><code class="language-php">&lt;?php
-// Magento 2 Split Read/Write Database Connection Configuration (env.php)
+// Read-your-own-writes. The session flag is the important part;
+// naive read/write splitting without it produces intermittent,
+// unreproducible bugs that get closed as "cannot replicate".
+final class ConnectionRouter
+{
+    private const STICKY_WINDOW = 5; // seconds; set above observed p99 lag
+
+    public function pick(string $sql): PDO
+    {
+        if ($this->isWrite($sql)) {
+            $_SESSION['last_write_at'] = microtime(true);
+            return $this->primary();
+        }
+
+        $since = microtime(true) - ($_SESSION['last_write_at'] ?? 0);
+        if ($since &lt; self::STICKY_WINDOW) {
+            return $this->primary();   // this session must see its own write
+        }
+
+        // Skip replicas that have fallen behind. A replica lagging
+        // 40 seconds is worse than no replica at all.
+        return $this->healthyReplica(maxLagSeconds: 2) ?? $this->primary();
+    }
+}</code></pre>
+
+        <p><strong>Route by data class.</strong> Some data must never be read from a replica regardless of session: stock levels during checkout, payment status, anything the next decision depends on. Some data can tolerate minutes of staleness: category listings, review counts, blog content. Making this explicit per query is more work than a global rule and considerably safer.</p>
+
+        <p><strong>Wait for a position.</strong> MySQL's <code>WAIT_FOR_EXECUTED_GTID_SET</code> lets a read block until the replica has caught up to a known transaction. Precise, and it converts a correctness problem into a latency problem, which is usually the right trade at checkout.</p>
+
+        <p><strong>Fail closed on lag.</strong> Health-check replicas continuously and remove any exceeding your threshold from the pool. Without this, a single lagging replica serves stale data to a fraction of your traffic and produces support tickets nobody can reproduce.</p>
+
+        <p>The operational rule I have settled on: monitor <code>Seconds_Behind_Master</code> at the p99, alert above two seconds, and page above thirty. And run at least two replicas, because one replica means losing it takes all your read capacity back to the primary at exactly the wrong moment.</p>
+
+        <h2>7. Split by Function Before You Split by Row</h2>
+
+        <p>This is the rung people skip, and it delivers most of sharding's benefit for a fraction of the cost.</p>
+
+        <p>Functional partitioning means moving whole tables or subsystems to their own database. Sessions to Redis. Catalogue search to Elasticsearch. Analytics events to ClickHouse or BigQuery. Logs and audit trails to their own instance. Reporting to a replica nobody else touches.</p>
+
+        <p>Each of those removes an entire workload from your primary without splitting a single table, and none of them creates a cross-shard query, because they were never joined to your order data in the first place.</p>
+
+        <p>On the cookware retailer, before we even considered consolidating the shards, moving four workloads off the primary cut its load by 62%: sessions to Redis, search to Elasticsearch, the event stream that fed their BI tool to a separate replica, and the <code>report_event</code> and quote-history tables to their own instance.</p>
+
+        <p>The pattern that makes this work at the boundary is a read model — a consumer subscribing to your order and catalogue events and maintaining its own denormalised copy shaped for the queries it needs. That is the natural join between this and <a href="/blog/event-driven-architecture/">event-driven design</a>, and it is how a reporting system stops competing with checkout for the same rows.</p>
+
+        <p>Ask this before considering row-level sharding: is there a single table that is genuinely too large, or is there a single database doing five jobs? In my experience it is the second one about four times out of five.</p>
+
+        <h2>8. When Sharding Is Actually Warranted</h2>
+
+        <p>Here is my honest threshold. All four of these must be true, not one of them.</p>
+
+        <p><strong>One.</strong> A single table exceeds roughly 500GB, or a billion rows, and the working set genuinely does not fit in the largest instance you can buy.</p>
+
+        <p><strong>Two.</strong> Write throughput exceeds what one primary can absorb. Not read throughput — replicas fix reads. Sustained writes above roughly 15,000 per second on well-tuned MySQL, and be sure you have measured rather than estimated.</p>
+
+        <p><strong>Three.</strong> You have exhausted indexing, caching, vertical scaling, replicas and functional splitting, and can produce the measurements to prove it.</p>
+
+        <p><strong>Four.</strong> Your access patterns have a natural, dominant partition key that appears in the overwhelming majority of queries.</p>
+
+        <p>The fourth is the one that disqualifies most ecommerce businesses and it deserves elaboration.</p>
+
+        <p>A single-brand retailer's orders are queried by customer, by order number, by date, by status, by SKU, by warehouse, by marketing campaign and by postcode. There is no key present in most of those. Whichever you pick, most queries become fan-outs.</p>
+
+        <p>A multi-tenant SaaS, by contrast, has <code>tenant_id</code> in literally every query because tenant isolation is a security requirement. A marketplace has <code>seller_id</code> in most seller-facing queries. Those businesses have a natural shard key and sharding is a reasonable conversation.</p>
+
+        <p>The three times I have seen it genuinely warranted: a marketplace with 40,000 sellers and per-seller dashboards; a B2B platform with 900 corporate accounts each with strict data isolation requirements; and a subscription business writing 60 million recurring billing events a month. Note that none of those is a shop.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Situation</th><th>Do this</th><th>Not this</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Slow queries, small tables</td><td>Index and rewrite queries</td><td>Anything architectural</td></tr>
+            <tr><td>Read load high, writes fine</td><td>Cache, then read replicas</td><td>Sharding</td></tr>
+            <tr><td>One database serving five workloads</td><td>Functional split</td><td>Sharding</td></tr>
+            <tr><td>Working set slightly exceeds RAM</td><td>Bigger instance</td><td>Sharding</td></tr>
+            <tr><td>Historical data dominates table size</td><td>Archive or partition by date</td><td>Sharding</td></tr>
+            <tr><td>Writes exceed one primary, natural key exists</td><td>Shard, carefully</td><td>Buying a bigger instance again</td></tr>
+          </tbody>
+        </table>
+
+        <p>That fifth row is worth stopping on because it is the most commonly missed option. Most order tables are 80% historical data that is never queried outside reporting. Native partitioning by month, with old partitions on cheaper storage or archived to a separate instance, gets you most of the size benefit with none of the cross-shard problems. Queries with a date predicate hit one partition. It is one <code>ALTER TABLE</code> and a retention policy, not a quarter of engineering.</p>
+
+        <h2>9. Shard Key Selection, and the Mistakes You Cannot Undo</h2>
+
+        <p>If you shard, this is the decision. Everything else is recoverable. This is not, or is recoverable only at the cost I described in the opening.</p>
+
+        <p>A good shard key satisfies four properties at once, and the difficulty is that they pull against each other.</p>
+
+        <p><strong>High cardinality.</strong> Enough distinct values to spread across shards and to keep spreading as you add them. <code>customer_id</code> qualifies. <code>country</code> does not — five countries cannot spread across eight shards, and one of them is 70% of your business.</p>
+
+        <p><strong>Even distribution.</strong> No value should dominate. This is where the cookware retailer failed: three B2B accounts on one shard. Check your actual data before committing, not your assumptions about it.</p>
+
+        <p><strong>Present in most queries.</strong> A query without the shard key must ask every shard. If 40% of your queries lack the key, 40% of your queries got slower and more fragile.</p>
+
+        <p><strong>Immutable.</strong> Changing a row's shard key means moving the row between shards, which is a distributed transaction with no rollback. If customers can merge accounts, <code>customer_id</code> is not immutable and you have a problem you will meet eventually.</p>
+
+        <p>Common choices, honestly assessed.</p>
+
+        <p><code>customer_id</code>: even, immutable in most systems, and present in customer-facing queries. Absent from admin search, reporting, fulfilment and marketplace sync. This is the standard choice and it is the one that produced the opening story.</p>
+
+        <p><code>order_id</code>: perfectly even if it is a UUID or a hash, present in exactly one kind of query — fetch this order — and absent from everything else. Almost always wrong.</p>
+
+        <p><code>tenant_id</code> or <code>seller_id</code>: the good case. Present in nearly every query in a genuinely multi-tenant system. Uneven when one tenant is much larger than the others, which is common enough that you need a plan for it.</p>
+
+        <p>A date-based key: appalling as a shard key, excellent as a partition key. All writes land on the current shard, which is the hotspot problem in its purest form.</p>
+
+        <p>The technique that mitigates unevenness is to shard on a hash of the key rather than the key itself, and to use far more logical shards than physical instances.</p>
+
+        <pre><code class="language-python">import hashlib
+
+# 1024 logical shards mapped onto 8 physical instances. Growing to
+# 16 instances later moves whole logical shards and never rehashes
+# an individual row -- which is what makes resharding survivable.
+LOGICAL_SHARDS = 1024
+
+PLACEMENT = {  # logical shard range -> physical instance
+    (0,   128): "db-0", (128, 256): "db-1", (256, 384): "db-2",
+    (384, 512): "db-3", (512, 640): "db-4", (640, 768): "db-5",
+    (768, 896): "db-6", (896, 1024): "db-7",
+}
+
+def logical_shard(key: str) -> int:
+    # A stable hash. Python's built-in hash() is randomised per process
+    # since 3.3 and using it here would route the same key to different
+    # shards on different servers. This is a real, silent, fatal bug.
+    digest = hashlib.blake2b(key.encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % LOGICAL_SHARDS
+
+def instance_for(key: str) -> str:
+    ls = logical_shard(key)
+    for (lo, hi), node in PLACEMENT.items():
+        if lo &lt;= ls &lt; hi:
+            return node
+    raise LookupError(f"no placement for logical shard {ls}")</code></pre>
+
+        <p>The comment about Python's randomised hash is not hypothetical. I have debugged that exact failure on a client system where writes and reads went to different shards depending on which worker process handled them, producing data that appeared and disappeared. It took two days to find because everything looked correct in isolation.</p>
+
+        <p>The logical-shard indirection is the single most important implementation detail in this whole area. Modulo the number of physical instances directly, and adding a ninth instance rehashes every row in the system. With 1024 logical shards you move 128 of them and nothing else changes.</p>
+
+        <h2>10. Cross-Shard Queries, Which Is Where the Cost Lives</h2>
+
+        <p>Anything without the shard key becomes a scatter-gather: query every shard, merge in the application. The consequences compound.</p>
+
+        <p>Latency becomes the slowest shard's latency, not the average. With eight shards at a p99 of 50ms each, your combined p99 is meaningfully worse than 50ms because you are waiting on the worst of eight independent draws.</p>
+
+        <p>Sorting and pagination break in a way that surprises people. "Page 5 of orders sorted by date" cannot be answered by asking each shard for rows 80 to 100 — you must ask each shard for its first 100 and merge, discarding most of it. Deep pagination becomes quadratic and eventually impossible.</p>
+
+        <p>Aggregates need care. <code>SUM</code> and <code>COUNT</code> merge fine. <code>AVG</code> needs sum and count separately. <code>COUNT(DISTINCT)</code> and median cannot be merged at all without either shipping the raw values or accepting an approximation.</p>
+
+        <p>Joins across shards do not exist. You do them in the application, which means fetching both sides and joining in memory, which is a nested loop with network latency in it.</p>
+
+        <pre><code class="language-python">import asyncio
+
+async def find_orders_by_email(email: str, limit: int = 20):
+    # No shard key in this query, so every shard is asked. This is the
+    # admin's most common search and it now costs 8 queries instead of 1.
+    results = await asyncio.gather(
+        *[query(node, SQL, email, limit) for node in ALL_NODES],
+        return_exceptions=True,
+    )
+
+    rows = []
+    degraded = False
+    for r in results:
+        if isinstance(r, Exception):
+            # One shard down used to mean the site was down. Now it means
+            # partial results -- which you MUST surface, or the admin will
+            # believe an order does not exist when it simply was not asked for.
+            degraded = True
+            continue
+        rows.extend(r)
+
+    rows.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"rows": rows[:limit], "partial": degraded}</code></pre>
+
+        <p>That <code>partial</code> flag is not a nicety. On a sharded system, "no results" and "we could not check" are different answers and conflating them causes refunds to be issued for orders that exist.</p>
+
+        <p>The two mitigations worth building.</p>
+
+        <p><strong>A lookup table.</strong> A small, unsharded database mapping secondary keys to shards: email to shard, order number to shard, phone to shard. Admin search hits the lookup, gets the shard, queries one instance. This is a global index maintained by your application and it is another dual write, so it belongs in the same transaction or in an outbox.</p>
+
+        <p><strong>A denormalised read model.</strong> Every shard publishes its changes; a consumer maintains a single searchable copy in Elasticsearch or a separate database, shaped for the queries that lack the shard key. Reporting, admin search and marketplace sync all query that instead of the shards. This is the approach I would take now, and it means the read model — not the shards — is what needs to be fast for humans.</p>
+
+        <h2>11. Transactions Across Shards</h2>
+
+        <p>Within a shard you have ordinary ACID transactions. Across shards you have nothing, and the substitutes are worse than people expect.</p>
+
+        <p>Two-phase commit exists and I would not use it. It requires a coordinator, it blocks participants while it runs, and a coordinator failure between prepare and commit leaves locks held on multiple shards until manual intervention. The failure mode is a wedged system rather than a wrong answer, which sounds better and is not, because it happens during peak.</p>
+
+        <p>Sagas are what people actually use: a sequence of local transactions, each with a compensating action if a later step fails. Reserve stock on shard 3, charge the card, create the order on shard 5; if the order creation fails, refund and release. Eventually consistent, with a window where the system is visibly inconsistent.</p>
+
+        <p>The best answer is to arrange your shard key so that transactions do not cross shards. If everything about a customer lives on one shard — orders, addresses, payment methods, loyalty — then an operation on one customer is a local transaction. This is the strongest argument for <code>customer_id</code> as a shard key, and it is why co-locating related tables on the same key matters more than the key's other properties.</p>
+
+        <p>Where it breaks: inventory. Stock is a shared resource across all customers and cannot be co-located with any of them. In every sharded ecommerce system I have seen, inventory lives in its own unsharded store, and every order becomes a cross-store operation regardless of how clever the shard key is. Plan for that from the start rather than discovering it in month three.</p>
+
+        <h2>12. Resharding, Which Will Happen</h2>
+
+        <p>You will need more shards. Growth, an uneven key, a hot tenant. Doing it without downtime is a project in its own right and I want to describe the shape honestly.</p>
+
+        <p>With logical shards the mechanics are: pick logical shards to move; replicate their data to the new instance while writes continue; catch up until lag is under a second; briefly stop writes for the affected logical shards only; verify positions; flip the placement map; resume. Seconds of write unavailability for a fraction of your keys, not a maintenance window.</p>
+
+        <p>Without logical shards — if you took the modulo of the instance count — every row potentially moves, and you are looking at a full dual-write migration measured in weeks.</p>
+
+        <pre><code class="language-bash">#!/usr/bin/env bash
+# Move logical shards 128-191 from db-1 to the new db-8.
+# Written to be resumable: every step is idempotent and the flip
+# is the only irreversible moment.
+set -euo pipefail
+
+RANGE_LO=128; RANGE_HI=192; SRC=db-1; DST=db-8
+
+# 1. Copy. Runs for hours; writes to SRC continue throughout.
+shardctl copy --src "$SRC" --dst "$DST" --logical "$RANGE_LO-$RANGE_HI"
+
+# 2. Follow the binlog until the destination is nearly caught up.
+shardctl follow --src "$SRC" --dst "$DST" --until-lag 1s
+
+# 3. Freeze writes for THESE LOGICAL SHARDS ONLY. Everything else
+#    keeps serving. This is the whole point of the indirection.
+shardctl freeze --logical "$RANGE_LO-$RANGE_HI" --timeout 30s
+
+# 4. Verify before the irreversible step. Row counts and a checksum
+#    over the moved range. Abort on any mismatch -- and it does happen,
+#    usually because of a write path that bypassed the router.
+shardctl verify --src "$SRC" --dst "$DST" --logical "$RANGE_LO-$RANGE_HI" --checksum
+
+# 5. Flip placement, then unfreeze. Keep SRC data for 7 days.
+shardctl place --logical "$RANGE_LO-$RANGE_HI" --node "$DST"
+shardctl unfreeze --logical "$RANGE_LO-$RANGE_HI"</code></pre>
+
+        <p>Step four is the one people skip and it is the one that saves you. A write path that bypasses the router — a cron job, a report, an admin tool someone wrote in 2019 — writes to the old shard after the flip and the data is silently lost. Checksumming catches it. So does auditing every connection to your shards for a week beforehand, which I now do as standard.</p>
+
+        <h2>13. The Operational Cost Nobody Budgets For</h2>
+
+        <p>The engineering cost of building sharding gets estimated. The running cost does not, and it is larger.</p>
+
+        <p>Every schema migration now runs eight times, in a coordinated sequence, with a plan for the window where instances disagree. A migration that took twenty minutes takes an afternoon.</p>
+
+        <p>Backups multiply, and — this is the part people miss — a restore must be point-in-time consistent across shards, or you restore a customer's orders from 14:00 and their payments from 14:07. Coordinated point-in-time recovery across eight instances is a procedure you must write, test, and rehearse. Most teams have never tested it and discover it does not work when they need it.</p>
+
+        <p>Monitoring multiplies. Eight sets of replication lag, connection counts, slow query logs, disk usage. Eight instances that can independently fail. Your alerting has to aggregate meaningfully or it becomes noise.</p>
+
+        <p>The application gains a routing layer that every developer must understand. New joiners write a query without the shard key and it works fine in development with one shard and falls over in production. I have seen this specific bug ship four times on one project.</p>
+
+        <p>Local development gets worse. Either developers run eight database containers, or they run one and never exercise the routing logic, which means the routing bugs reach production.</p>
+
+        <p>And the cost that surprises everyone: <strong>every future feature is more expensive.</strong> A feature that needs data across shards, or a new query pattern without the shard key, is now a design problem rather than a query. Over four years that compounds into a substantial tax on delivery, and it does not appear in any budget line.</p>
+
+        <p>The cookware retailer's own estimate, after we consolidated, was that sharding had cost them roughly 20% of engineering throughput for three years. Nobody had counted that while it was happening.</p>
+
+        <h2>14. The Managed Options, and What They Actually Give You</h2>
+
+        <p>If you genuinely need horizontal scale, do not build it yourself. The tooling has improved enormously and hand-rolled routing layers are now hard to justify.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Option</th><th>Model</th><th>Cross-shard</th><th>Honest assessment</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vitess</td><td>MySQL sharding, proxy layer</td><td>Query splitting, some joins</td><td>Proven at YouTube scale. Real operational learning curve.</td></tr>
+            <tr><td>PlanetScale</td><td>Managed Vitess</td><td>As Vitess</td><td>Excellent DX, branching schemas. No foreign keys by default.</td></tr>
+            <tr><td>Citus</td><td>Postgres extension</td><td>Distributed planner, genuine joins</td><td>Best cross-shard story available. Postgres only.</td></tr>
+            <tr><td>Aurora Limitless</td><td>Managed Postgres sharding</td><td>Transparent</td><td>Newest, least battle-tested, tied to AWS.</td></tr>
+            <tr><td>CockroachDB / TiDB</td><td>Distributed SQL</td><td>Transparent, distributed txns</td><td>Sharding stops being your problem. Latency and cost become it.</td></tr>
+            <tr><td>DIY routing layer</td><td>Yours</td><td>Yours to write</td><td>Only if none of the above fits. Usually one does.</td></tr>
+          </tbody>
+        </table>
+
+        <p>If I were starting a genuinely large-scale build today on Postgres, Citus. On MySQL, Vitess or PlanetScale. The distributed SQL databases are technically impressive and the trade is that every transaction pays a consensus round trip, which for a checkout writing eight rows is a real latency cost you should measure with your own workload before committing.</p>
+
+        <p>All of them are better than the routing layer you would write. The one thing none of them fixes is the shard key decision, which remains entirely yours and remains the part that is unrecoverable.</p>
+
+        <h2>15. Magento, Specifically</h2>
+
+        <p>Magento 2 supports a limited form of this out of the box that is worth knowing about, because it covers most of what a Magento store actually needs.</p>
+
+        <p>Split databases — separate connections for checkout and OMS — were a Commerce feature, deprecated in 2.4.2 and removed in 2.4.6. The reasoning was sound: the operational complexity was not paying for itself, and MySQL had got faster than the feature assumed. If you are on an older version and using it, plan the consolidation rather than the extension.</p>
+
+        <p>What Magento does support well is read replicas, configured per connection in <code>env.php</code>, and it handles the read/write split for you at the resource level.</p>
+
+        <pre><code class="language-php">&lt;?php
+// app/etc/env.php -- Magento read replica configuration.
 return [
-    'db' =&gt; [
-        'connection' =&gt; [
-            'default' =&gt; [
-                'host' =&gt; 'db-master.internal', // Primary Write Connection
-                'dbname' =&gt; 'magento',
-                'active' =&gt; '1',
+    'db' => [
+        'connection' => [
+            'default' => [
+                'host' => 'primary.internal',
+                'dbname' => 'magento',
+                'username' => 'magento',
+                'password' => getenv('DB_PASSWORD'),
+                'active' => '1',
             ],
-            'checkout' =&gt; [
-                'host' =&gt; 'db-master.internal',
-                'dbname' =&gt; 'magento',
-                'active' =&gt; '1',
+        ],
+        'slave_connection' => [
+            'default' => [
+                // Point this at a proxy or a DNS record fronting several
+                // replicas -- Magento does not load balance across a list,
+                // and it does not check replication lag at all. Lag-aware
+                // routing has to happen below Magento, in ProxySQL or HAProxy.
+                'host' => 'replica-pool.internal',
+                'dbname' => 'magento',
+                'username' => 'magento_ro',
+                'password' => getenv('DB_RO_PASSWORD'),
+                'active' => '1',
             ],
-            'sales' =&gt; [
-                'host' =&gt; 'db-replica-1.internal', // Offloaded Read Replica
-                'dbname' =&gt; 'magento',
-                'active' =&gt; '1',
-            ]
-        ]
-    ]
+        ],
+    ],
 ];</code></pre>
 
-        <hr />
+        <p>The tables that cause most Magento database pain, and what to do about them: <code>sales_order_grid</code> and its siblings, which are denormalised copies that grow enormous and can be indexed aggressively; <code>quote</code> and <code>quote_item</code>, where abandoned carts accumulate forever and where a cleanup policy is the fix; <code>report_event</code>, which is usually pure waste and can be truncated; and the <code>catalog_product_index_price</code> family, where the answer is to move to Elasticsearch and reduce how much of the indexing MySQL does.</p>
+
+        <p>On the cookware retailer, truncating <code>report_event</code> and adding a 60-day quote retention policy removed 140GB before anything else was attempted. That was an afternoon.</p>
+
+        <h2>16. A Worked Example: Undoing It</h2>
+
+        <p>The cookware retailer, over eleven weeks in 2023. Roughly £45m annual revenue, Magento 2.4.5, eight sharded MySQL instances holding orders, quotes and customers by <code>customer_id % 8</code>.</p>
+
+        <p><strong>Weeks one to two — measurement.</strong> Before proposing anything I instrumented every query pattern across all shards for a fortnight. Total: 340GB across eight instances, of which 190GB was <code>report_event</code>, <code>quote</code> older than a year, and log tables. Actual live order and customer data: 94GB. Peak sustained write rate: 340 per second. That is roughly 2% of what one properly configured primary handles.</p>
+
+        <p>That measurement was the whole argument. Nobody had ever taken it.</p>
+
+        <p><strong>Week three — reclaim.</strong> Truncated <code>report_event</code>, applied a 60-day quote retention policy, archived orders older than three years to a separate reporting instance. 340GB became 108GB before any architectural change.</p>
+
+        <p><strong>Weeks four to six — build the target.</strong> A single db.r6g.4xlarge primary, two replicas, correct indexes derived from the measurement work, Elasticsearch already in place for search. Dual-write from the application to both the shards and the new primary, with a reconciliation job comparing row counts and checksums hourly.</p>
+
+        <p><strong>Weeks seven to nine — backfill and verify.</strong> Historical data copied shard by shard. The reconciliation job found 1,847 rows present on shards and missing from the consolidated database, all from a legacy admin tool that wrote directly to shard 2 and bypassed the routing layer entirely. Nobody knew it existed. This is exactly the failure I warned about in the resharding section and I only knew to look for it because I had been bitten before.</p>
+
+        <p><strong>Week ten — cutover.</strong> Reads switched to the consolidated primary with the shards still receiving writes, for four days, so rollback was a config change. Then writes.</p>
+
+        <p><strong>Week eleven — decommission.</strong> Shards kept read-only for a month, then destroyed.</p>
+
+        <p><strong>What went wrong.</strong> Two things, and neither was the database.</p>
+
+        <p>The reconciliation job compared row counts only for the first three weeks, not checksums. It reported green while the legacy admin tool's writes were being missed, because the counts matched — the tool updated rows rather than inserting them. We only found the discrepancy when I added column-level checksums in week seven, on a hunch, having been suspicious of a table whose <code>updated_at</code> distribution looked wrong. Had we cut over in week six as originally planned, roughly 1,800 orders would have had stale statuses in production.</p>
+
+        <p>And the archive of orders older than three years broke the customer account order history for a small number of long-standing customers, because I had not accounted for the account page querying without a date bound. Twenty-two support tickets over four days before we added a fallback query against the archive instance. Entirely avoidable, and the sort of thing that only shows up in production because nobody's test data has a customer with a 2019 order.</p>
+
+        <p><strong>Results.</strong> Order query p99 from 890ms to 40ms. Admin search from 1.4s to 180ms. The finance report from nine minutes and frequently timing out, to eleven seconds. Infrastructure cost from about $4,100 a month across eight instances to $1,600 for a primary and two replicas. And engineering velocity, which they measured in cycle time, improved by something they estimated at 15–20% over the following two quarters.</p>
+
+        <p>The database that replaced eight shards was one machine with the right indexes. That is the part I want to sit with, because it is the point of the whole article.</p>
+
+        <h2>17. Questions I Get Asked</h2>
+
+        <p><strong>"At what size should I start planning to shard?"</strong> Plan the ladder, not the sharding. If you can articulate why indexing, caching, vertical scaling, replicas and functional splitting will all be exhausted within eighteen months, start designing. Otherwise you are optimising for a future you cannot forecast — as I did in 2019, wrongly, and the client paid for it for four years.</p>
+
+        <p><strong>"Can I shard just one table?"</strong> Yes, and it is often the right move. Sharding a high-volume event or analytics table while leaving orders and customers on a single primary avoids most of the pain, because those tables are rarely joined and rarely queried by anything but their own key. This is much closer to functional partitioning than to true sharding.</p>
+
+        <p><strong>"Is DynamoDB a way out of this?"</strong> It moves the problem rather than solving it. DynamoDB shards automatically on your partition key, so you still choose a partition key, still get hot partitions if it is uneven, and still cannot query efficiently without it. What you avoid is the operational work. What you accept is designing your access patterns up front and finding a new query pattern expensive to add later.</p>
+
+        <p><strong>"How do I handle a customer whose data outgrows one shard?"</strong> A single tenant too large for one instance means the shard key is wrong for that tenant. The usual answer is a dedicated shard for the largest tenants and hashed distribution for the rest, which every mature multi-tenant system converges on eventually. Design for it early; retrofitting a special case into a uniform placement map is painful.</p>
+
+        <p><strong>"Do read replicas help with writes at all?"</strong> Indirectly and significantly. Moving read load off the primary frees CPU and I/O for writes, and I have seen replica introduction improve write latency by 30% with no change to the write path. It is not unlimited, but the effect is real and often overlooked.</p>
+
+        <p><strong>"What about caching at the database level, like ProxySQL query caching?"</strong> Useful for genuinely repeated identical queries, and less useful than caching at the application layer where you know the invalidation rules. I use ProxySQL for connection pooling, read/write splitting and lag-aware routing, and I do very little query caching in it.</p>
+
+        <p><strong>"We are on Shopify. Does any of this apply?"</strong> Not the database part — that is theirs. What does apply is the read model idea. If you are pulling large volumes through the Admin API for reporting or an ERP sync, you are rate-limited and slow, and the answer is to maintain your own copy fed by webhooks rather than querying Shopify repeatedly.</p>
+
+        <h2>18. What I'd Do First</h2>
+
+        <p>In strict order. Do not skip a rung because the next one sounds more interesting.</p>
+
+        <p>One. Measure. Performance Schema digest summary, slow query log at 200ms, buffer pool hit rate, replication lag, connection counts. Two weeks of data before any decision. The cookware retailer's entire £70,000 problem existed because nobody did this.</p>
+
+        <p>Two. Delete. Log tables, expired quotes, report events, orders old enough to archive. On most Magento databases this removes 40–60% of the volume in an afternoon and costs nothing.</p>
+
+        <p>Three. Index. Take the top twenty queries by total time and fix them. Add covering indexes where the hot path warrants it, drop redundant ones, and confirm each change with <code>EXPLAIN</code> rather than hope.</p>
+
+        <p>Four. Cache. Full-page cache hit rate above 80%, Redis for objects and sessions, Elasticsearch for catalogue search. If any of those is missing, it is worth more than everything below it.</p>
+
+        <p>Five. Scale up. Get the working set into RAM. It is cheap relative to engineering time and it is reversible, which almost nothing else on this list is.</p>
+
+        <p>Six. Add read replicas, with sticky-after-write routing and lag-aware health checks. Two, not one.</p>
+
+        <p>Seven. Split by function. Sessions, search, analytics, reporting, logs — each to its own store. Build a read model for the queries that do not belong on the transactional database at all.</p>
+
+        <p>Eight. Only now, consider sharding. And before you do, write down the shard key, list the ten most common queries in your admin and your reporting, and mark which ones contain it. If fewer than eight do, you have the wrong key or the wrong plan.</p>
+
+        <p>The thing I would push back on hardest: sharding because the table is large. Size alone is not a reason. A 400GB table that is well indexed, mostly historical and queried by its primary key is completely fine on one machine. The reason to shard is write throughput you cannot absorb, combined with an access pattern that gives you a key. Absent both, you are buying eleven weeks of consolidation work for somebody in three years, and it might be me, and I will find your legacy admin tool.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento & Shopify Stores</a></strong>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
               <p>Redis caching backend and Varnish setup.</p>
             </li>
             <li>
@@ -246,7 +740,6 @@ return [
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -280,6 +773,6 @@ return [
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>

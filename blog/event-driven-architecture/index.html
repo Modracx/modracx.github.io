@@ -60,9 +60,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'" />
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" /></noscript>
-  <link rel="stylesheet" href="/style.min.css?v=20260803-atlas" />
+  <!-- Theme: apply the stored chart before first paint so there is no flash. -->
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
   <title>Event-Driven Architecture for E-Commerce: Kafka & Webhooks | MODRACX</title>
-  <meta name="description" content="Technical architectural guide on building event-driven e-commerce systems using Apache Kafka, RabbitMQ, and webhook event buses for real-time inventory synchronization." />
+  <meta name="description" content="Event-driven ecommerce architecture: events vs commands, at-least-once delivery, idempotent consumers, the outbox pattern, schema evolution and tracing." />
   <meta property="og:title" content="Event-Driven Architecture for E-Commerce: Kafka & Webhooks | MODRACX" />
   <meta property="og:description" content="Technical architectural guide on event-driven e-commerce by Kenneth D'Silva." />
   <meta property="og:type" content="article" />
@@ -168,17 +170,17 @@
   <main id="realm" class="realm">
     <section class="container threshold">
       <div class="threshold-copy reveal">
-        <p class="rune"><a href="/blog/">← Archive & Insights</a></p>
-        <h1>Event-Driven Architecture for E-Commerce: Kafka & Webhooks</h1>
-        <p class="lede">Synchronous REST calls between e-commerce backends and ERP systems create tight coupling. Asynchronous event streams (Kafka/RabbitMQ) publish order events instantly.</p>
+        <p class="rune"><a href="/blog/">← Archive &amp; Insights</a></p>
+        <h1>Event-Driven Architecture for E-Commerce: Kafka &amp; Webhooks</h1>
+        <p class="lede">The same £340 order refunded four times, because a payment API took 22 seconds and a consumer timed out at 15. Delivery guarantees, the dual-write problem, and debugging without a call stack.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 36 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 28 min read</span> •
+          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
-    
-<div class="orrery reveal" aria-hidden="true">
+
+      <div class="orrery reveal" aria-hidden="true">
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
         <div class="orrery-ring"></div>
@@ -203,33 +205,595 @@
 
     <section class="chapter container">
       <article class="blog-post reveal">
-        
-        <h2>Kafka Producer Node.js Code</h2>
+        <h2>1. The Refund That Went Out Four Times</h2>
 
-        <pre><code class="language-javascript">// Node.js Kafka Producer for E-Commerce Order Placed Event
-const { Kafka } = require('kafkajs');
+        <p>A flooring retailer I look after refunded the same £340 order four times on a Tuesday morning in March. The customer, to their credit, phoned to say so.</p>
 
-const kafka = new Kafka({ clientId: 'checkout-service', brokers: ['kafka:9092'] });
-const producer = kafka.producer();
+        <p>The mechanism was ordinary. Their order service published a <code>RefundApproved</code> message to SNS. A consumer picked it up and called Stripe. Stripe's API responded slowly that morning — around 22 seconds, well past the consumer's 15-second HTTP timeout — so the consumer threw, the message went back to the queue, and thirty seconds later another instance picked it up and called Stripe again. Four times in total before someone noticed the alarm. Every one of those calls succeeded at Stripe's end. The consumer never saw any of the responses.</p>
 
-async function publishOrderPlaced(order) {
-  await producer.connect();
-  await producer.send({
-    topic: 'order-events',
-    messages: [
-      { key: order.id, value: JSON.stringify({ event: 'ORDER_PLACED', order }) }
-    ],
-  });
+        <p>Nobody wrote a bug. Every component did exactly what it was configured to do. SQS delivered at least once, as documented. The consumer retried on failure, as designed. Stripe processed each request, as asked. The system as a whole did something nobody wanted, and no single piece of it was wrong.</p>
+
+        <p>That is the characteristic failure of event-driven architecture, and it is why I get slightly irritated by material that presents it as a way to decouple services and stops there. Decoupling is what you buy. What you pay is that correctness stops being a property of code you can read in one place and becomes a property of interactions you have to reason about deliberately.</p>
+
+        <p>I have caused worse. On a distributor's build in 2021 I wrote a stock-adjustment consumer with no idempotency key at all, on the reasoning that the broker was configured for exactly-once and therefore I did not need one. A broker upgrade six months later changed a default, redelivery started happening, and inventory drifted by a few units a day for eleven days before the warehouse count caught it. Reconciling that against physical stock took two people the better part of a week.</p>
+
+        <p>So this piece is about the parts that actually bite. What separates an event from a command and why getting that wrong couples your services back together. What "at least once" really obliges you to build. The dual-write problem, which is the single most common correctness bug in ecommerce integrations and which almost nobody names. Schema evolution. And debugging a system that has no call stack, which is the part that makes engineers who are good at monoliths feel suddenly incompetent.</p>
+
+        <h2>2. Events Versus Commands, and Why It Matters</h2>
+
+        <p>Two messages, superficially similar, with opposite coupling properties.</p>
+
+        <p>A <strong>command</strong> is an instruction to a specific recipient to do a specific thing. <code>ReserveStock</code>. <code>SendConfirmationEmail</code>. <code>ChargeCard</code>. The sender knows who will handle it, knows what should happen, and generally wants to know whether it worked. There is exactly one logical handler.</p>
+
+        <p>An <strong>event</strong> is a statement that something has already happened. <code>OrderPlaced</code>. <code>PaymentCaptured</code>. <code>StockLevelChanged</code>. Past tense, factual, and the publisher has no opinion about who cares. Zero handlers is a valid outcome. So is nine.</p>
+
+        <p>The distinction is not pedantry. It determines who owns a business rule.</p>
+
+        <p>If the order service publishes <code>SendConfirmationEmail</code>, then the order service has decided that placing an order causes an email. Add SMS next quarter and you edit the order service. Add a loyalty accrual and you edit it again. The order service slowly becomes a list of every side effect in the business, and you have a monolith with a message broker in the middle of it, which is strictly worse than a monolith.</p>
+
+        <p>If the order service publishes <code>OrderPlaced</code> and the notification service subscribes, then adding SMS means deploying the notification service and nothing else. That is the decoupling people came for.</p>
+
+        <p>My rule: <strong>commands go point-to-point on a queue and may expect a reply; events go to a topic, fan out, and never expect one.</strong> Mixing those is where most trouble starts.</p>
+
+        <pre><code class="language-json">// COMMAND. One handler. Imperative. The sender cares about the result.
+{
+  "type": "ReserveStock",
+  "target": "inventory-service",
+  "commandId": "cmd_01HQ8V3XKPM",
+  "payload": { "orderId": "ord_88213", "lines": [{ "sku": "PL-4402", "qty": 2 }] },
+  "replyTo": "order-service-replies"
+}
+
+// EVENT. Past tense. No target, no replyTo. Anyone may listen.
+{
+  "type": "StockReserved",
+  "eventId": "evt_01HQ8V4B2NW",
+  "occurredAt": "2026-03-17T09:41:22.318Z",
+  "aggregate": { "type": "Order", "id": "ord_88213" },
+  "version": 3,
+  "payload": { "orderId": "ord_88213", "lines": [{ "sku": "PL-4402", "qty": 2 }] }
 }</code></pre>
 
-        <hr />
+        <p>Two fields in the event are worth pointing at. <code>eventId</code> is what makes consumers idempotent. <code>version</code> is what lets a consumer detect that it has missed something or received things out of order. Neither is optional and both are routinely omitted in the first version of a system, then added painfully later.</p>
+
+        <h2>3. Naming, Which Is Half the Design</h2>
+
+        <p>Event names are the public interface of your system. They outlive the code and they are extremely hard to change once three teams depend on them.</p>
+
+        <p>Past tense, always. <code>OrderPlaced</code>, not <code>PlaceOrder</code> and not <code>OrderPlacing</code>. If a name reads as an instruction, you have written a command and mislabelled it.</p>
+
+        <p>Name the business fact, not the technical operation. <code>CustomerAddressChanged</code> is a business fact. <code>CustomerRowUpdated</code> is a database detail leaking into your contract, and it will force every consumer to understand your schema.</p>
+
+        <p>Be specific enough to be useful. I have seen a system with a single <code>OrderUpdated</code> event carrying a <code>changeType</code> field, which meant every consumer subscribed to everything and immediately discarded 90% of it. Split it: <code>OrderPaid</code>, <code>OrderShipped</code>, <code>OrderCancelled</code>, <code>OrderAddressCorrected</code>. Routing then happens in the broker rather than in eleven consumers.</p>
+
+        <p>Include the aggregate identity in the name where ambiguity is possible. <code>StockReserved</code> and <code>StockAdjusted</code> are different facts with different consumers, even though both change the same number.</p>
+
+        <p>One convention I now insist on: a version number in the type itself once you are past the first release. <code>order.placed.v2</code>. It looks ugly. It also means a breaking change is a new topic rather than a coordinated deployment across five teams, which is the difference between a Tuesday and a fortnight.</p>
+
+        <h2>4. Thin Events, Fat Events, and the Trade You Are Making</h2>
+
+        <p>How much data goes in the payload is the design argument I have most often, and both sides are defensible.</p>
+
+        <p>A <strong>thin</strong> event carries identifiers and nothing else: <code>{ orderId: "ord_88213" }</code>. Consumers call back to the source for detail. Small messages, no stale data, and a single source of truth.</p>
+
+        <p>The cost is that every event produces N callbacks. Publish <code>OrderPlaced</code> to six consumers and your order API takes six extra requests, synchronously, at exactly the moment it is busiest. I have watched that pattern turn a Black Friday order spike into an outage of the order service, caused entirely by its own consumers.</p>
+
+        <p>A <strong>fat</strong> event carries everything a consumer might plausibly need. No callbacks, consumers work while the source is down, and replaying old events gives you the data as it was at the time — which matters enormously for anything financial.</p>
+
+        <p>The cost is coupling to the payload shape, larger messages, and the awkward question of what happens when the data changes after publication.</p>
+
+        <p>What I do in practice, and would defend: <strong>fat enough to act, thin enough to stay true.</strong> Include the fields that were part of the fact at the moment it happened — the prices charged, the quantities ordered, the address it shipped to — because those are immutable properties of the event. Exclude fields that are current-state and may drift, like the customer's marketing preferences or their loyalty tier. For those, carry the id and let the consumer look them up.</p>
+
+        <pre><code class="language-json">{
+  "type": "order.placed.v2",
+  "eventId": "evt_01HQ8V4B2NW",
+  "occurredAt": "2026-03-17T09:41:22.318Z",
+  "payload": {
+    "orderId": "ord_88213",
+    "customerId": "cus_5512",
+
+    // Immutable facts about this order. Safe to embed: they cannot
+    // change without a new event being emitted.
+    "currency": "GBP",
+    "totals": { "goods": 28400, "shipping": 495, "tax": 5779, "grand": 34674 },
+    "lines": [
+      { "sku": "PL-4402", "qty": 2, "unitPrice": 14200, "taxRate": 0.20 }
+    ],
+    "shipTo": { "postcode": "BS1 4XE", "country": "GB" }
+
+    // NOT embedded: customer.email, customer.loyaltyTier, product.stock.
+    // Those are current state. A consumer that needs them fetches them,
+    // and gets the value that is true when it acts, not when we published.
+  }
+}</code></pre>
+
+        <p>Note that money is in minor units as integers. Floating-point currency in event payloads is a bug that will find you eventually, usually as a penny discrepancy in a reconciliation report six months after anyone remembers writing the code.</p>
+
+        <h2>5. Delivery Guarantees, Stated Honestly</h2>
+
+        <p>Three phrases get used loosely and the difference between them is the difference between a working system and the refund story above.</p>
+
+        <p><strong>At most once.</strong> Fire and forget. Messages can be lost. Acceptable for analytics pings and nothing else in ecommerce.</p>
+
+        <p><strong>At least once.</strong> The message will arrive, possibly more than once. This is what SQS, SNS, EventBridge, Kafka in its default configuration, and every webhook you will ever receive actually give you. It is what you should assume in all circumstances.</p>
+
+        <p><strong>Exactly once.</strong> Does not exist across a network boundary in the general case. What Kafka calls exactly-once semantics is real, but it applies within Kafka — a transactional read-process-write where source and sink are both Kafka topics. The moment your consumer calls Stripe, or writes to MySQL, or sends an email, you are back to at-least-once and no broker setting changes that.</p>
+
+        <p>I want to be blunt about this because it is oversold. If a vendor tells you their queue gives you exactly-once delivery to an arbitrary external system, they are describing at-least-once delivery plus deduplication that they are performing on your behalf, and you should ask exactly where the dedupe window ends. SQS FIFO, for example, deduplicates within a five-minute window. Redelivery after six minutes is not deduplicated, and a consumer that took seven minutes to time out will see the message again.</p>
+
+        <p>The practical consequence is one sentence long: <strong>your consumers must be idempotent, and no broker configuration relieves you of that.</strong></p>
+
+        <h2>6. Ordering Is a Harder Problem Than Delivery</h2>
+
+        <p>Delivery you can solve with idempotency. Ordering you often cannot solve at all, and the honest approach is to design so that you do not need it.</p>
+
+        <p>Consider a stock adjustment sequence: set to 100, decrement 2, set to 95. Applied in order you end at 95. Applied as set-95 then decrement-2 then set-100 you end at 100. Both orderings are possible on a topic with multiple partitions and parallel consumers, and the second one has your warehouse shipping stock you do not have.</p>
+
+        <p>There are three approaches and I use all three in different places.</p>
+
+        <h3>Partition by key</h3>
+
+        <p>Kafka guarantees ordering within a partition. Publish all events for a given SKU to the same partition by using the SKU as the partition key and you get ordering where it matters, with parallelism across keys.</p>
+
+        <p>This works well and has one trap: rebalancing. When a consumer joins or leaves the group, partitions get reassigned, and there is a window where the new owner can start processing while the old owner has an in-flight message. Ordering within a partition does not save you across a rebalance. Commit offsets carefully, and prefer cooperative sticky assignment which reduces but does not eliminate the window.</p>
+
+        <p>SQS FIFO does the same thing with <code>MessageGroupId</code>, at a throughput ceiling of 300 messages per second per group without batching, 3,000 with. For per-SKU ordering that is almost always plenty.</p>
+
+        <h3>Version numbers and rejection</h3>
+
+        <p>Every event carries a monotonically increasing version for its aggregate. The consumer stores the last version it applied and discards anything lower. Simple, works across any transport, and it turns an ordering problem into a deduplication problem you have already solved.</p>
+
+        <pre><code class="language-sql">-- Apply an event only if it is newer than what we have already
+-- applied for this aggregate. Out-of-order arrivals become no-ops.
+INSERT INTO order_read_model (order_id, status, last_version, updated_at)
+VALUES (?, ?, ?, NOW())
+ON DUPLICATE KEY UPDATE
+  status       = IF(VALUES(last_version) &gt; last_version, VALUES(status), status),
+  updated_at   = IF(VALUES(last_version) &gt; last_version, NOW(), updated_at),
+  last_version = GREATEST(last_version, VALUES(last_version));
+-- One statement, atomic, no read-modify-write race between consumers.</code></pre>
+
+        <h3>Design the operations to commute</h3>
+
+        <p>The best answer, when you can get it. If every stock event is a relative delta rather than an absolute set, order stops mattering — addition commutes. Decrement 2, decrement 3, increment 1 gives the same answer in any sequence.</p>
+
+        <p>This is why I push hard against absolute-value events for anything countable. <code>StockAdjusted { delta: -2 }</code> is order-independent. <code>StockSet { value: 98 }</code> is not, and the difference costs you nothing at design time and a great deal at 2am.</p>
+
+        <p>The mistake I made on that distributor build was accepting absolute stock values from the ERP because that is what the ERP emitted, and then not adding a version number because the events "obviously" arrived in order. They did, until a consumer restart replayed a window of them.</p>
+
+        <h2>7. Idempotent Consumers, In Detail</h2>
+
+        <p>Every consumer must produce the same result whether it processes a message once or five times. There are three ways to get there and they are not equally good.</p>
+
+        <p><strong>Natural idempotency.</strong> The operation is already safe to repeat. Setting a status to <code>shipped</code>, writing a row with a deterministic primary key, upserting a read model. Free when you can arrange it, and worth restructuring an operation to get.</p>
+
+        <p><strong>A processed-events table.</strong> Record every event id you have handled, and check before processing. The check and the write must be in the same transaction as the business change, or you have created a smaller version of the dual-write problem described below.</p>
+
+        <pre><code class="language-javascript">// Idempotent consumer. The dedupe insert and the business write share
+// one transaction, so a crash between them is impossible.
+async function handle(event) {
+  const tx = await db.begin();
+  try {
+    // Unique key on event_id. A duplicate throws here and we stop.
+    await tx.query(
+      'INSERT INTO processed_events (event_id, consumer, handled_at) VALUES (?,?,NOW())',
+      [event.eventId, 'loyalty-accrual'],
+    );
+
+    await applyLoyaltyPoints(tx, event.payload);
+
+    await tx.commit();
+  } catch (err) {
+    await tx.rollback();
+    if (err.code === 'ER_DUP_ENTRY') {
+      // Already handled. Acknowledge and move on — this is success,
+      // not failure. Throwing here would loop the message forever.
+      return { status: 'duplicate' };
+    }
+    throw err;
+  }
+}</code></pre>
+
+        <p>Two operational notes on that table. It grows without bound, so partition it by date and drop partitions older than your longest possible redelivery window plus a margin — I use 30 days. And the <code>consumer</code> column matters: the same event is legitimately processed by six different consumers and each needs its own record.</p>
+
+        <p><strong>Idempotency keys at the boundary.</strong> For calls to external systems, pass a key the remote end honours. Stripe, Adyen and most modern payment APIs support this, and it is the correct fix for the refund incident that opens this article.</p>
+
+        <pre><code class="language-javascript">// The key must be derived from the event, not generated per attempt.
+// crypto.randomUUID() here would defeat the entire mechanism.
+await stripe.refunds.create(
+  { payment_intent: event.payload.paymentIntentId, amount: event.payload.amountMinor },
+  { idempotencyKey: `refund:${event.payload.refundId}` },
+);
+// Stripe returns the ORIGINAL response for a repeated key within 24h.
+// Four retries now produce one refund and three replays of the receipt.</code></pre>
+
+        <p>That one line, in place from the start, would have turned a four-times refund into a non-event. It costs nothing. I now treat a call to an external system without an idempotency key as a code review blocker in any consumer.</p>
+
+        <h2>8. The Dual-Write Problem, Which Is Everywhere</h2>
+
+        <p>Here is the bug in almost every first-generation event integration I have reviewed.</p>
+
+        <pre><code class="language-javascript">// This is broken. It looks completely reasonable.
+async function placeOrder(cmd) {
+  const order = await db.insert('orders', cmd);      // write 1
+  await broker.publish('order.placed.v2', order);    // write 2
+  return order;
+}</code></pre>
+
+        <p>Two writes to two systems with no shared transaction. Four things can happen and only one of them is what you want.</p>
+
+        <p>Both succeed: correct. The database write fails: nothing happened, correct. The publish fails after the database write succeeded: <strong>the order exists and nobody downstream knows.</strong> No confirmation email, no warehouse pick, no ERP record. And the process crashing between the two lines produces exactly the same outcome with no error anywhere.</p>
+
+        <p>Swapping the order does not help; it gives you a published event for an order that does not exist, which is worse because downstream systems act on it.</p>
+
+        <p>Wrapping them in a try/catch does not help either. If the publish fails you cannot roll back a committed database transaction, and if you delete the row you have created a new dual-write with the same problem.</p>
+
+        <p>The frequency of this bug is not low. On a typical broker with 99.9% availability, publishing a hundred thousand orders a month means roughly a hundred silent losses a month. Most merchants discover it as "sometimes an order doesn't reach the warehouse and we don't know why", which sits in a ticket queue for a year because it is not reproducible.</p>
+
+        <p>There are exactly two correct fixes and both work by reducing two writes to one.</p>
+
+        <h2>9. The Outbox Pattern, Concretely</h2>
+
+        <p>Write the event to a table in the same database, in the same transaction as the business data. One transaction, one system, atomic. A separate process reads the table and publishes.</p>
+
+        <pre><code class="language-sql">CREATE TABLE outbox (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  aggregate_id  VARCHAR(64)  NOT NULL,
+  event_type    VARCHAR(128) NOT NULL,
+  payload       JSON         NOT NULL,
+  created_at    DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  published_at  DATETIME(6)  NULL,
+  attempts      INT          NOT NULL DEFAULT 0,
+
+  -- Partial-ish index: the relay only ever scans unpublished rows.
+  -- Without this the relay table-scans and gets slower every day.
+  KEY idx_unpublished (published_at, id)
+) ENGINE=InnoDB;</code></pre>
+
+        <pre><code class="language-javascript">// Now there is one write. If the transaction commits, the event WILL
+// be published. If it rolls back, the event never existed.
+async function placeOrder(cmd) {
+  const tx = await db.begin();
+  const order = await tx.insert('orders', cmd);
+  await tx.insert('outbox', {
+    aggregate_id: order.id,
+    event_type: 'order.placed.v2',
+    payload: JSON.stringify(toEventPayload(order)),
+  });
+  await tx.commit();
+  return order;
+}</code></pre>
+
+        <p>The relay is the part people get wrong, so here it is with the details that matter.</p>
+
+        <pre><code class="language-javascript">// Outbox relay. Runs continuously. At-least-once by construction,
+// which is fine because consumers are idempotent.
+async function relay() {
+  const tx = await db.begin();
+
+  // SKIP LOCKED lets several relay instances run without contending
+  // and without processing the same row twice. Without it you either
+  // run a single instance (a bottleneck) or double-publish.
+  const rows = await tx.query(`
+    SELECT id, event_type, payload FROM outbox
+    WHERE published_at IS NULL
+    ORDER BY id
+    LIMIT 200
+    FOR UPDATE SKIP LOCKED
+  `);
+
+  for (const row of rows) {
+    // Publish BEFORE marking published. If we crash here the row is
+    // still unpublished and gets retried — a duplicate, not a loss.
+    // The reverse order would lose events, which is unrecoverable.
+    await broker.publish(row.event_type, JSON.parse(row.payload), {
+      messageId: `outbox-${row.id}`,   // stable id => consumer dedupe works
+    });
+    await tx.query(
+      'UPDATE outbox SET published_at = NOW(6), attempts = attempts + 1 WHERE id = ?',
+      [row.id],
+    );
+  }
+
+  await tx.commit();
+  return rows.length;
+}</code></pre>
+
+        <p>Three details that are easy to miss and expensive to discover.</p>
+
+        <p>Publish before marking. Getting this backwards converts a duplicate — harmless, because consumers are idempotent — into a permanent loss.</p>
+
+        <p><code>SKIP LOCKED</code> is what makes the relay horizontally scalable. It is available in MySQL 8.0+ and PostgreSQL 9.5+, and if you are on MySQL 5.7 you will be running a single relay instance and should plan capacity accordingly.</p>
+
+        <p>The message id must be stable across retries. Deriving it from the outbox row id gives you that for free and makes downstream deduplication work without any extra bookkeeping.</p>
+
+        <p>Then the operational half: alert on the age of the oldest unpublished row, not on the count. A backlog of 50,000 rows that is draining is fine. Three rows that have been stuck for twenty minutes is a broken relay, and a count-based alarm will never fire on it. Prune published rows on a schedule; an unpruned outbox on a busy store reaches tens of millions of rows within a year and the index stops fitting in memory.</p>
+
+        <h2>10. Change Data Capture, and When I'd Use It Instead</h2>
+
+        <p>The alternative to a relay reading your table is a tool reading the database's replication log. Debezium is the common choice, tailing the MySQL binlog or Postgres WAL and publishing every committed change to Kafka.</p>
+
+        <p>The appeal is that it requires no application change at all, which makes it the pragmatic option for getting events out of something you cannot modify — a legacy ERP, a vendor application, an old Magento install with heavy customisation.</p>
+
+        <p>The trade is that CDC emits row changes, not business events. You get <code>sales_order_grid UPDATE, status: processing -> complete</code>. Turning that back into <code>OrderShipped</code> means encoding your database schema into a transformation layer, and every schema migration becomes a potential break for every consumer. You have decoupled the services and coupled everything to your tables, which is the coupling you were trying to escape.</p>
+
+        <p>Where I land: outbox when you own the code, CDC when you do not. And if you use CDC, put a translation service immediately after it that converts row changes into named business events, so that exactly one component knows about your schema. I have seen a team wire eleven consumers directly to Debezium topics; a routine column rename took down five of them.</p>
+
+        <p>There is a hybrid worth knowing about: use CDC to tail the outbox table specifically. You get the outbox's clean business events with no relay process to run or scale. Debezium ships an outbox event router transform for exactly this. It is the setup I would choose for a new build on Kafka.</p>
+
+        <h2>11. Schema Evolution Without Breaking Everyone</h2>
+
+        <p>Your first event schema is wrong. Not possibly wrong — wrong, in ways you will discover in month four. The question is only whether changing it is a deployment or a project.</p>
+
+        <p>The governing rule is that <strong>producers must not break consumers they cannot see</strong>, and once an event is on a topic you genuinely cannot see all of them.</p>
+
+        <p>Safe changes, deployable any time: adding an optional field; adding a new event type; widening a numeric range; adding a value to an enum <em>if</em> consumers handle unknown values gracefully, which they only do if you made them.</p>
+
+        <p>Breaking changes, requiring a new version: removing a field; renaming a field; changing a type; making an optional field required; changing units or semantics while keeping the name.</p>
+
+        <p>That last one is the dangerous category because nothing detects it. Changing <code>weight</code> from kilograms to grams passes every schema check ever written and silently multiplies your shipping quotes by a thousand. If the meaning changes, the name changes. No exceptions.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Compatibility mode</th><th>You may</th><th>Deploy order</th><th>Use when</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Backward</td><td>Delete fields, add optional ones</td><td>Consumers first</td><td>Default. Old data must stay readable.</td></tr>
+            <tr><td>Forward</td><td>Add fields, delete optional ones</td><td>Producers first</td><td>Consumers you do not control.</td></tr>
+            <tr><td>Full</td><td>Add or delete optional fields only</td><td>Either</td><td>Anything crossing a team boundary.</td></tr>
+            <tr><td>None</td><td>Anything</td><td>Coordinated</td><td>Pre-launch only. Never after.</td></tr>
+          </tbody>
+        </table>
+
+        <p>I set Full compatibility on any topic crossing a team boundary and Backward on internal ones. Full is restrictive and the restriction is the point: it makes the breaking change obvious at build time rather than at 3am.</p>
+
+        <p>For a genuinely breaking change, run both versions. Publish <code>order.placed.v1</code> and <code>order.placed.v2</code> simultaneously from the same outbox transaction, let consumers migrate on their own schedule, then instrument v1 to find out who is still reading it. Instrument first — asking around does not work, because the team that owns the forgotten consumer left last year.</p>
+
+        <pre><code class="language-javascript">// Dual publishing during a migration. v1 is derived from v2 so there
+// is one source of truth and no chance of the two drifting.
+await tx.insert('outbox', [
+  { event_type: 'order.placed.v2', payload: JSON.stringify(v2) },
+  { event_type: 'order.placed.v1', payload: JSON.stringify(downgrade(v2)) },
+]);
+
+function downgrade(v2) {
+  return {
+    orderId: v2.orderId,
+    customerId: v2.customerId,
+    // v1 had a single flat total in pounds. v2 splits it and uses pence.
+    total: v2.totals.grand / 100,
+    items: v2.lines.map(l =&gt; ({ sku: l.sku, qty: l.qty })),
+  };
+}</code></pre>
+
+        <p>Set an end date and publish it when you introduce v2. "We will stop publishing v1 on 30 September" written down at the start is the only thing I have found that actually gets consumers migrated. Without it both versions run for years.</p>
+
+        <h2>12. Choosing the Transport</h2>
+
+        <p>The broker decision gets more attention than it deserves and the wrong criteria dominate it. Almost every ecommerce business that chose Kafka would have been fine with SQS, and a meaningful minority regret the operational surface.</p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>Transport</th><th>Retention</th><th>Ordering</th><th>Replay</th><th>Operational load</th><th>Suits</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>SQS + SNS</td><td>14 days max</td><td>FIFO queues only</td><td>No</td><td>Near zero</td><td>Most stores, most of the time</td></tr>
+            <tr><td>EventBridge</td><td>24h (archive up to indefinite)</td><td>None</td><td>Via archive replay</td><td>Near zero</td><td>Routing across AWS services and SaaS</td></tr>
+            <tr><td>Kafka / MSK</td><td>Configurable, effectively forever</td><td>Per partition</td><td>Yes, native</td><td>High, or high cost</td><td>Event sourcing, analytics, real scale</td></tr>
+            <tr><td>RabbitMQ</td><td>Until acked</td><td>Per queue</td><td>No</td><td>Moderate</td><td>Complex routing, existing expertise</td></tr>
+            <tr><td>Postgres/MySQL table</td><td>Yours</td><td>Trivial</td><td>Yes</td><td>Already running it</td><td>Under ~50 events/sec, genuinely</td></tr>
+          </tbody>
+        </table>
+
+        <p>The last row is not a joke. A database table with <code>SELECT ... FOR UPDATE SKIP LOCKED</code> is a perfectly good queue at the volumes most ecommerce businesses operate at, it is transactional with your business data so the dual-write problem disappears entirely, and you already know how to back it up and monitor it. I have deployed exactly this for a store doing 40,000 orders a month and it has never been the bottleneck.</p>
+
+        <p>The honest case for Kafka is retention and replay. If you need to add a consumer next year and have it process two years of history to build its own view, only Kafka gives you that without a bespoke archive. That is a real requirement for analytics and event sourcing and it is not a requirement for a store that wants its warehouse to know about orders.</p>
+
+        <p>My default for a store on AWS: EventBridge for routing and fan-out, SQS for anything that needs a retry policy and a dead letter queue, and Kafka only when someone can articulate a replay requirement. If you are running functions rather than services, the shape of that decision interacts with how you drew your <a href="/blog/serverless-architecture-ecommerce/">serverless function boundaries</a>, because a queue between two functions is also a failure boundary.</p>
+
+        <h2>13. Webhooks Are Events With Worse Guarantees</h2>
+
+        <p>Every ecommerce system consumes webhooks — Shopify, Stripe, the 3PL, the marketplace. They are events over HTTP with none of the properties a broker gives you, and treating them as ordinary API calls is how integrations rot.</p>
+
+        <p>What you get: at-least-once delivery, no ordering, a retry policy you do not control, a timeout you do not control, and delivery from an IP range that changes without notice.</p>
+
+        <p>What you must therefore build. Verify the signature before parsing anything. Persist the raw body and return 200 within a couple of seconds; do the work asynchronously. Deduplicate on the provider's event id, which every serious provider supplies. Handle out-of-order arrival explicitly, because a shipment webhook overtaking an order webhook is routine.</p>
+
+        <pre><code class="language-javascript">export async function receive(req, res) {
+  // 1. Verify first, on the RAW body. Parsing before verifying is how
+  //    signature checks get bypassed by a body-parser that normalises.
+  if (!verifyHmac(req.rawBody, req.headers['x-shopify-hmac-sha256'])) {
+    return res.status(401).end();
+  }
+
+  // 2. Persist raw. If everything downstream is broken we can replay.
+  //    The unique index on provider_event_id makes this the dedupe point.
+  try {
+    await db.query(
+      `INSERT INTO webhook_inbox (provider, provider_event_id, topic, body)
+       VALUES ('shopify', ?, ?, ?)`,
+      [req.headers['x-shopify-webhook-id'], req.headers['x-shopify-topic'], req.rawBody],
+    );
+  } catch (e) {
+    // Duplicate delivery. Already stored. 200 stops the provider retrying.
+    if (e.code === 'ER_DUP_ENTRY') return res.status(200).end();
+    throw e;
+  }
+
+  // 3. Acknowledge fast. Shopify's timeout is 5s; exceeding it triggers
+  //    a retry and eventually gets the webhook subscription removed.
+  res.status(200).end();
+}</code></pre>
+
+        <p>That <code>webhook_inbox</code> table has paid for itself on every build I have used it on. When a downstream consumer has a bug, you fix the bug and replay from the table. Without it, the events are gone and you are asking the provider to resend, which most will not do beyond a short window.</p>
+
+        <p>One trap specific to Shopify: their webhook delivery is explicitly not ordered, and their documentation says so. An <code>orders/updated</code> can arrive before the <code>orders/create</code> it updates. Consumers that assume otherwise fail rarely and confusingly, which is the worst failure frequency.</p>
+
+        <h2>14. Retries, Backoff, and the Dead Letter Queue Nobody Reads</h2>
+
+        <p>Retry policy is where a system either degrades gracefully or amplifies its own failure.</p>
+
+        <p>Classify errors before you retry them. A network timeout, a 503, a database deadlock — retry those. A validation failure, a 404 on a resource that will never exist, a conditional check failure — do not, because no number of attempts will change the outcome and each one costs you throughput. I see consumers retry a JSON parse error thirty times, which is thirty attempts to parse the same malformed string.</p>
+
+        <p>Exponential backoff with jitter, always. Without jitter, a downstream service that recovers gets hit by every retrying consumer simultaneously and falls over again. The retry storm that follows a brief outage is frequently more damaging than the outage.</p>
+
+        <pre><code class="language-javascript">// Full jitter. The random spread is the important part, not the base.
+const delay = Math.random() * Math.min(30_000, 200 * 2 ** attempt);
+
+// Retry only what can succeed on a second attempt.
+const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
+function retryable(err) {
+  if (err.name === 'TimeoutError' || err.code === 'ECONNRESET') return true;
+  if (err.name === 'ValidationError') return false;   // never
+  return RETRYABLE.has(err.statusCode);
+}</code></pre>
+
+        <p>Then the dead letter queue. Every consumer needs one, and a DLQ with no alarm and no owner is a folder where messages go to be forgotten. I have opened DLQs containing eighteen months of failed messages that nobody had looked at once — including, on one occasion, forty-one orders that had never reached the warehouse.</p>
+
+        <p>What I set up now, on every consumer without exception: an alarm on DLQ depth above zero, routed to a person rather than a channel; a runbook entry saying what the messages mean and how to replay them; and a redrive script that exists and has been tested before it is needed, because writing one during an incident is how you replay a message twice.</p>
+
+        <h2>15. Debugging a System With No Call Stack</h2>
+
+        <p>This is the part that surprises people, and the honest thing to say is that you are trading a debugging experience you know for one you have to build.</p>
+
+        <p>In a monolith, an exception gives you a stack trace: the whole causal chain, in order, in one place. In an event-driven system, a consumer fails and you get one frame. The event arrived. Something was wrong with it. You have no idea what published it, what else it triggered, or what the customer was doing.</p>
+
+        <p>Three things reconstruct that, and they must be in place before you need them.</p>
+
+        <h3>Correlation and causation ids</h3>
+
+        <p>A correlation id is minted at the true entry point — a customer request, a scheduled job — and copied into every event, message and log line that results, however many hops away. A causation id points at the immediate parent event. Together they give you a tree.</p>
+
+        <pre><code class="language-json">{
+  "eventId": "evt_04",
+  "type": "shipment.dispatched.v1",
+  "correlationId": "cor_9f2a",   // same across the whole customer journey
+  "causationId": "evt_03",       // the event that directly caused this one
+  "occurredAt": "2026-03-17T11:02:04.771Z"
+}</code></pre>
+
+        <p>With those two fields, one query returns every event in the journey and the parent pointers let you draw the actual causal graph. Without them you are correlating on timestamps and order ids, and order ids only work while you are inside a flow that has one — which excludes exactly the failures where the order was never created.</p>
+
+        <h3>Distributed tracing across the async boundary</h3>
+
+        <p>OpenTelemetry propagates a trace context in HTTP headers automatically. It does not cross a queue unless you put the <code>traceparent</code> into the message and restore it on the consuming side. That is about fifteen lines of code and it is the difference between a trace that ends at the publish call and one that spans the whole flow.</p>
+
+        <pre><code class="language-javascript">// Producer: inject the active trace context into message attributes.
+const carrier = {};
+propagation.inject(context.active(), carrier);
+await sqs.send(new SendMessageCommand({
+  QueueUrl: url,
+  MessageBody: JSON.stringify(event),
+  MessageAttributes: {
+    traceparent: { DataType: 'String', StringValue: carrier.traceparent },
+  },
+}));
+
+// Consumer: extract it and run the handler inside that context, so the
+// consumer span becomes a child of the producer's rather than a root.
+const parent = propagation.extract(context.active(), {
+  traceparent: record.messageAttributes?.traceparent?.stringValue,
+});
+await context.with(parent, () =&gt; handle(JSON.parse(record.body)));</code></pre>
+
+        <h3>An event store you can query</h3>
+
+        <p>Keep every event, with its ids, somewhere queryable. Kafka with long retention, or an S3 archive with Athena over it, or a table if your volume is modest. The question you will actually ask during an incident is "show me everything that happened for correlation id X, in order", and answering it in ten seconds instead of an hour changes the character of the whole operation.</p>
+
+        <p>I would also say something uncomfortable: this observability layer is not optional overhead you can add later. It is a load-bearing part of the architecture. A team that adopts events without it will spend more time debugging than they saved by decoupling, conclude that event-driven architecture is a fad, and go back to synchronous calls. I have watched that happen twice and in both cases the technology was not the problem.</p>
+
+        <h2>16. Testing Flows You Cannot Step Through</h2>
+
+        <p>Unit tests on handlers are easy and cover less than you would like. The interesting bugs live in the interactions.</p>
+
+        <p>Contract tests are the highest-value thing here. The producer asserts that it emits events matching a published schema; each consumer asserts it can handle every example in that schema's fixture set. Pact does this well, and a schema registry with compatibility checking does most of it for free. Either way the goal is that a producer's breaking change fails the producer's build rather than the consumer's production.</p>
+
+        <p>Beyond that, three tests I write that most teams do not.</p>
+
+        <p><strong>Replay the same message five times and assert the end state is identical.</strong> This is a two-line test that catches every idempotency bug you have. Run it in CI against every consumer.</p>
+
+        <p><strong>Shuffle an event sequence and assert the end state converges.</strong> Generate a plausible sequence, permute it, apply each permutation to a clean fixture, compare. Where the results differ you have found an ordering dependency you did not know you had. On the distributor build this found three, two of which were real.</p>
+
+        <p><strong>Kill the relay mid-batch.</strong> An integration test that publishes, kills the outbox relay process partway, restarts it, and asserts nothing was lost and duplicates were absorbed. It is fiddly to write and it is the test that proves the property the whole design exists to guarantee.</p>
+
+        <h2>17. A Worked Example, Including the Part That Failed</h2>
+
+        <p>The flooring retailer from the opening, over about four months. Magento 2.4.7, roughly 12,000 orders a month, a Netsuite ERP, a 3PL, Klaviyo, and a bespoke loyalty scheme. Before the work, all of it was synchronous calls from Magento observers, which meant a slow Netsuite response made checkout slow and a Netsuite outage made checkout fail.</p>
+
+        <p><strong>Phase one — outbox and relay.</strong> An <code>outbox</code> table in the Magento database, written inside the existing order-placement transaction by a plugin on the order repository. A relay process publishing to EventBridge. No consumers yet; we ran it for two weeks publishing into a void, purely to confirm the relay kept up and the transaction boundary was right. It was not, initially — the first implementation wrote to the outbox after the transaction committed, which is the dual-write bug with extra steps, and a code review caught it before it shipped. Barely.</p>
+
+        <p><strong>Phase two — one consumer.</strong> Klaviyo, chosen deliberately because it was the lowest-stakes: a duplicated marketing email is embarrassing, not expensive. This is where we found that our event ids were not stable across relay retries, because the first version generated a UUID at publish time rather than deriving it from the outbox row. Two weeks of duplicate emails at a low rate before anyone connected the two.</p>
+
+        <p><strong>Phase three — Netsuite.</strong> The high-value change. Checkout stopped calling Netsuite entirely; the ERP consumer reads <code>order.placed.v2</code> and pushes. Median checkout time went from 4.1 seconds to 1.3. During a four-hour Netsuite outage in month three, checkout was completely unaffected and 340 orders queued and flushed cleanly afterwards. That single incident justified the project to the board more effectively than anything I said.</p>
+
+        <p><strong>Phase four — 3PL and loyalty.</strong> Straightforward by then, because the pattern was established and the observability existed.</p>
+
+        <p><strong>What went wrong, properly.</strong> In month three we added a <code>fulfilmentPreference</code> field to the order event and, in the same deployment, tightened the consumer's schema validation to reject unknown fields. Standard hygiene, we thought. What we had not accounted for was the events already sitting in the queue, published by the previous producer version, which the new stricter consumer now rejected — including a batch of 61 orders that had queued during a deployment window. They went to the DLQ. The DLQ alarm existed and fired correctly. Nobody had assigned it an owner, so it went to a Slack channel that was muted over a weekend.</p>
+
+        <p>Those 61 orders sat unfulfilled for 51 hours. Roughly £9,000 of orders and, worse, 61 customers who had been charged and were waiting. Replaying them once we found the problem took four minutes; the damage was entirely in the detection delay.</p>
+
+        <p>Two changes came out of it. Consumers now ignore unknown fields rather than rejecting them, which is what forward compatibility means and which I had written into the design document and then not enforced in code. And every DLQ alarm routes to a person on a rota, with an acknowledgement requirement, not to a channel.</p>
+
+        <p><strong>Where it settled.</strong> Checkout p50 1.3s against 4.1s before. ERP sync failures visible in a dashboard rather than discovered at month-end reconciliation. Adding the loyalty consumer took two days against an estimated three weeks under the old architecture, because it required no change to Magento at all. Infrastructure cost about $60 a month for EventBridge, SQS and the relay.</p>
+
+        <h2>18. When I'd Tell You Not to Do This</h2>
+
+        <p>Events are not free and the cost is paid in a currency most teams undercount: the number of things that can be true at once.</p>
+
+        <p>Do not use events for a request that needs a synchronous answer. "Is this coupon valid" is a question, not a fact. Making it an event means inventing a correlation mechanism and a timeout, which is a worse HTTP call.</p>
+
+        <p>Do not use events inside a single service to talk to itself. That is a function call with a message broker's failure modes attached.</p>
+
+        <p>Do not use events when the consistency requirement is strict and immediate. Eventual consistency means a window where the order exists and the stock has not moved. If that window is unacceptable — genuinely unacceptable, not just uncomfortable — you need a transaction, which means the data has to live in one place. Some of that is a data architecture question rather than a messaging one, and <a href="/blog/database-sharding-scaling/">how you split and scale the database</a> constrains what consistency you can offer in the first place.</p>
+
+        <p>Do not adopt events because a conference talk said microservices need them. The right size for a first event-driven system is two or three producers and a handful of consumers at the integration edges. A team that starts with fourteen services and no correlation ids will be back on synchronous calls within a year.</p>
+
+        <p>And be honest about the organisational precondition: this architecture assumes teams that can deploy independently and own their consumers. If one team owns everything, the decoupling buys you very little and the debugging cost is real.</p>
+
+        <h2>19. Questions I Get Asked</h2>
+
+        <p><strong>"Kafka or SQS?"</strong> SQS unless you can state a replay requirement in one sentence. Kafka's retention and replay are genuinely different capabilities, and its operational cost — even on MSK — is genuinely higher. Most stores discover after eighteen months that they have used Kafka as an expensive queue.</p>
+
+        <p><strong>"Do I need event sourcing?"</strong> Almost certainly not. Event-driven architecture means services communicate by events. Event sourcing means the event log <em>is</em> your database and current state is a projection. The second is a much larger commitment and it is only worth it where the history is the product — financial ledgers, audit-heavy domains. Using events for integration while keeping ordinary tables as your source of truth is a perfectly coherent position and it is where I land on most builds.</p>
+
+        <p><strong>"How do I handle a consumer that needs data from three services?"</strong> Build it a read model. It subscribes to events from all three and maintains its own denormalised view, which it owns and can query locally with no runtime dependency. This feels wasteful and is the correct answer; the alternative is a synchronous fan-out that couples availability across four services.</p>
+
+        <p><strong>"What if an event is published in error?"</strong> Publish a compensating event. <code>OrderCancelled</code>, <code>RefundReversed</code>. You cannot unpublish, and a system that tries to — by deleting from a topic — is a system whose consumers have already acted. Compensation is how the physical world works too, which is a reasonable sanity check on the design.</p>
+
+        <p><strong>"Should Magento publish events directly?"</strong> Through an outbox in the same transaction, yes. Magento's own message queue framework can do this and is fine at modest volume; its consumers are cron-driven and the latency shows. For anything time-sensitive I write to an outbox table and relay externally, which keeps the transactional guarantee and gives you a broker with real retry semantics.</p>
+
+        <p><strong>"How much latency should I expect end to end?"</strong> With an outbox polled at one second and a broker in the same region, 1–3 seconds from database commit to consumer action is typical and achievable. If you need under 500ms, use CDC on the outbox rather than polling. If you need under 50ms, you need a synchronous call and you should say so.</p>
+
+        <p><strong>"Can I put the outbox in a different database from the business data?"</strong> No. The entire point is the shared transaction. An outbox in a separate database is the dual-write problem with an extra table.</p>
+
+        <h2>20. What I'd Do First</h2>
+
+        <p>In order, and the order is not arbitrary — each step makes the next one safe.</p>
+
+        <p>One. Find your dual writes. Grep for a database write followed by a publish, an HTTP call, or an email send outside a transaction. Every one is a silent data loss at a rate proportional to your volume. On most codebases this takes an afternoon and finds between three and ten.</p>
+
+        <p>Two. Add correlation and causation ids to everything before you add a second consumer. Retrofitting them means touching every producer and every message shape, and you will retrofit them, because the first cross-service incident makes it obvious.</p>
+
+        <p>Three. Build the outbox for your highest-value flow only. Order placement, usually. Run it publishing to nothing for a fortnight and watch the lag metric. Get the transaction boundary right before anything depends on it.</p>
+
+        <p>Four. Make your first consumer the one whose duplicate output is least expensive. Marketing email, analytics, a search index update. Your idempotency will be wrong the first time; find out where it costs nothing.</p>
+
+        <p>Five. Write the replay test — process the same event five times, assert identical end state — and put it in CI for every consumer before you write the second one.</p>
+
+        <p>Six. Set up dead letter queues with alarms routed to a named person on a rota. Not a channel. A person. This is the step I got wrong and it cost a client £9,000 of delayed orders and a weekend of goodwill.</p>
+
+        <p>Seven. Register your schemas and set compatibility to Full on anything crossing a team boundary. Do it while you have two events and it takes an hour; do it at forty and it is a project.</p>
+
+        <p>Eight. Only then move a flow that matters — the ERP sync, the fulfilment push. By this point you have the plumbing to see what is happening, and the change becomes routine rather than frightening.</p>
+
+        <p>The thing I would argue hardest against skipping is the second step. Correlation ids feel like housekeeping and they are the single reason a distributed failure takes ten minutes to diagnose instead of two days. Everything else on this list can be retrofitted at moderate cost. That one gets more expensive every week you defer it.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested & Related Reading</h3>
+          <h3>Suggested &amp; Related Reading</h3>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability & Cost Optimization</a></strong>
+              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
               <p>AWS SQS message processing.</p>
             </li>
             <li>
@@ -238,7 +802,6 @@ async function publishOrderPlaced(order) {
             </li>
           </ul>
         </div>
-
       </article>
     </section>
   </main>
@@ -272,6 +835,6 @@ async function publishOrderPlaced(order) {
     </div>
   </footer>
 
-  <script src="/script.min.js?v=20260803-atlas" defer></script>
+  <script src="/script.min.js?v=20260807-atlas2" defer></script>
 </body>
 </html>
