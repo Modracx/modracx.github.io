@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#07071a">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <title>Multi-CDN Architectures: High Availability &amp; Edge Failover for Enterprise Commerce | MODRACX</title>
+  <meta name="description" content="Designing resilient storefront networks using multiple CDNs: DNS steering, active-active edge routing, cache synchronization challenges, and edge failover automation for enterprise ecommerce.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'">
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2">
+</head>
+<body>
+  <header class="sky-header">
+    <nav><a href="/">Home</a> | <a href="/blog/">Blog</a></nav>
+  </header>
+
+  <main class="threshold-container">
+    <h1>Multi-CDN Architectures: High Availability &amp; Edge Failover for Enterprise Commerce</h1>
+    <div class="meta">By Kenneth D'Silva | Architecture &amp; Cloud | August 8, 2026</div>
+    <div class="data-spine"></div>
+
+    <section class="content-body">
+
+      <p>It was 11:14pm on a Friday in November — peak season — when Cloudflare's incident dashboard lit up with a partial outage affecting their European PoPs. The client was a manufacturer of live-steam model railway locomotives based outside of Stuttgart. Their Magento store had just launched a limited-edition 7&#188;-inch gauge coal-fired boiler kit for £4,200, and the product page had been linked from three railway enthusiast forums generating a spike of about 8,000 concurrent visitors. The single-CDN configuration I had recommended six months prior was now serving 504s to around 40% of their inbound traffic. We recovered within 23 minutes by manually switching DNS at the registrar to a backup Fastly configuration. But 23 minutes on a Friday night in November cost them approximately £31,000 in abandoned carts. That incident made me standardise multi-CDN architecture as a non-negotiable for any commerce client doing more than £2M per year online.</p>
+
+      <p>A multi-CDN setup is not simply paying two CDN bills. It requires an architectural commitment to routing intelligence, cache synchronisation discipline, and automated failover that most engineering teams significantly underestimate. Done wrong, it creates a more complex system that fails in different, harder-to-diagnose ways. Done correctly, it provides the kind of 99.99% availability that enterprise commerce demands.</p>
+
+      <div class="orrery-container">
+        <canvas id="cdn-orrery" class="orrery-canvas"></canvas>
+      </div>
+
+      <h2>1. Why Single-CDN Is a Liability for Enterprise Commerce</h2>
+      <p>Every major CDN provider has had outages. Cloudflare had global incidents in 2019, 2020, and 2022. Fastly had a 57-minute global outage in June 2021 that took down major sections of the internet simultaneously. Akamai had a DNS misconfiguration that impacted traffic in July 2021. The providers are not incompetent — CDN infrastructure is extraordinarily complex, and the probability of any given provider experiencing a partial or full outage in a given year is non-trivial, probably around 15–25% for any meaningful disruption lasting more than 10 minutes.</p>
+      <p>For a commerce site, the calculation is straightforward. If your site generates £10,000 per hour in revenue and a single-CDN outage takes you offline for 30 minutes, the direct loss is £5,000. Add reputational damage, abandoned cart email conversion rates being lower than direct checkout, and the SEO implications of Googlebot encountering consistent 5xx errors during a crawl window, and the actual cost is substantially higher. The annualised cost of a multi-CDN implementation — typically £800–£4,000 per month in engineering and additional CDN costs — is trivially small compared to a single major outage event.</p>
+
+      <h2>2. The Three Multi-CDN Architectures</h2>
+      <p>There are three distinct architectural patterns for multi-CDN. Each has profoundly different operational characteristics, and choosing the wrong one creates problems that are worse than a single-CDN setup.</p>
+
+      <h3>2.1 Active-Passive (Primary and Standby)</h3>
+      <p>The simplest pattern. All traffic routes to CDN A under normal conditions. CDN B is configured identically but receives no traffic. A health check monitors CDN A's global availability. When the health check fails for a defined threshold (e.g., more than 5% error rate across 3 consecutive checks), DNS is updated to redirect traffic to CDN B. The critical flaw is DNS propagation time. Standard DNS TTLs of 300 seconds mean that during an outage, users whose DNS is cached will continue hitting CDN A for up to 5 minutes after the switch. In practice, some ISPs ignore TTLs and cache for longer, meaning propagation can take 15–20 minutes globally. That window is unacceptable for Black Friday traffic.</p>
+
+      <h3>2.2 Active-Active with DNS Load Balancing</h3>
+      <p>Traffic is split between two CDN providers simultaneously, typically 50/50 or weighted (e.g., 70/30). A DNS-based global load balancer (such as AWS Route 53 with health checks, Cloudflare Load Balancing, or NS1) distributes queries to two separate CDN CNAME targets. When one CDN degrades, the load balancer shifts traffic to the healthy provider within the health check interval — typically 10–30 seconds. This is the architecture I now use for all enterprise commerce clients by default.</p>
+
+      <h3>2.3 Active-Active with Anycast Steering</h3>
+      <p>The most sophisticated pattern. A BGP Anycast network layer routes requests to the geographically nearest and fastest CDN PoP from any provider. This requires ownership of IP address ranges and BGP peering relationships, which places it firmly in the territory of very large enterprises with dedicated network engineering teams. I will not pretend this is accessible to most of my clients, but it is worth understanding to know where the ceiling of performance sits.</p>
+
+      <h2>3. DNS-Based Steering: The Practical Implementation</h2>
+      <p>For the model railway client, we implemented active-active routing using AWS Route 53 with weighted routing and health checks. The configuration routes 60% of traffic to Cloudflare and 40% to Fastly under normal conditions. Both CDNs are configured with identical origins, cache rules, and TLS certificates. The asymmetric split exists because Cloudflare provides better performance in North America and the UK (the client's primary markets), while Fastly has superior European PoP coverage in Germany, France, and the Netherlands — where the live-steam railway community is particularly active.</p>
+
+      <pre><code>
+# AWS Route 53 — Weighted routing with health check failover
+# Terraform configuration
+
+resource "aws_route53_health_check" "cloudflare_health" {
+  fqdn              = "modracx.com"
+  port              = 443
+  type              = "HTTPS"
+  resource_path     = "/health"
+  failure_threshold = "3"
+  request_interval  = "10"
+  tags = { Name = "cloudflare-health-check" }
+}
+
+resource "aws_route53_health_check" "fastly_health" {
+  fqdn              = "modracx.com"
+  port              = 443
+  type              = "HTTPS"
+  resource_path     = "/health"
+  failure_threshold = "3"
+  request_interval  = "10"
+  tags = { Name = "fastly-health-check" }
+}
+
+resource "aws_route53_record" "cloudflare_weighted" {
+  zone_id        = var.route53_zone_id
+  name           = "modracx.com"
+  type           = "CNAME"
+  ttl            = 30
+  set_identifier = "cloudflare"
+  health_check_id = aws_route53_health_check.cloudflare_health.id
+
+  weighted_routing_policy { weight = 60 }
+  records = ["shop.modracx.com.cdn.cloudflare.net"]
+}
+
+resource "aws_route53_record" "fastly_weighted" {
+  zone_id        = var.route53_zone_id
+  name           = "modracx.com"
+  type           = "CNAME"
+  ttl            = 30
+  set_identifier = "fastly"
+  health_check_id = aws_route53_health_check.fastly_health.id
+
+  weighted_routing_policy { weight = 40 }
+  records = ["dualstack.modracx.com.global.prod.fastly.net"]
+}
+      </code></pre>
+
+      <p>The TTL of 30 seconds is critical. Standard DNS TTLs of 300 seconds mean that during a failover event, up to 5 minutes of traffic continues flowing to a degraded CDN. A 30-second TTL reduces this window to 30 seconds, at the cost of slightly higher DNS query volume. For a high-traffic commerce site, this is an entirely acceptable trade-off. AWS Route 53 charges approximately $0.60 per million DNS queries — a negligible cost at any sensible traffic level.</p>
+
+      <h2>4. The /health Endpoint: Your System's Heartbeat</h2>
+      <p>The health check endpoint is not optional. It is the single most operationally critical route on your application. If the health check returns a 200, Route 53 keeps routing traffic to that CDN. If it returns anything else, Route 53 marks the record unhealthy and stops routing to it. The health check endpoint must verify the actual health of the system, not just return a hardcoded 200.</p>
+
+      <pre><code>
+// Node.js Express — Health check endpoint for multi-CDN monitoring
+const express = require('express');
+const redis = require('redis');
+const mysql = require('mysql2/promise');
+
+const app = express();
+const redisClient = redis.createClient({ url: process.env.REDIS_URL });
+
+app.get('/health', async (req, res) => {
+  const checks = {};
+
+  try {
+    await redisClient.ping();
+    checks.redis = 'ok';
+  } catch (err) {
+    checks.redis = 'fail';
+    checks.redis_error = err.message;
+  }
+
+  try {
+    const conn = await mysql.createConnection(process.env.DATABASE_URL);
+    await conn.execute('SELECT 1');
+    await conn.end();
+    checks.database = 'ok';
+  } catch (err) {
+    checks.database = 'fail';
+    checks.database_error = err.message;
+  }
+
+  try {
+    const response = await fetch(`${process.env.API_BASE_URL}/ping`, {
+      signal: AbortSignal.timeout(2000)
+    });
+    checks.api = response.ok ? 'ok' : 'degraded';
+  } catch {
+    checks.api = 'fail';
+  }
+
+  const allHealthy = Object.values(checks).every(v => v === 'ok');
+  const statusCode = allHealthy ? 200 : 503;
+
+  return res.status(statusCode).json({
+    status: allHealthy ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    checks
+  });
+});
+
+module.exports = app;
+      </code></pre>
+
+      <p>Two details that matter in production. First, the database check uses a lightweight <code>SELECT 1</code> — it establishes a connection and confirms the database is reachable, but does not execute any application logic. A health check should not trigger a full Magento bootstrap. Second, the API check has a 2-second timeout via <code>AbortSignal.timeout()</code>. Without a timeout, a hung upstream API causes the health check itself to hang. Route 53 has a 10-second maximum wait time for health check responses — if your health check takes 8 seconds to timeout internally, you are burning most of that window before Route 53 even starts its own timeout counting.</p>
+
+      <h2>5. Cache Synchronisation: The Hidden Complexity</h2>
+      <p>Active-active multi-CDN introduces a problem that passive setups avoid entirely: cache synchronisation. When a user visits your site through Cloudflare and you update a product price, Cloudflare's cache is purged via a surrogate key. Fastly's cache of the same page is completely separate and receives no automatic notification of this purge event. For the 40% of users routed through Fastly, they continue seeing the old price.</p>
+      <p>There are three approaches to solving this, each with significant trade-offs.</p>
+
+      <h3>5.1 Dual-Purge API Calls</h3>
+      <p>When your origin or CMS triggers a cache purge, it sends purge requests to both CDN APIs simultaneously. This is the simplest approach and works reliably if your purge event system is synchronous and your CDN API availability is high. The risk: if the Fastly purge API returns a 5xx error (rare but possible), the price inconsistency persists until either a TTL expiry or a manual re-purge. You need alerting on failed purge operations.</p>
+
+      <pre><code>
+// Dual-CDN cache purge utility
+async function purgeProductCache(productId, surrogateTags) {
+  const results = await Promise.allSettled([
+    // Purge Cloudflare by cache tag
+    fetch(`https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CF_API_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ tags: surrogateTags })
+    }),
+
+    // Purge Fastly by surrogate key
+    fetch(`https://api.fastly.com/service/${FASTLY_SERVICE_ID}/purge`, {
+      method: 'POST',
+      headers: {
+        'Fastly-Key': FASTLY_API_KEY,
+        'surrogate-key': surrogateTags.join(' ')
+      }
+    })
+  ]);
+
+  results.forEach((result, index) => {
+    const provider = index === 0 ? 'Cloudflare' : 'Fastly';
+    if (result.status === 'rejected') {
+      console.error(`Cache purge FAILED for ${provider}: product ${productId}`, result.reason);
+      // Trigger PagerDuty alert here
+    }
+  });
+
+  return results;
+}
+      </code></pre>
+
+      <h3>5.2 Short Global TTL</h3>
+      <p>Set a shorter global cache TTL (e.g., 60 seconds instead of 3600 seconds) and accept that some pages will be served slightly stale across CDN providers. The advantage is simplicity — no purge synchronisation required. The disadvantage is a significantly higher origin load, as every page expires and regenerates every 60 seconds across hundreds of thousands of cached objects. For a Magento origin running on a 4-core EC2 instance, this can cause serious CPU pressure during traffic spikes.</p>
+
+      <h3>5.3 Event-Driven Purge via Message Queue</h3>
+      <p>The most operationally sound approach for high-volume catalogs. When a price or inventory change occurs in the backend, an event is published to an SNS topic. Two separate Lambda functions subscribe to this topic — one for Cloudflare purges, one for Fastly purges. Each function handles its own CDN API calls with independent retry logic and dead-letter queue (DLQ) handling. This completely decouples the purge logic from the application and provides guaranteed delivery semantics.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th>Consistency</th>
+            <th>Origin Load</th>
+            <th>Operational Complexity</th>
+            <th>Failure Mode</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Dual-Purge API</td>
+            <td>Near-instant</td>
+            <td>Unchanged</td>
+            <td>Low</td>
+            <td>Silent stale cache on API error</td>
+          </tr>
+          <tr>
+            <td>Short TTL (60s)</td>
+            <td>Max 60s stale</td>
+            <td>High (constant regen)</td>
+            <td>Zero</td>
+            <td>Origin overload during spikes</td>
+          </tr>
+          <tr>
+            <td>Event Queue (SNS/Lambda)</td>
+            <td>Near-instant</td>
+            <td>Unchanged</td>
+            <td>High (infrastructure)</td>
+            <td>Queue backlog under burst load</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>6. TLS Certificate Management Across CDN Providers</h2>
+      <p>Running two CDN providers means managing TLS certificates on both. If you use Let's Encrypt certificates, you need to ensure renewal processes work for both providers without invalidating the other. The operationally cleanest approach is to use each CDN provider's own managed TLS service — Cloudflare issues its own certificates via its CA, Fastly uses Let's Encrypt or DigiCert depending on your plan. Both are renewed automatically with no intervention required.</p>
+      <p>The issue arises with custom certificates, particularly for e-commerce clients in regulated industries who must use Extended Validation (EV) certificates. EV certificates must be manually uploaded to each CDN provider. Create a calendar alert 60 days before expiry and execute the renewal across both providers in the same maintenance window. A certificate that is valid on Cloudflare but expired on Fastly will cause immediate hard failures for 40% of your traffic — users routed to Fastly see a certificate error rather than a CDN failure, which is a far more damaging trust signal.</p>
+
+      <h2>7. Log Aggregation Across CDN Providers</h2>
+      <p>Debugging a multi-CDN architecture without unified log aggregation is an exercise in frustration. When a user reports a checkout error, you cannot determine from application logs alone whether the request was routed through Cloudflare or Fastly, what cache status the CDN attached to the response, or whether the origin received the request at all. You need a centralised log pipeline.</p>
+      <pre><code>
+# Fastly Real-Time Log Streaming — Terraform configuration
+resource "fastly_service_logging_s3" "cdn_logs" {
+  service_id = fastly_service_vcl.main.id
+  name       = "s3-log-stream"
+
+  bucket_name = aws_s3_bucket.cdn_logs.bucket
+  s3_iam_role = aws_iam_role.fastly_logging.arn
+  path        = "/fastly/"
+  period      = 60
+  gzip_level  = 9
+
+  format = jsonencode({
+    timestamp    = "%{begin:%Y-%m-%dT%H:%M:%SZ}t"
+    request_id   = "%{req.http.X-Request-Id}V"
+    client_ip    = "%h"
+    method       = "%m"
+    url          = "%U%q"
+    status       = "%s"
+    cache_status = "%{fastly_info.state}V"
+    ttfb_ms      = "%D"
+    bytes_sent   = "%b"
+    cdn_provider = "fastly"
+    pop          = "%{server.datacenter}V"
+  })
+}
+      </code></pre>
+      <p>Cloudflare Logpush has an equivalent configuration that streams to the same S3 bucket with a <code>/cloudflare/</code> prefix. An Athena table partitioned by date and CDN provider provides a queryable unified access log. When diagnosing the November incident with the model railway client, we were able to trace individual request IDs across the CDN boundary within 10 minutes of a support ticket being raised.</p>
+
+      <h2>8. Automated Failover Testing: Game Day Exercises</h2>
+      <p>The worst time to discover that your multi-CDN failover does not work is during an actual outage. I run quarterly "game day" failover tests for all multi-CDN clients. The test procedure: notify the client's team that we are running a planned failover test between 2am and 3am on a Tuesday. Update the Route 53 weight for CDN A to 0 and CDN B to 100. Monitor for 15 minutes. Verify that synthetic monitoring probes from EU, US, and APAC all show 200 responses. Restore the original weights. Review the logs to confirm that the transition was clean and that no requests were dropped.</p>
+      <pre><code>
+#!/bin/bash
+# Multi-CDN failover test script
+# Usage: ./failover-test.sh [cloudflare|fastly] [duration_minutes]
+
+CDN_TARGET=$1
+DURATION=${2:-15}
+ZONE_ID="YOUR_ROUTE53_ZONE_ID"
+
+echo "Starting failover test: routing 100% to $CDN_TARGET for ${DURATION}m"
+echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+if [ "$CDN_TARGET" = "cloudflare" ]; then
+  aws route53 change-resource-record-sets \
+    --hosted-zone-id "$ZONE_ID" \
+    --change-batch '{
+      "Changes": [
+        {"Action":"UPSERT","ResourceRecordSet":{
+          "Name":"modracx.com","Type":"CNAME",
+          "SetIdentifier":"cloudflare","Weight":100,"TTL":30,
+          "ResourceRecords":[{"Value":"shop.modracx.com.cdn.cloudflare.net"}]}},
+        {"Action":"UPSERT","ResourceRecordSet":{
+          "Name":"modracx.com","Type":"CNAME",
+          "SetIdentifier":"fastly","Weight":0,"TTL":30,
+          "ResourceRecords":[{"Value":"dualstack.modracx.com.global.prod.fastly.net"}]}}
+      ]
+    }'
+fi
+
+echo "Monitoring for ${DURATION} minutes..."
+sleep $((DURATION * 60))
+
+echo "Restoring original 60/40 split..."
+# Restore configuration (mirrored change-batch with original weights)
+echo "Failover test complete. Review logs in S3."
+      </code></pre>
+
+      <h2>9. Origin Shield Considerations in Multi-CDN Setups</h2>
+      <p>Both Cloudflare (via Argo Tiered Cache) and Fastly (via Shielding) offer origin shield capabilities — a mid-tier cache layer that absorbs cache misses before they hit the origin server. In a single-CDN setup, this is straightforward to configure. In a multi-CDN setup, the origin shield from CDN A and the origin shield from CDN B are completely separate infrastructure. A cache miss from CDN A's shield hits the origin. A cache miss from CDN B's shield independently hits the origin. This doubles the origin load relative to a single-CDN setup with a shield, particularly during the warm-up period after a deployment or cache purge.</p>
+      <p>The mitigation is to co-locate your origin in the same cloud region as the CDN shield nodes. For the model railway client hosted in eu-west-2 (London), we configured Fastly's shield to the LHR PoP (London Heathrow). This reduced the shield-to-origin round trip from ~85ms (Frankfurt shield to London origin) to ~4ms (London shield to London origin), cutting origin load significantly during cache warm-up events.</p>
+
+      <h2>10. Infrastructure as Code: Preventing Configuration Drift</h2>
+      <p>Configuration drift is the silent killer of multi-CDN architectures. Six months after the initial setup, CDN A has a new security header that CDN B is missing. CDN A's cache rules were updated for a new product category but CDN B was not updated. A new IP allowlist was added to CDN A's WAF. When an incident occurs, the debugging team discovers that the two CDNs are serving subtly different responses, making root-cause analysis exponentially harder.</p>
+      <p>Every CDN configuration must be managed via Terraform. Both the Cloudflare and Fastly Terraform providers have comprehensive resource coverage. Store CDN configuration in a shared Git repository with separate workspaces for each provider but shared variables for common values — allowed IP ranges, security header values, cache key rules. A CI/CD pipeline applies changes to both providers simultaneously, enforced by a GitHub Actions workflow that blocks PRs if only one provider's configuration is being modified without the other.</p>
+      <pre><code>
+# .github/workflows/cdn-deploy.yml — enforces dual-CDN deployment
+name: CDN Configuration Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/cdn/**'
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+
+      - name: Validate Cloudflare config
+        working-directory: infra/cdn/cloudflare
+        run: terraform validate
+
+      - name: Validate Fastly config
+        working-directory: infra/cdn/fastly
+        run: terraform validate
+
+      - name: Deploy Cloudflare
+        working-directory: infra/cdn/cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: terraform apply -auto-approve
+
+      - name: Deploy Fastly
+        working-directory: infra/cdn/fastly
+        env:
+          FASTLY_API_KEY: ${{ secrets.FASTLY_API_KEY }}
+        run: terraform apply -auto-approve
+
+      - name: Run synthetic health checks
+        run: |
+          # Verify both providers return 200 after deployment
+          for provider in cloudflare fastly; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "X-CDN-Provider: $provider" \
+              https://modracx.com/health)
+            if [ "$STATUS" != "200" ]; then
+              echo "HEALTH CHECK FAILED for $provider: HTTP $STATUS"
+              exit 1
+            fi
+          done
+      </code></pre>
+
+      <h2>11. When Multi-CDN Is the Wrong Answer</h2>
+      <p>I have recommended against multi-CDN for several clients, and it is worth being explicit about when it is unnecessary overhead. If your store does under £500k per year in online revenue, the engineering cost of maintaining a multi-CDN setup — configuration drift, certificate management, log aggregation infrastructure, game day testing — will likely exceed the cost of any single-CDN outage you are statistically likely to experience in a given year. A well-configured single CDN with strong origin health monitoring and a manual failover runbook is entirely adequate for this revenue tier.</p>
+      <p>Multi-CDN becomes necessary when: (a) your revenue per hour is high enough that even a 15-minute outage causes material financial damage, (b) you serve markets with strongly geographically diverse user bases where no single CDN provides uniformly excellent performance, or (c) you are subject to SLAs that mandate 99.99% uptime — which is extremely difficult to guarantee with a single CDN provider regardless of their internal redundancy claims.</p>
+
+      <h2>12. CDN Provider Selection Matrix for Multi-CDN Setups</h2>
+      <p>Not all CDN pairs are equally suited for a multi-CDN configuration. The ideal pair has complementary geographic PoP coverage, compatible API designs for dual-purge operations, and similar edge compute capabilities so that business logic can be maintained parity across both providers. I typically evaluate pairs across seven dimensions.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Criterion</th>
+            <th>Cloudflare + Fastly</th>
+            <th>Cloudflare + Akamai</th>
+            <th>Fastly + AWS CloudFront</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>PoP complementarity</td>
+            <td>Excellent — different network architectures</td>
+            <td>Good — Akamai stronger in APAC</td>
+            <td>Fair — CloudFront PoPs overlap heavily with Fastly</td>
+          </tr>
+          <tr>
+            <td>API purge design</td>
+            <td>Both support surrogate-key purge; compatible</td>
+            <td>Akamai uses different tag syntax; requires translation layer</td>
+            <td>CloudFront uses path/distribution invalidation; no surrogate keys</td>
+          </tr>
+          <tr>
+            <td>Edge compute parity</td>
+            <td>High — Workers vs Compute are similar models</td>
+            <td>Low — Akamai EdgeWorkers is significantly different</td>
+            <td>Medium — Lambda@Edge vs Compute are different runtime models</td>
+          </tr>
+          <tr>
+            <td>Terraform provider quality</td>
+            <td>Both excellent; well-maintained providers</td>
+            <td>Akamai Terraform support is partial; some features require Akamai APIs directly</td>
+            <td>CloudFront Terraform support is complete; Fastly is good</td>
+          </tr>
+          <tr>
+            <td>Monthly cost at 10TB traffic</td>
+            <td>~£180–£280</td>
+            <td>~£400–£900 (Akamai expensive at scale)</td>
+            <td>~£150–£250 (CloudFront cost-effective)</td>
+          </tr>
+          <tr>
+            <td>Operational complexity</td>
+            <td>Medium — both have good documentation</td>
+            <td>High — Akamai requires specialist knowledge</td>
+            <td>Medium — CloudFront configuration is verbose but documented</td>
+          </tr>
+          <tr>
+            <td>Recommended for</td>
+            <td>Most commerce clients; SME to enterprise</td>
+            <td>Regulated industries, large APAC markets</td>
+            <td>AWS-native stacks with existing CloudFront investment</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>For the overwhelming majority of my commerce clients, Cloudflare and Fastly is the correct pairing. Cloudflare's global Anycast network provides exceptional performance for North America and Europe. Fastly's programmable edge via VCL and Compute provides superior flexibility for complex routing logic and is favoured by engineering teams comfortable with Rust or Go. The two providers use different underlying network architectures, meaning a failure in one is extremely unlikely to be correlated with a failure in the other — which is the whole point.</p>
+
+      <p>Akamai is a legitimate choice for organisations with heavy regulatory requirements (financial services, healthcare) that mandate specific geographic data residency and specific security certifications that Cloudflare and Fastly do not currently hold. Akamai's operational complexity and cost premium are not justified for standard ecommerce workloads. I have onboarded three clients from Akamai to Cloudflare in the past two years, and in each case the performance was equal or better at roughly 60% of the cost.</p>
+
+      <p>AWS CloudFront deserves special consideration for teams already running their origin on AWS with CloudFront already in place. Adding Fastly as a second provider alongside CloudFront makes sense when the existing CloudFront deployment cannot easily be replaced, or when the team is deeply invested in the CloudFront configuration. CloudFront's lack of surrogate-key purging is the biggest operational friction point — you must implement path-based invalidation instead, which is significantly less precise and can inadvertently invalidate large portions of the cache during targeted purge operations.</p>
+      <h2>13. SLA Measurement, Error Budgets, and Incident Response</h2>
+      <p>A multi-CDN architecture is only as valuable as the monitoring and incident response process built around it. Measuring true availability requires synthetic monitoring from external probes — not just internal health checks. I deploy uptime monitoring via Better Uptime or Pingdom with probes in at least five geographic locations: London, Frankfurt, New York, Singapore, and Sydney. Each probe runs every 30 seconds and records the full HTTP response including status code, TTFB, and CDN identification header. This gives a true picture of global availability that internal health checks cannot provide.</p>
+      <p>The error budget concept from Google's Site Reliability Engineering practices is directly applicable to multi-CDN commerce. If you have a 99.99% availability SLA (roughly 52 minutes of downtime per year), you have a monthly error budget of approximately 4.3 minutes. Every minute of CDN-related downtime — including partial degradation where some users are affected — consumes this budget. Tracking error budget consumption weekly forces the engineering team to take reliability work seriously rather than treating it as optional maintenance. When the monthly error budget is 50% consumed by week 2, that is a signal to pause feature releases and focus on reliability improvements.</p>
+
+      <pre><code>
+# Incident response runbook for multi-CDN failover
+# (Store in PagerDuty runbook or Confluence, link from PagerDuty alert)
+
+## Trigger: CDN error rate > 1% on Cloudflare (as detected by synthetic monitoring)
+
+### Step 1: Verify the incident scope (2 minutes)
+- Check Cloudflare status page: https://www.cloudflarestatus.com
+- Check Cloudflare dashboard: Analytics > Traffic for error rate spike
+- Run manual check from 3 geographic locations:
+  curl -I -H "CF-Worker: bypass" https://modracx.com/health
+
+### Step 2: Confirm Fastly is healthy (1 minute)
+- Check Fastly status: https://www.fastlystatus.com
+- Run manual check via Fastly:
+  curl -I -H "Fastly-Debug: 1" https://modracx.com/health
+
+### Step 3: Execute weighted failover (3 minutes)
+# If Cloudflare is degraded and Fastly is healthy:
+./scripts/failover-cdn.sh fastly 60  # Route 100% to Fastly for 60 minutes
+
+# Notify stakeholders via Slack #incidents channel
+echo "CDN failover executed: routing 100% to Fastly. Cloudflare degraded."
+
+### Step 4: Monitor for 15 minutes
+- Watch synthetic monitoring dashboard for error rate
+- Check Fastly analytics for traffic spike handling
+- Confirm TTFB is within acceptable range (&lt; 200ms p95)
+
+### Step 5: Restore original routing when Cloudflare recovers
+./scripts/restore-cdn-weights.sh  # Restore 60% Cloudflare / 40% Fastly
+
+### Step 6: Write post-incident report within 24 hours
+- Timeline of events
+- Root cause (if determinable from CDN status page)
+- Error budget impact
+- Any changes to monitoring or runbooks
+      </code></pre>
+
+      <p>The runbook is only useful if it is practiced. Game day exercises (Section 8) are the mechanism for validating that every step in the runbook works as documented. A runbook that has never been executed under real conditions is not a runbook — it is a list of assumptions. I require all multi-CDN clients to complete at least two full runbook walkthroughs per year, with a real-time debrief immediately after each exercise to capture any steps that were unclear, slower than expected, or simply wrong.</p>
+      <p>One additional monitoring signal that is consistently undervalued: cache hit rate by CDN provider. If Cloudflare's cache hit rate drops from 85% to 40% without a corresponding traffic spike, it indicates that cache invalidation purges are being triggered too aggressively — possibly a misconfigured webhook sending spurious purge signals. A cache hit rate drop at the CDN level means every request is hitting the origin, causing TTFB to spike and potentially overwhelming the origin server. A CloudWatch alarm on origin request rate crossing 3x the normal baseline is a reliable proxy for this condition, triggering before the TTFB spike becomes visible in synthetic monitoring.</p>
+
+      <div class="faq">
+        <h2>Frequently Asked Questions</h2>
+
+        <div class="faq-item">
+          <h3 class="faq-q">What DNS TTL should I use for multi-CDN routing?</h3>
+          <p>30 seconds is the practical minimum. Route 53 supports 1-second TTLs, but very short TTLs create excessive DNS query load with minimal additional failover benefit. A 30-second TTL means that in a worst-case failover scenario, users whose DNS is cached at the moment of the outage experience at most 30 seconds of requests to a degraded CDN before their resolver picks up the updated record. Some ISPs cache longer than the TTL, so real-world failover is rarely instantaneous, but 30-second TTLs represent a reasonable engineering compromise.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">How do I keep CDN configurations in sync across providers?</h3>
+          <p>Infrastructure-as-code is mandatory. Use Terraform with the Cloudflare and Fastly providers. Store CDN configuration in a shared Git repository, with separate workspaces for each provider but shared variables for things like allowed IP ranges, security headers, and cache rules. A CI/CD pipeline applies changes to both providers simultaneously. Configuration drift — where CDN A has a security header that CDN B is missing — is one of the most common sources of hard-to-diagnose bugs in multi-CDN setups.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">How does Magento's full-page cache interact with multi-CDN?</h3>
+          <p>Magento's built-in Varnish FPC is an origin-side cache — it sits between the application servers and the external CDN layer. Multi-CDN adds another caching tier in front of Varnish. Cache invalidation flows outward: Magento flushes Varnish, then Varnish (or a separate webhook handler) fires purge requests to both CDN APIs. If you are using Magento's native Varnish integration, you will need a custom plugin or middleware to replicate the Varnish BAN/purge notifications to both CDN APIs simultaneously.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">Can I use Cloudflare Workers and Fastly Compute simultaneously?</h3>
+          <p>Yes, but manage them as separate codebases. Cloudflare Workers use V8 isolates with a JavaScript/Wasm runtime. Fastly Compute uses a Wasm runtime with support for Rust, Go, and JavaScript. The business logic will be identical, but the API surface areas differ. Maintain a shared business logic library that both runtimes consume, but accept that the CDN-specific scaffolding will be provider-specific code. Attempting to share the entire Worker codebase between providers leads to brittle abstractions.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">How should I handle user session consistency across CDN providers?</h3>
+          <p>User sessions should never depend on CDN affinity. All session data must be stored in a shared, CDN-agnostic backend — either a Redis cluster, a distributed database, or a signed JWT stored client-side. If a user's first request is served by Cloudflare and their second request is served by Fastly (because the DNS resolved to a different CNAME after a TTL expiry), the session must work identically on both. Storing any session state in CDN-edge KV storage will cause session loss during the transition between providers.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">What metrics should I monitor to detect CDN degradation before health checks trigger?</h3>
+          <p>Synthetic monitoring from multiple geographic locations, checking for: HTTP response time (p50, p95, p99), error rate by CDN provider, cache hit rate by provider, and TTFB from the end-user perspective via Real User Monitoring. A degradation in p99 TTFB on Fastly requests might indicate an impending outage before the health check endpoint itself starts failing. Set paging alerts on error rate above 0.5% for any single CDN provider, not just the aggregate error rate.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">Can multi-CDN also improve SEO and Core Web Vitals?</h3>
+          <p>Yes, meaningfully. Active-active multi-CDN with geographic routing can improve TTFB for underserved regions by routing requests to the CDN provider with the best PoP coverage in that geography. For example, routing APAC traffic to Fastly (which has strong Singapore and Tokyo PoPs) while routing European traffic to Cloudflare (which has excellent UK and German PoPs) can reduce TTFB for users in those regions by 40–80ms. Since TTFB is a direct component of LCP measurement, this improvement feeds into Core Web Vitals scores and transitively into organic search rankings.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">How do I calculate the ROI of a multi-CDN investment?</h3>
+          <p>Calculate your hourly revenue (annual_revenue / 8760). Estimate the probability of a CDN outage affecting you in the next year — roughly 15–25% for a disruption longer than 10 minutes at any major provider. Estimate the expected outage duration in hours (historically, major CDN incidents run 30–90 minutes). Multiply hourly revenue x outage duration x probability. Compare this expected annual loss against the annual cost of multi-CDN implementation. If the expected loss exceeds the implementation cost by a meaningful margin, multi-CDN is financially justified.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">What is the difference between multi-CDN and CDN failover within a single provider?</h3>
+          <p>Most CDN providers operate multiple PoPs internally and automatically failover between them if one PoP degrades. This protects against PoP-level outages (a single data centre going offline) but does not protect against provider-level outages (the CDN's control plane, routing layer, or API surface failing globally). Multi-CDN protects against provider-level failures — the exact type of incident that occurred with Fastly in June 2021 and Cloudflare in July 2022, where the issue was global and no internal PoP failover could address it.</p>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <footer class="horizon-footer">
+    <p>&copy; 2026 MODRACX. All rights reserved.</p>
+  </footer>
+</body>
+</html>
