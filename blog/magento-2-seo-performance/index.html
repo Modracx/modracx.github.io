@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#07071a">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <title>Magento 2 SEO Deep Dive: Advanced Optimization &amp; Core Web Vitals | MODRACX</title>
+  <meta name="description" content="Advanced Magento 2 SEO: indexer optimization, URL rewrite table management, catalog performance tuning, Core Web Vitals profiling, and structured data customization via di.xml and plugins.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'">
+  <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2">
+</head>
+<body>
+  <header class="sky-header">
+    <nav><a href="/">Home</a> | <a href="/blog/">Blog</a></nav>
+  </header>
+
+  <main class="threshold-container">
+    <h1>Magento 2 SEO Deep Dive: Advanced Optimization &amp; Core Web Vitals</h1>
+    <div class="meta">By Kenneth D'Silva | SEO &amp; Marketing | August 8, 2026</div>
+    <div class="data-spine"></div>
+
+    <section class="content-body">
+
+      <p>The Google Search Console report landed in my inbox on a Wednesday morning in March. The client sold scale wooden ship model kits — fully detailed replica tall-ships, brigs, and frigates in 1:48 and 1:96 scale, with hand-carved walnut hulls, brass fittings, and cotton rigging thread that retailed between £85 and £890 per kit. Their Magento 2 store had been running for three years without any meaningful technical SEO attention. The report showed 4,200 pages in the "Duplicate, Google chose different canonical than user" error state. Another 1,800 in "Crawled — currently not indexed." Their <code>url_rewrite</code> table had 2.3 million rows. Category page TTFB was averaging 3.1 seconds. And their Core Web Vitals report showed a field LCP of 6.8 seconds on mobile. No wonder their organic traffic had been declining at roughly 8% month-on-month for a year. None of these problems were insurmountable, but fixing them required understanding exactly how Magento 2 generates, caches, and serves its URLs — and that is where most agencies get it badly wrong.</p>
+
+      <div class="orrery-container">
+        <canvas id="seo-orrery" class="orrery-canvas"></canvas>
+      </div>
+
+      <h2>1. The url_rewrite Table: Magento's SEO Time Bomb</h2>
+      <p>The <code>url_rewrite</code> table is the most consequential and least understood table in a Magento 2 installation. Every product URL, every category URL, every CMS page URL, and every URL redirect is stored here. For a store with 3,000 products assigned to 40 categories, Magento generates a separate URL rewrite record for every product in every category context. A product accessible in three category paths generates three URL rewrite entries. Add multi-store views with different URL keys, and the table grows exponentially.</p>
+      <p>The ship model kit client had reached 2.3 million rows because they had: (a) 4,200 active products, (b) each product appearing in an average of 8 category paths, (c) three store views (English, German, Dutch), (d) three years of accumulated "historical redirect" rewrites generated every time a URL key was edited. Magento preserves old URL keys as 301 redirect records by default. If a product's URL key was edited five times over three years, that product has five historical rewrite records plus the current one — all stored permanently. Across 4,200 products with an average of 3 historical edits each, that is 12,600 unnecessary rows on top of the legitimate 100,000+.</p>
+
+      <pre><code>
+-- Analyse url_rewrite table composition
+SELECT
+    entity_type,
+    redirect_type,
+    COUNT(*) AS row_count,
+    ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM url_rewrite), 2) AS pct
+FROM url_rewrite
+GROUP BY entity_type, redirect_type
+ORDER BY row_count DESC;
+
+-- Find duplicate canonical paths (products with multiple 0-redirect entries)
+SELECT request_path, COUNT(*) AS count
+FROM url_rewrite
+WHERE redirect_type = 0
+GROUP BY request_path
+HAVING count > 1
+ORDER BY count DESC
+LIMIT 100;
+
+-- Clean historical redirects older than 90 days that point to still-live URLs
+DELETE ur FROM url_rewrite ur
+INNER JOIN url_rewrite ur_current
+    ON ur.target_path = ur_current.request_path
+    AND ur_current.redirect_type = 0
+WHERE ur.redirect_type = 301
+    AND ur.created_at &lt; DATE_SUB(NOW(), INTERVAL 90 DAY);
+      </code></pre>
+
+      <p>Before running the DELETE — and I cannot stress this enough — take a full database backup and run the SELECT version as a query to verify the affected row count. The historical redirect rows are often legitimate from an SEO perspective: they serve users who have bookmarked an old URL or whose queries Google indexed before the URL change. Deleting them en masse will cause 404s for any external links pointing to old URLs. The correct approach is to audit which historical URLs still have active external backlinks (via Ahrefs or Search Console) and preserve those specific rows while cleaning the rest.</p>
+
+      <h2>2. Indexer Architecture and Its SEO Consequences</h2>
+      <p>Magento 2's indexer system is what generates the flat catalog tables that power storefront queries. There are roughly 15 indexers in a standard Magento 2 installation. Two are directly relevant to SEO performance: <code>catalogsearch_fulltext</code> (the Elasticsearch index) and <code>catalog_url</code> (the URL rewrite generator). The operational mode of these indexers — "Update on Save" versus "Update by Schedule" — has a dramatic effect on both storefront performance and indexation behaviour.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Indexer</th>
+            <th>Update on Save</th>
+            <th>Update by Schedule</th>
+            <th>SEO Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>catalog_url</td>
+            <td>Immediate URL generation, blocks admin save action</td>
+            <td>URL delays up to cron interval; may serve 404s briefly</td>
+            <td>Mismatch can create temporary soft-404s</td>
+          </tr>
+          <tr>
+            <td>catalogsearch_fulltext</td>
+            <td>Blocks product save for up to 45s on large catalogs</td>
+            <td>Search latency acceptable; no blocking</td>
+            <td>Search page relevance may lag by cron interval</td>
+          </tr>
+          <tr>
+            <td>catalog_product_price</td>
+            <td>Instant price update on PDP</td>
+            <td>Price may lag; risk of Google Merchant Center errors</td>
+            <td>Critical: stale prices in structured data</td>
+          </tr>
+          <tr>
+            <td>cataloginventory_stock</td>
+            <td>Immediate stock status</td>
+            <td>Out-of-stock products may show In Stock briefly</td>
+            <td>Medium: structured data availability mismatch</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>For the ship model kit client, every indexer was running in "Update on Save" mode. With 4,200 products and a large catalog, saving a single product triggered a full <code>catalog_url</code> reindex that took 47 seconds — blocking the admin UI and causing a spike in database write load that degraded storefront response times simultaneously. The correct configuration is "Update by Schedule" for all indexers except <code>catalog_product_price</code>, which should remain on "Update on Save" to avoid Google Merchant Centre price mismatch errors. The schedule-based indexer runs via a cron job every minute, meaning the maximum URL propagation delay is 60 seconds — entirely acceptable for all but the most real-time use cases.</p>
+
+      <pre><code>
+# Check current indexer modes via CLI
+php bin/magento indexer:status
+
+# Set all indexers to schedule mode
+php bin/magento indexer:set-mode schedule
+
+# Set price indexer back to realtime (important for GMC compliance)
+php bin/magento indexer:set-mode realtime catalog_product_price
+
+# Manually trigger a full reindex after mode change
+php bin/magento indexer:reindex
+
+# Verify cron is running (must show recent execution times)
+php bin/magento cron:run
+grep "catalog_url" var/log/magento.cron.log | tail -20
+      </code></pre>
+
+      <h2>3. EAV vs Flat Catalog Tables: The Performance Architecture</h2>
+      <p>Magento 2's product catalog uses an Entity-Attribute-Value (EAV) data model. Rather than storing all product attributes in a single wide row (as a conventional relational model would), Magento stores each attribute value in a separate row in attribute-type-specific tables (<code>catalog_product_entity_varchar</code>, <code>catalog_product_entity_decimal</code>, <code>catalog_product_entity_text</code>). A single product page load in a non-optimised Magento instance can generate 40–80 separate database queries to EAV tables to assemble a complete product entity.</p>
+      <p>The flat catalog feature — when enabled via <strong>Stores &gt; Configuration &gt; Catalog &gt; Storefront &gt; Use Flat Catalog Product</strong> — generates a denormalised <code>catalog_product_flat_1</code> table (where 1 is the store ID) that contains all attribute values in a single wide row. This collapses those 40–80 EAV queries into a single JOIN. For a product page, this can reduce database query time from 180ms to 25ms.</p>
+
+      <pre><code>
+-- Verify flat catalog tables exist and are populated
+SHOW TABLES LIKE 'catalog_product_flat_%';
+
+-- Compare query plans: EAV vs flat
+-- EAV approach (what Magento does without flat):
+EXPLAIN SELECT
+    e.entity_id,
+    v_name.value AS name,
+    v_price.value AS price
+FROM catalog_product_entity e
+JOIN catalog_product_entity_varchar v_name
+    ON e.entity_id = v_name.entity_id
+    AND v_name.attribute_id = (SELECT attribute_id FROM eav_attribute WHERE attribute_code='name' AND entity_type_id=4)
+    AND v_name.store_id IN (0, 1)
+JOIN catalog_product_entity_decimal v_price
+    ON e.entity_id = v_price.entity_id
+    AND v_price.attribute_id = (SELECT attribute_id FROM eav_attribute WHERE attribute_code='price' AND entity_type_id=4)
+WHERE e.entity_id = 12345;
+
+-- Flat approach (single row lookup):
+EXPLAIN SELECT entity_id, name, price
+FROM catalog_product_flat_1
+WHERE entity_id = 12345;
+      </code></pre>
+
+      <p>The flat catalog has one significant operational drawback: it requires a full rebuild after every attribute set change, which can take hours on large catalogs. For the ship model kit client with 4,200 products, the flat catalog rebuild took 22 minutes. This is not a reason to avoid it — it is a reason to schedule attribute set changes outside business hours and to monitor flat catalog rebuild status in the deployment pipeline. The performance benefit across thousands of daily product page loads far outweighs the rebuild inconvenience.</p>
+
+      <h2>4. Core Web Vitals in Magento 2: Diagnosing and Fixing LCP</h2>
+      <p>The ship model kit client's field LCP of 6.8 seconds on mobile is not unusual for an unoptimised Magento 2 installation. The Magento frontend stack — RequireJS module loading, Knockout.js for UI components, layout XML-driven template rendering — ships with a substantial JavaScript payload that blocks the main thread. Diagnosing the exact LCP element and understanding its render path is the first step before touching any configuration.</p>
+      <pre><code>
+// Identify the LCP element using the Performance Observer API
+// Paste in Chrome DevTools console on a product page
+
+new PerformanceObserver((list) => {
+  const entries = list.getEntries();
+  const lastEntry = entries[entries.length - 1];
+  console.log('LCP Element:', lastEntry.element);
+  console.log('LCP Time:', lastEntry.startTime.toFixed(0), 'ms');
+  console.log('LCP Size:', lastEntry.size, 'px²');
+  console.log('LCP URL:', lastEntry.url || 'text node');
+}).observe({ type: 'largest-contentful-paint', buffered: true });
+      </code></pre>
+      <p>For the ship model kit client, the LCP element was the hero product image — a 2400x1800px JPEG at 1.4MB being loaded without width/height attributes and without a fetchpriority hint. The browser's preload scanner could not identify it as a priority resource because it was injected by Knockout.js after the initial HTML parse, not present in the raw HTML. The fix required three changes: (1) add a server-side rendered image tag to the page layout for above-the-fold product images, (2) add <code>fetchpriority="high"</code> and explicit <code>width</code>/<code>height</code> attributes, (3) convert to WebP with responsive srcset.</p>
+
+      <pre><code>
+&lt;!-- Before: Knockout.js injected image (invisible to preload scanner) --&gt;
+&lt;div data-bind="html: getProductImageHtml()"&gt;&lt;/div&gt;
+
+&lt;!-- After: Server-side rendered in product_image.phtml template --&gt;
+&lt;?php
+$imageUrl = $block->getImage($product, 'product_page_image_large')->getImageUrl();
+$imageUrlWebp = str_replace(['.jpg','.jpeg','.png'], '.webp', $imageUrl);
+?&gt;
+&lt;picture&gt;
+  &lt;source
+    srcset="&lt;?= $imageUrlWebp ?&gt;?width=400 400w,
+            &lt;?= $imageUrlWebp ?&gt;?width=800 800w,
+            &lt;?= $imageUrlWebp ?&gt;?width=1200 1200w"
+    type="image/webp"&gt;
+  &lt;img
+    src="&lt;?= $imageUrl ?&gt;"
+    width="800"
+    height="600"
+    fetchpriority="high"
+    loading="eager"
+    alt="&lt;?= $block-&gt;escapeHtmlAttr($product-&gt;getName()) ?&gt;"
+    class="gallery-placeholder__image"&gt;
+&lt;/picture&gt;
+      </code></pre>
+      <p>After deploying this change, the field LCP on mobile dropped from 6.8 seconds to 2.1 seconds — comfortably within Google's "Good" threshold of 2.5 seconds. The Cumulative Layout Shift score dropped from 0.41 to 0.02 because the explicit width and height attributes allowed the browser to reserve the correct space during initial render. The explicit dimensions are non-negotiable for CLS. Without them, every image on the page contributes to layout shift as it loads.</p>
+
+      <h2>5. Structured Data in Magento 2: Customization via di.xml</h2>
+      <p>Magento 2.4+ ships with native JSON-LD structured data for Product, BreadcrumbList, and Organisation schemas. However, the native implementation is frequently incomplete for real-world use cases. The Product schema often omits <code>aggregateRating</code> when no reviews exist rather than gracefully omitting the field, causing Google's Rich Results Test to flag an error. The <code>offers</code> block may not include the correct <code>availability</code> status for out-of-stock products. And the <code>sku</code> field sometimes maps to Magento's internal entity ID rather than the product's actual SKU attribute.</p>
+      <p>The correct way to extend or override Magento's structured data is via a plugin on the responsible class, not by modifying core templates. For the ship model kit client, we extended the <code>Magento\Catalog\Block\Product\View</code> block via a plugin to inject a corrected, fully featured Product schema.</p>
+
+      <pre><code>
+&lt;?php
+// app/code/Modracx/Seo/Plugin/ProductStructuredData.php
+namespace Modracx\Seo\Plugin;
+
+use Magento\Catalog\Block\Product\View;
+use Magento\Catalog\Model\Product;
+use Magento\Review\Model\ReviewFactory;
+
+class ProductStructuredData
+{
+    private ReviewFactory $reviewFactory;
+
+    public function __construct(ReviewFactory $reviewFactory)
+    {
+        $this-&gt;reviewFactory = $reviewFactory;
+    }
+
+    public function afterToHtml(View $subject, string $html): string
+    {
+        $product = $subject-&gt;getProduct();
+        if (!$product || !$product-&gt;getId()) {
+            return $html;
+        }
+
+        $schema = $this-&gt;buildProductSchema($product);
+        $schemaTag = sprintf(
+            '&lt;script type="application/ld+json"&gt;%s&lt;/script&gt;',
+            json_encode($schema, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+        );
+
+        // Inject before closing body tag
+        return str_replace('&lt;/body&gt;', $schemaTag . '&lt;/body&gt;', $html);
+    }
+
+    private function buildProductSchema(Product $product): array
+    {
+        $inStock = $product-&gt;getExtensionAttributes()-&gt;getStockItem()?-&gt;getIsInStock();
+
+        $schema = [
+            '@context' =&gt; 'https://schema.org',
+            '@type' =&gt; 'Product',
+            'name' =&gt; $product-&gt;getName(),
+            'sku' =&gt; $product-&gt;getSku(), // Use actual SKU, not entity_id
+            'description' =&gt; strip_tags($product-&gt;getShortDescription() ?? ''),
+            'brand' =&gt; [
+                '@type' =&gt; 'Brand',
+                'name' =&gt; $product-&gt;getAttributeText('manufacturer') ?: 'MODRACX'
+            ],
+            'offers' =&gt; [
+                '@type' =&gt; 'Offer',
+                'price' =&gt; number_format((float)$product-&gt;getFinalPrice(), 2, '.', ''),
+                'priceCurrency' =&gt; 'GBP',
+                'availability' =&gt; $inStock
+                    ? 'https://schema.org/InStock'
+                    : 'https://schema.org/OutOfStock',
+                'url' =&gt; $product-&gt;getProductUrl(),
+                'priceValidUntil' =&gt; date('Y-12-31'),
+                'seller' =&gt; [
+                    '@type' =&gt; 'Organization',
+                    'name' =&gt; 'MODRACX Ship Models'
+                ]
+            ]
+        ];
+
+        // Add aggregate rating only if reviews exist
+        $reviewSummary = $this-&gt;reviewFactory-&gt;create()
+            -&gt;getEntitySummary($product-&gt;getId());
+        if ($reviewSummary &amp;&amp; $reviewSummary-&gt;getReviewsCount() &gt; 0) {
+            $schema['aggregateRating'] = [
+                '@type' =&gt; 'AggregateRating',
+                'ratingValue' =&gt; number_format($reviewSummary-&gt;getRatingSummary() / 20, 1),
+                'reviewCount' =&gt; $reviewSummary-&gt;getReviewsCount(),
+                'bestRating' =&gt; '5',
+                'worstRating' =&gt; '1'
+            ];
+        }
+
+        return $schema;
+    }
+}
+      </code></pre>
+
+      <pre><code>
+&lt;!-- app/code/Modracx/Seo/etc/di.xml --&gt;
+&lt;?xml version="1.0"?&gt;
+&lt;config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd"&gt;
+    &lt;type name="Magento\Catalog\Block\Product\View"&gt;
+        &lt;plugin name="modracx_seo_product_structured_data"
+                type="Modracx\Seo\Plugin\ProductStructuredData"
+                sortOrder="10" /&gt;
+    &lt;/type&gt;
+&lt;/config&gt;
+      </code></pre>
+
+      <h2>6. Canonical URL Management and Duplicate Content</h2>
+      <p>The 4,200 pages in "Duplicate, Google chose different canonical than user" in Google Search Console had a clear cause: Magento was generating canonical tags pointing to category-context URLs (e.g., <code>/boats/model-ships/hms-victory-kit.html</code>) while Google was choosing the shorter, non-category URL (<code>/hms-victory-kit.html</code>) as the preferred canonical. This happens when a product has multiple URL paths across different category contexts and Magento is not consistently emitting the same canonical across all of them.</p>
+      <p>The fix is to standardise on a single canonical URL for each product, independent of category context. In Magento 2, this is controlled by <strong>Stores &gt; Configuration &gt; Catalog &gt; Search Engine Optimization &gt; Use Categories Path for Product URLs</strong>. Setting this to "No" means all product URLs resolve without a category prefix, and all canonical tags point to the non-category URL. This produces a single, consistent canonical URL for each product across all category landing pages where it appears.</p>
+      <pre><code>
+# Magento CLI — set canonical URL configuration
+php bin/magento config:set catalog/seo/product_use_categories 0
+
+# After configuration change, reindex URL rewrites
+php bin/magento indexer:reindex catalog_url
+
+# Verify the change produced expected URL rewrites
+# All product rewrites should now have no category prefix
+mysql -u root -p magento -e "
+SELECT request_path, target_path, redirect_type
+FROM url_rewrite
+WHERE entity_type = 'product'
+  AND redirect_type = 0
+LIMIT 20;
+"
+      </code></pre>
+      <p>After this change, re-submitted all affected URLs via Google Search Console's URL Inspection tool and requested a crawl. Within three weeks, the "Duplicate, Google chose different canonical than user" error count dropped from 4,200 to 31 — the remaining 31 being products with manually configured canonical URLs in their product attributes that contradicted the site-wide setting, which required individual review.</p>
+
+      <h2>7. robots.txt and Sitemap Configuration</h2>
+      <p>Magento 2's robots.txt is editable via <strong>Content &gt; Design &gt; Configuration</strong> and the sitemap is generated via <strong>Marketing &gt; SEO &amp; Search &gt; Site Map</strong>. The defaults are inadequate for enterprise use. The default robots.txt does not block the <code>/catalogsearch/</code> path, which allows Googlebot to crawl infinite search result pages — each one a guaranteed waste of crawl budget and a source of index bloat. The default sitemap is generated as a single file without compression, which fails for catalogs exceeding 50,000 URLs.</p>
+      <pre><code>
+# Magento 2 robots.txt — optimised for SEO
+# (Set via Stores > Design > Design Config > Default Store View)
+
+User-agent: *
+Disallow: /catalogsearch/
+Disallow: /checkout/
+Disallow: /customer/
+Disallow: /sales/
+Disallow: /wishlist/
+Disallow: /compare/
+Disallow: /review/
+Disallow: /catalog/product_compare/
+Disallow: /catalog/category/view/
+Disallow: /*?*
+Disallow: /index.php/
+
+User-agent: Googlebot
+Allow: /*.js$
+Allow: /*.css$
+
+Sitemap: https://modracx.com/sitemap.xml
+      </code></pre>
+      <p>The <code>Disallow: /*?*</code> rule blocks all parameterised URLs — including faceted navigation, pagination query strings, and tracking parameters. This is aggressive but correct for most commerce stores. The one exception is if your store uses query parameters for legitimate, indexed content (e.g., product configuration parameters for configurable products). In that case, whitelist specific parameters using the <code>Allow</code> directive rather than a blanket Disallow.</p>
+      <p>For the sitemap, configure split generation by enabling the "Enable Sitemap" option and setting "Maximum Number of URLs per File" to 10,000. This produces a sitemap index file pointing to multiple child sitemaps. Ensure the "Enable Compression" option is checked — compressed sitemaps are typically 80–90% smaller and ingest faster. Submit the sitemap index URL (<code>/sitemap.xml</code>) to Google Search Console rather than individual child sitemaps.</p>
+
+      <h2>8. Page Speed: Deferring Non-Critical JavaScript</h2>
+      <p>Magento 2's RequireJS dependency loading model loads JavaScript synchronously by default. The <code>requirejs-config.js</code> and associated module definitions are parsed and executed before the DOM is interactive, blocking LCP and inflating FID/INP scores. Magento 2.4.x introduced a JavaScript bundling feature via Grunt, but it is poorly understood and frequently configured incorrectly.</p>
+      <p>The practical approach for most stores is to use the <code>defer</code> or <code>async</code> attribute on non-critical scripts via Magento's layout XML and to defer Magento's full RequireJS bootstrap until after the DOM content loaded event fires for non-interactive pages (e.g., CMS pages, category listing pages where add-to-cart is below the fold).</p>
+      <pre><code>
+&lt;!-- Magento layout XML: defer non-critical scripts in default.xml --&gt;
+&lt;!-- app/code/Modracx/Performance/view/frontend/layout/default.xml --&gt;
+&lt;?xml version="1.0"?&gt;
+&lt;page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd"&gt;
+    &lt;body&gt;
+        &lt;!-- Move analytics scripts to footer with defer --&gt;
+        &lt;referenceBlock name="require.js"&gt;
+            &lt;arguments&gt;
+                &lt;argument name="defer" xsi:type="string"&gt;defer&lt;/argument&gt;
+            &lt;/arguments&gt;
+        &lt;/referenceBlock&gt;
+    &lt;/body&gt;
+&lt;/page&gt;
+      </code></pre>
+      <p>A more impactful optimisation for Magento 2 is enabling full-page cache (FPC) with Varnish. Without FPC, every storefront request executes the full PHP bootstrap sequence — loading the dependency injection configuration, resolving the layout XML tree, executing EAV queries, and rendering templates. With FPC enabled and Varnish configured, storefront responses for cached pages serve from Varnish memory in under 5ms. This single change typically reduces TTFB from 2–4 seconds to under 50ms for cached pages, which is the single highest-impact technical SEO optimisation available for Magento 2.</p>
+
+      <h2>9. Magento 2 Crawl Budget: Identifying and Closing Leaks</h2>
+      <p>For the ship model kit client, the "Crawled — currently not indexed" count of 1,800 URLs was caused by four distinct URL patterns that Magento was generating and Googlebot was crawling but refusing to index due to thin content or near-duplication. Diagnosing crawl budget leaks requires correlating Google Search Console's crawl stats report with server access logs parsed by CDN provider.</p>
+      <pre><code>
+-- Identify URL patterns generating crawl budget waste
+-- (Run against server access log imported to a MySQL table or use Athena on S3 logs)
+
+SELECT
+    REGEXP_REPLACE(request_uri, '\\?.*$', '') AS clean_path,
+    COUNT(*) AS crawl_hits,
+    COUNT(DISTINCT DATE(request_time)) AS days_crawled,
+    AVG(response_time_ms) AS avg_ttfb_ms,
+    SUM(CASE WHEN http_status = 200 THEN 1 ELSE 0 END) AS hits_200,
+    SUM(CASE WHEN http_status = 404 THEN 1 ELSE 0 END) AS hits_404
+FROM access_logs
+WHERE user_agent LIKE '%Googlebot%'
+    AND request_time &gt;= DATE_SUB(NOW(), INTERVAL 30 DAY)
+GROUP BY clean_path
+HAVING crawl_hits &gt; 10
+ORDER BY crawl_hits DESC
+LIMIT 100;
+      </code></pre>
+      <p>The query above consistently reveals the same categories of waste: the <code>/catalog/category/view/id/</code> internal Magento routes (which should be disallowed in robots.txt), pagination URLs for category pages beyond page 3 or 4 (where product counts drop to low single digits), sorting parameter variants (<code>?dir=asc</code>, <code>?dir=desc</code>, <code>?order=name</code>), and CMS block preview URLs. Each of these patterns needs a corresponding robots.txt Disallow or a <code>noindex</code> meta robots tag depending on whether the URL pattern represents genuinely indexable content on some pages but not others.</p>
+
+      <h2>10. Hreflang in Multi-Store Magento 2</h2>
+      <p>For the ship model kit client with three store views (English, German, Dutch), hreflang implementation was missing entirely. Magento 2 does not generate hreflang tags natively. They must be added via a custom module or a third-party extension. The implementation must handle the multi-store URL structure where each store view may have a different URL prefix (<code>/de/</code>, <code>/nl/</code>) or a different domain (<code>modracx.de</code>, <code>modracx.nl</code>).</p>
+      <pre><code>
+&lt;?php
+// Simplified hreflang injection for Magento 2 multi-store
+// app/code/Modracx/Seo/Block/Hreflang.php
+namespace Modracx\Seo\Block;
+
+use Magento\Framework\View\Element\AbstractBlock;
+use Magento\Store\Model\StoreManagerInterface;
+use Magento\Framework\Registry;
+
+class Hreflang extends AbstractBlock
+{
+    private StoreManagerInterface $storeManager;
+    private Registry $registry;
+
+    // Store view to hreflang locale mapping
+    private array $localeMap = [
+        1 =&gt; 'en-GB',
+        2 =&gt; 'de-DE',
+        3 =&gt; 'nl-NL',
+    ];
+
+    public function __construct(
+        StoreManagerInterface $storeManager,
+        Registry $registry,
+        \Magento\Framework\View\Element\Context $context,
+        array $data = []
+    ) {
+        $this-&gt;storeManager = $storeManager;
+        $this-&gt;registry = $registry;
+        parent::__construct($context, $data);
+    }
+
+    public function getHreflangTags(): array
+    {
+        $product = $this-&gt;registry-&gt;registry('current_product');
+        $tags = [];
+
+        foreach ($this-&gt;storeManager-&gt;getStores() as $store) {
+            $locale = $this-&gt;localeMap[$store-&gt;getId()] ?? null;
+            if (!$locale) {
+                continue;
+            }
+
+            // Get the product URL in this store's context
+            $productUrl = $product
+                ? $product-&gt;setStoreId($store-&gt;getId())-&gt;getUrlModel()-&gt;getUrl($product)
+                : $store-&gt;getBaseUrl();
+
+            $tags[] = [
+                'hreflang' =&gt; $locale,
+                'href' =&gt; $productUrl
+            ];
+        }
+
+        // Add x-default pointing to default store
+        $tags[] = ['hreflang' =&gt; 'x-default', 'href' =&gt; $tags[0]['href'] ?? ''];
+
+        return $tags;
+    }
+}
+      </code></pre>
+
+      <div class="faq">
+        <h2>Frequently Asked Questions</h2>
+
+        <div class="faq-item">
+          <h3 class="faq-q">How large should a Magento 2 url_rewrite table be before it becomes a performance concern?</h3>
+          <p>Above 500,000 rows, you will start seeing measurable query time increases on the rewrite resolution queries that execute on every non-cached storefront request. Above 2 million rows, index seeks on the table can add 50–200ms to TTFB on cold requests. The primary index on <code>request_path</code> is a string column, making it more expensive to scan than integer indexes. If your table exceeds 1 million rows, audit and clean historical redirect rows first before adding additional database indexes.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">Should I enable the flat catalog if I have configurable products?</h3>
+          <p>Yes, but with awareness. The flat catalog stores simple product data. Configurable product super-attribute data and child product associations are stored separately and are not affected by flat catalog status. Enabling flat catalog will improve simple product queries and the basic listing data for configurables. The child product variant data (swatches, size availability) still queries EAV tables. For stores with predominantly configurable products, pair flat catalog with thorough Redis caching of the variant data to avoid repeated EAV lookups for swatches and stock status.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">What is the correct way to handle pagination for SEO in Magento 2?</h3>
+          <p>Use <code>rel="next"</code> and <code>rel="prev"</code> annotations on paginated series, and ensure that page 1 of a category has a canonical pointing to the base category URL (not <code>/category.html?p=1</code>). Google officially deprecated rel-next/prev in 2019, but it still provides a useful signal to other search engines. The more important action is ensuring the paginated URLs are not generating thin content — if page 15 of a category only has 3 products, it should return a noindex meta tag or redirect to the base category URL.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">How do I prevent Magento's search results pages from consuming crawl budget?</h3>
+          <p>Add <code>Disallow: /catalogsearch/</code> to robots.txt. This blocks all URLs under the catalogsearch path. Additionally, add a <code>&lt;meta name="robots" content="noindex,nofollow"&gt;</code> tag to the search results page template (<code>catalogsearch/result/index.phtml</code>) as a belt-and-suspenders measure. Search result pages have no stable content, duplicate product listings from category pages, and are near-infinite in permutation — they are the single largest source of crawl budget waste in a default Magento 2 installation.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">Does Magento 2's built-in structured data meet Google's current requirements?</h3>
+          <p>Partially. Magento 2.4.x ships with basic Product schema including name, sku, description, image, and offers. It does not include aggregateRating (requires review data integration), brand (requires custom attribute mapping), or returnPolicy (required for enhanced Google Shopping listings). For Google Merchant Centre integration and rich snippet eligibility, you will almost always need a custom structured data module that extends the native implementation via di.xml plugins rather than replacing it entirely.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">What is the impact of Magento 2's JavaScript on INP (Interaction to Next Paint)?</h3>
+          <p>Significant. Magento 2's Knockout.js UI components bind event handlers to DOM elements after a JavaScript execution chain that can take 2–4 seconds on mid-range mobile devices. Until those handlers are bound, user interactions (clicking add-to-cart, opening product gallery) either do nothing or are queued. This produces INP scores in the 400–800ms range on unoptimised Magento 2 stores — well above Google's 200ms threshold. The fix requires deferring non-critical UI component initialisation, using intersection observers to lazy-initialise below-the-fold components, and splitting the RequireJS bundle to load only the components needed for above-the-fold interactivity on initial render.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">How often should I run a full reindex in Magento 2?</h3>
+          <p>Full reindexes should be the exception, not the routine. With schedule-based indexing, Magento incrementally updates index tables every minute. Full reindexes are required after: installing or upgrading modules that add new attributes, changing attribute sets, enabling or disabling the flat catalog, and after major data migrations. In a healthy production environment with schedule-based indexing, full reindexes should occur at most once per quarter, typically during planned maintenance windows.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">What Magento 2 SEO configuration changes have the highest immediate impact?</h3>
+          <p>In order of impact: (1) Enable Varnish FPC — single most impactful change for TTFB and crawl budget. (2) Disable "Use Categories Path for Product URLs" — eliminates the canonical mismatch problem affecting thousands of pages. (3) Switch indexers to schedule mode except catalog_product_price — removes admin blocking and reduces database write spikes. (4) Add explicit disallows for catalogsearch, pagination, and filter parameters in robots.txt — immediately reduces crawl budget waste. (5) Clean the url_rewrite table of historical redirect rows — reduces query time on rewrite lookups.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-q">Can I use a third-party SEO extension alongside custom di.xml plugins safely?</h3>
+          <p>Yes, but carefully. Third-party SEO extensions (SEO Suite Ultimate, Mageworx, Amasty SEO) often register their own plugins on the same classes you might target with custom code. Plugin sort order determines execution sequence. Set your custom plugin's sortOrder higher (e.g., 200) than the third-party plugin (typically defaults to 10) so your code runs after theirs, allowing you to override or supplement their output. Review the extension's di.xml to understand exactly which methods it intercepts before writing your own plugin.</p>
+
+        </div>
+
+      </div>
+
+      <h2>11. Elasticsearch and OpenSearch Configuration for SEO-Relevant Search Quality</h2>
+      <p>Magento 2.4+ replaced the MySQL-based catalogsearch with Elasticsearch (now OpenSearch) as the mandatory search engine. The configuration of the search index directly affects both on-site search quality and the SEO behaviour of search result pages. Poor search relevance leads to users finding search pages through organic search and immediately bouncing when the results do not match their intent — a strong negative signal to Google.</p>
+      <p>The default Magento 2 Elasticsearch configuration applies equal weight to all searchable attributes. This means a search for "HMS Victory 1:96 kit" gives equal weight to the product name, the long description, the meta keywords, and any custom attributes you have made searchable. In practice, name and SKU should carry dramatically higher weight than description text. A result where a product's description mentions HMS Victory incidentally should rank below a product whose name is "HMS Victory Ship Model Kit 1:96 Scale".</p>
+
+      <pre><code>
+# Magento 2 search weight configuration via admin
+# Stores > Configuration > Catalog > Catalog Search
+# Alternatively, configure via CLI for automation:
+
+php bin/magento config:set catalog/search/engine opensearch
+php bin/magento config:set catalog/search/opensearch_server_hostname localhost
+php bin/magento config:set catalog/search/opensearch_server_port 9200
+php bin/magento config:set catalog/search/opensearch_index_prefix magento2
+
+# After configuration, run a full search reindex
+php bin/magento indexer:reindex catalogsearch_fulltext
+
+# Verify the index was created successfully
+curl -X GET "localhost:9200/_cat/indices?v&index=magento2*"
+      </code></pre>
+
+      <p>For search attribute weights, navigate to <strong>Stores &gt; Attributes &gt; Product</strong> and edit each searchable attribute. The "Search Weight" field (1–10) controls the Elasticsearch boost factor. Name should be at 10. SKU at 8. Short description at 6. Long description at 4. Meta keywords should be set to 1 or removed from the search index entirely — they are frequently stuffed with comma-separated terms that distort relevance and produce low-quality search results. The ship model kit client had meta keywords set to weight 5, which was causing their category pages to rank above specific product PDPs in on-site search — the exact opposite of the intended behaviour.</p>
+
+      <h2>12. Magento 2 SEO Technical Audit Checklist</h2>
+      <p>Every Magento 2 SEO engagement should begin with a structured audit against the same reference checklist. This ensures nothing is missed and provides a baseline for measuring improvement. The checklist below represents the items I verify on every new client engagement, ordered by impact.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Check</th>
+            <th>Tool / Method</th>
+            <th>Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>Full Page Cache (Varnish) enabled and warm</td>
+            <td><code>curl -I https://domain.com | grep X-Magento-Cache</code></td>
+            <td>Critical — TTFB</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>url_rewrite table row count below 500k</td>
+            <td>MySQL: <code>SELECT COUNT(*) FROM url_rewrite</code></td>
+            <td>High — query latency</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>Categories path disabled for product URLs</td>
+            <td>Admin: Stores &gt; Config &gt; SEO &gt; Use Categories Path</td>
+            <td>High — canonical consistency</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>robots.txt blocks catalogsearch and filter URLs</td>
+            <td>Fetch https://domain.com/robots.txt</td>
+            <td>High — crawl budget</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>Sitemap generated with compression, split by 10k URLs</td>
+            <td>Admin: Marketing &gt; Site Map settings</td>
+            <td>High — indexation</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>Product schema includes correct availability and SKU</td>
+            <td>Google Rich Results Test on 5 PDPs</td>
+            <td>High — rich snippets</td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td>Hero product image uses explicit width/height attributes</td>
+            <td>Chrome DevTools &gt; Performance &gt; LCP</td>
+            <td>High — Core Web Vitals LCP</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td>Indexers in schedule mode (except product price)</td>
+            <td><code>php bin/magento indexer:status</code></td>
+            <td>Medium — admin performance</td>
+          </tr>
+          <tr>
+            <td>9</td>
+            <td>Flat catalog enabled</td>
+            <td>Admin: Stores &gt; Config &gt; Catalog &gt; Use Flat Catalog</td>
+            <td>Medium — DB query performance</td>
+          </tr>
+          <tr>
+            <td>10</td>
+            <td>hreflang tags present and reciprocal (multi-store only)</td>
+            <td>View source on each store view's equivalent page</td>
+            <td>Medium — international SEO</td>
+          </tr>
+          <tr>
+            <td>11</td>
+            <td>Elasticsearch/OpenSearch search weights configured</td>
+            <td>Admin: Stores &gt; Attributes &gt; Product &gt; Search Weight</td>
+            <td>Medium — search quality</td>
+          </tr>
+          <tr>
+            <td>12</td>
+            <td>Google Search Console shows no crawl anomalies in past 90 days</td>
+            <td>GSC &gt; Pages &gt; Not indexed</td>
+            <td>Ongoing monitoring</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Run through this checklist quarterly. The url_rewrite row count, crawl budget status in Google Search Console, and Core Web Vitals field data change over time — often degrading without a single identifiable code change, simply as a consequence of catalog growth, content editing activity, and search engine re-evaluation of the site's content quality. A quarterly audit that catches a growing url_rewrite table at 700k rows is far less painful than discovering it at 3 million rows after organic traffic has already declined for six months.</p>
+
+    </section>
+  </main>
+
+  <footer class="horizon-footer">
+    <p>&copy; 2026 MODRACX. All rights reserved.</p>
+  </footer>
+</body>
+</html>
