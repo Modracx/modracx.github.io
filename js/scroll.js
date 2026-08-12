@@ -106,8 +106,10 @@
 
       var shown = 0;
       Array.prototype.forEach.call(relics, function (relic) {
-        var match = kind === "all" || relic.dataset.kind === kind;
+        var match = kind === "all" || relic.dataset.kind === kind || (relic.dataset.kind && relic.dataset.kind.indexOf(kind) !== -1);
+        relic.classList.toggle("is-hidden", !match);
         relic.classList.toggle("is-dimmed", !match);
+        relic.style.display = match ? "" : "none";
         relic.setAttribute("aria-hidden", match ? "false" : "true");
         if (match) shown++;
       });
@@ -118,4 +120,5 @@
       }
     });
   }
+
 })();
