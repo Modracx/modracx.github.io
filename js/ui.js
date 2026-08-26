@@ -155,28 +155,74 @@
       }, 450);
     };
 
+    var gameState = {
+      activeQuest: 0,
+      stage: 0
+    };
+
     var spells = {
       help: function () {
-        write("realm",
-          "Known words: <strong>map</strong>, <strong>wards</strong>, <strong>stack</strong>, " +
-          "<strong>work</strong>, <strong>about</strong>, <strong>services</strong>, " +
-          "<strong>contact</strong>, <strong>whoami</strong>, <strong>clear</strong>.");
+        write("grimoire",
+          "Incantations: <strong>play</strong> (launch Arcade Odyssey game), <strong>quest</strong>, <strong>cast dabiro</strong>, <strong>cast webadmin</strong>, <strong>matrix</strong>, <strong>map</strong>, <strong>stack</strong>, <strong>whoami</strong>, <strong>clear</strong>.");
       },
+      play: function () {
+        write("grimoire", "🚀 <em>Launching Arcade Odyssey Canvas Engine...</em> Use [← / →] or [A / D] to steer, [Space] to Warp Dash!");
+        if (window.GrimoireArcade && window.GrimoireArcade.start) {
+          window.GrimoireArcade.start();
+        }
+      },
+      game: function () {
+        spells.play();
+      },
+      quest: function () {
+        gameState.activeQuest = 1;
+        gameState.stage = 1;
+        write("grimoire", "✦ <strong>TRIAL I: THE CORRUPTED BASTION</strong> ✦<br />A production database with 10M rows is running out of memory during a live backup. Memory ceiling is strictly 4MB. What incantation do you cast?<br />Option A: <code>phpmyadmin</code><br />Option B: <code>cast dabiro</code>");
+      },
+      "cast dabiro": function () {
+        if (gameState.activeQuest === 1 && gameState.stage === 1) {
+          gameState.stage = 2;
+          write("grimoire", "⚡ <em>Streaming unbuffered PDO query stream... Capped at 2.8MB RAM!</em><br /><strong>Success!</strong> The database demon is banished.<br /><br />✦ <strong>TRIAL II: THE DAEMON SWARM</strong> ✦<br />Your VPS is burdened by 4,000 Perl scripts. To deploy a single static Go supervisor, type: <code>cast webadmin</code>");
+        } else {
+          write("grimoire", "⚡ You invoke Dabiro: Zero-dependency single-file database manager summoned. Memory flatlined at 2.8MB!");
+        }
+      },
+      "cast webadmin": function () {
+        if (gameState.activeQuest === 1 && gameState.stage === 2) {
+          gameState.stage = 3;
+          write("grimoire", "🛡️ <em>18MB static Go binary deployed. Automated Let's Encrypt SSL configured in 40ms!</em><br /><strong>Success!</strong><br /><br />✦ <strong>TRIAL III: THE CONSTELLATION WARP</strong> ✦<br />To warp the cosmic background field into high-speed quantum particles, type: <code>matrix</code>");
+        } else {
+          write("grimoire", "🛡️ Webadmin invoked: Nginx server blocks and Let's Encrypt certificates synchronized.");
+        }
+      },
+      matrix: function () {
+        var canvas = document.getElementById("particles");
+        if (canvas) {
+          canvas.style.filter = "hue-rotate(120deg) brightness(1.5)";
+          setTimeout(function(){ canvas.style.filter = ""; }, 5000);
+        }
+        if (gameState.activeQuest === 1 && gameState.stage === 3) {
+          gameState.activeQuest = 0;
+          gameState.stage = 0;
+          write("grimoire", "🔮 <strong>VICTORY ACHIEVED: GRAND ARCHITECT</strong> 🔮<br />You have restored equilibrium to the realm. You are ready to build production-grade web systems. Type <code>hire</code> or visit <code>/contact/</code> to summon Kenneth D'Silva!");
+        } else {
+          write("grimoire", "🌌 Cosmic particle matrix accelerated.");
+        }
+      },
+      hire: function () { go("/contact/"); },
       map: function () {
-        write("realm",
-          "/services/ · /work/ · /about/ · /contact/ — or name a ward: " +
-          "commerce, engineering, security, seo, ai, archive.");
+        write("grimoire",
+          "/services/ · /work/ · /about/ · /contact/ · /grimoire/ — or name a ward: commerce, engineering, security, seo, ai.");
       },
       wards: function () {
-        write("realm", "Commerce · Engineering · Security · SEO · AI Lab · Archive.");
+        write("grimoire", "Commerce · Engineering · Security · SEO · AI Lab · Archive.");
       },
       stack: function () {
-        write("realm",
-          "Magento 2, Shopify &amp; Plus, Hyva, Liquid, PHP/Laravel, Vue, React, Next.js, " +
-          "GraphQL, MySQL, technical SEO, platform hardening.");
+        write("grimoire",
+          "Magento 2, Shopify Plus, PHP/Laravel, Go, React, Next.js, PostgreSQL, MySQL, Technical SEO.");
       },
       whoami: function () {
-        write("realm", "Kenneth D'Silva — MODRACX. Ecommerce and systems developer, based in India, working globally.");
+        write("grimoire", "Kenneth D'Silva — MODRACX. Full-stack & ecommerce developer (7 years experience).");
       },
       commerce: function () { go("/services/#commerce"); },
       engineering: function () { go("/services/#engineering"); },
@@ -198,7 +244,9 @@
       if (!word) return;
       write("you", word, true);
       if (spells[word]) spells[word]();
-      else write("realm", "No such word. Try <strong>help</strong>.");
+      else if (word.indexOf("dabiro") !== -1) spells["cast dabiro"]();
+      else if (word.indexOf("webadmin") !== -1) spells["cast webadmin"]();
+      else write("grimoire", "No such incantation. Try <strong>quest</strong> or <strong>help</strong>.");
     };
 
     form.addEventListener("submit", function (e) {

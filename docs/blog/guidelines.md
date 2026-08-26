@@ -122,16 +122,16 @@ Every post is deployed as a static HTML page located at `/blog/<slug>/index.html
 ### Page Metadata
 1. **Title:** `<Post Title> | MODRACX` (under 65 characters preferred).
 2. **Description:** Clear, high-density summary (140-160 characters).
-3. **Canonical URL:** `https://modracx.com/blog/<slug>/` (with trailing slash).
+3. **Canonical URL:** `https://www.modracx.com/blog/<slug>/` (with trailing slash).
 4. **Hreflang Tags:** `en` and `x-default` pointing to the canonical URL.
-5. **OpenGraph & Twitter Cards:** Full metadata including `og:image` and `twitter:image` set to `https://modracx.com/og-image.png`.
+5. **OpenGraph & Twitter Cards:** Full metadata including `og:image` and `twitter:image` set to `https://www.modracx.com/og-image.png`.
 
 ### Structured Data (JSON-LD `@graph`)
 Every article must include a `<script type="application/ld+json">` block containing:
 1. `TechArticle`:
-   * `@id`: `https://modracx.com/blog/<slug>/#article`
+   * `@id`: `https://www.modracx.com/blog/<slug>/#article`
    * `headline`, `description`, `url`, `datePublished`, `dateModified`, `timeRequired`
-   * Author entity pointing to Kenneth D'Silva (`https://modracx.com/about/`)
+   * Author entity pointing to Kenneth D'Silva (`https://www.modracx.com/about/`)
    * Publisher entity pointing to MODRACX
 2. `BreadcrumbList`:
    * Home (`/`) -> Blog (`/blog/`) -> Article (`/blog/<slug>/`)
