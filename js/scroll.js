@@ -118,6 +118,10 @@
       if (count) {
         count.textContent = shown + (shown === 1 ? " entry" : " entries");
       }
+
+      /* The catalogue just changed height, and the spine on /work sits below
+         it — its cached waypoint positions are now stale. */
+      if (window.RealmPathway) window.RealmPathway.rebuild();
     });
   }
 
