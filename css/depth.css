@@ -1,0 +1,152 @@
+/* ==========================================================================
+   Depth — the atlas gains a Z axis
+
+   Scrolling is descent along the spine. The three star sheets sit at real
+   depths inside a perspective host and share one rig transform, so near
+   layers move more than far ones for free.
+
+   Two rules govern everything here:
+     1. Only decorative, aria-hidden, textless layers ever receive 3D.
+        Text is never transformed in 3D — it rasterises soft.
+     2. Nothing that veils text is added above `.realm`. The fog sits below
+        the content, so the 5:1 contrast audit measures exactly what a
+        reader sees.
+   ========================================================================== */
+
+:root {
+  /* Perspective, unitless so the counter-scale can be derived in calc(). */
+  --persp-n: 900;
+
+  /* Intensity dial. Every depth effect multiplies by this. */
+  --depth-scale: 1;
+
+  /* --depth-fog now lives in css/tokens.css beside the other atmosphere
+     dimmers, because it has to differ per chart. */
+
+  /* Written per-frame by js/depth.js, scoped to the layers that use them. */
+  --fog-top: 0;
+  --fog-bot: 0;
+}
+
+/* --- The intensity dial ------------------------------------------------ */
+
+[data-depth="full"] { --depth-scale: 1; }
+[data-depth="light"] { --depth-scale: 0.55; }
+[data-depth="minimal"] { --depth-scale: 0.2; }
+[data-depth="off"] { --depth-scale: 0; }
+
+/* The world holds still while someone is writing to Kenneth. */
+body.is-composing { --depth-scale: 0; }
+
+/* --- The perspective host --------------------------------------------- */
+
+.cosmos {
+  perspective: calc(var(--persp-n) * 1px);
+  /* Above centre: the vanishing point sits above the 75% reading line, so
+     descending reads as travelling forward rather than dropping. */
+  perspective-origin: 50% 42%;
+}
+
+/* Built by js/depth.js; the star layers are moved inside it. */
+.depth-field {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+
+/* --- Depth planes ------------------------------------------------------ */
+
+/* Counter-scale s = (P - z) / P restores apparent size at rest.
+   The scale replaces the old inset:-12% bleed, so layer memory stays flat. */
+.depth-field .star-layer {
+  inset: 0;
+  transform: translateZ(calc(var(--z-n, 0) * 1px))
+    scale(calc((var(--persp-n) - var(--z-n, 0)) / var(--persp-n)));
+}
+
+/* Layer 1 is the far bed: the canvas fly-through has a recycle plane, and
+   without something beyond it that boundary reads as a wall the motes pop out
+   of. It stays.
+
+   Layers 2 and 3 are retired *inside the depth field only* — layer 3 sits at
+   the screen plane and would fight the canvas near-field, and two parallax
+   systems at the same depth is the surest way to make both read as mush.
+   Scoping the rule to .depth-field means a no-JS or reduced-motion visitor,
+   whose layers are never moved into the field, still gets the original flat
+   parallax with all three sheets. */
+.depth-field .star-layer-1 { --z-n: -420; }
+
+.depth-field .star-layer-2,
+.depth-field .star-layer-3 { display: none; }
+
+/* --- Fog ---------------------------------------------------------------
+
+   Deliberately z-index 2 and injected BEFORE `.realm` in DOM order, so it
+   fogs the cosmos and the motes and never lands on a glyph.
+
+   The colour is `--c-bg`, not `--c-bg-deep`: on the night chart that reads
+   as receding into darkness, on the day chart as receding into haze, from
+   one declaration.                                                        */
+
+.fog {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgb(var(--c-bg) / var(--fog-top)) 0%,
+    transparent 22%,
+    transparent 78%,
+    rgb(var(--c-bg) / var(--fog-bot)) 100%
+  );
+}
+
+/* --- Destination markers ------------------------------------------------
+
+   A page with no spine still carries a rune (/contact has one). pathway.js
+   needs two waypoints to draw anything, so that rune could never light — it
+   was a promise the page never kept.
+
+   On minimal-depth pages the rune is not a landmark you pass, it is where you
+   have arrived. So light it statically and let it stand still.              */
+
+[data-depth="minimal"] .waypoint {
+  transform: none;
+  opacity: 1;
+  color: var(--gold-ink);
+  border-color: rgb(var(--c-gold) / 0.55);
+  box-shadow: var(--glow-gold), inset 0 0 20px rgb(var(--c-gold) / 0.14);
+}
+
+[data-depth="minimal"] .waypoint::before {
+  border-color: rgb(var(--c-gold) / 0.18);
+  transform: scale(1.12);
+}
+
+/* --- Guards ------------------------------------------------------------ */
+
+/* These guards must also match [data-depth], or the dial rules above win on
+   specificity and the clamp silently never applies. */
+@media (max-width: 768px) {
+  :root,
+  [data-depth] { --depth-scale: 0.55; }
+  /* Layer 1 is the only sheet left and it is load-bearing, so it stays here —
+     the old rule hid exactly the layer that now hides the recycle plane. */
+}
+
+@media print {
+  :root,
+  [data-depth] { --depth-scale: 0; }
+  .fog { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  [data-depth] { --depth-scale: 0; }
+  .cosmos { perspective: none; perspective-origin: 50% 50%; }
+  .depth-field { transform: none; }
+  .depth-field .star-layer { transform: none; inset: -12%; }
+  .fog { display: none; }
+}

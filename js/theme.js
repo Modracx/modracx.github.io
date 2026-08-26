@@ -25,6 +25,13 @@
     }
   }
 
+  /* What the reader actually chose. "system" is represented by the ABSENCE of
+     a stored key — which is exactly what the pre-paint snippet in every page
+     already treats as "leave data-theme alone", so nothing else has to change. */
+  function choice() {
+    return stored() || "system";
+  }
+
   function systemTheme() {
     return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
       ? "light"
@@ -46,11 +53,20 @@
       meta.setAttribute("name", "theme-color");
       document.head.appendChild(meta);
     }
-    meta.setAttribute("content", theme === "light" ? "#f5f6fb" : "#07071a");
+    /* Read the live token rather than repeating the palette, so retuning
+       --c-bg in either chart cannot silently desync the browser chrome. */
+    var probe = getComputedStyle(root).getPropertyValue("--c-bg").trim();
+    var parts = probe.split(/[\s,]+/).filter(Boolean);
+    if (parts.length === 3) {
+      meta.setAttribute("content", "rgb(" + parts.join(" ") + ")");
+    } else {
+      meta.setAttribute("content", theme === "light" ? "#f5f6fb" : "#07071a");
+    }
   }
 
-  function apply(theme, animate) {
-    if (animate) {
+  function apply(theme, opts) {
+    opts = opts || {};
+    if (opts.animate) {
       root.classList.add("theme-shifting");
       setTimeout(function () {
         root.classList.remove("theme-shifting");
@@ -58,12 +74,43 @@
     }
     root.setAttribute("data-theme", theme);
     paintBrowserChrome(theme);
-    try {
-      localStorage.setItem(KEY, theme);
-    } catch (e) {
-      /* private mode — the choice simply will not outlive the page */
+    if (opts.persist !== false) {
+      try {
+        localStorage.setItem(KEY, theme);
+      } catch (e) {
+        /* private mode — the choice simply will not outlive the page */
+      }
     }
-    document.dispatchEvent(new CustomEvent("themechange", { detail: { theme: theme } }));
+    announce(theme, opts.choice || theme);
+  }
+
+  function announce(theme, sel) {
+    document.dispatchEvent(
+      new CustomEvent("themechange", { detail: { theme: theme, choice: sel } })
+    );
+  }
+
+  /* The only way back to following the operating system: drop the key and the
+     attribute, and let the cascade take over. */
+  function setChoice(sel, animate) {
+    if (sel === "system") {
+      try {
+        localStorage.removeItem(KEY);
+      } catch (e) {}
+      if (animate) {
+        root.classList.add("theme-shifting");
+        setTimeout(function () {
+          root.classList.remove("theme-shifting");
+        }, 400);
+      }
+      root.removeAttribute("data-theme");
+      var resolved = systemTheme();
+      paintBrowserChrome(resolved);
+      announce(resolved, "system");
+      return resolved;
+    }
+    apply(sel, { animate: animate, persist: true, choice: sel });
+    return sel;
   }
 
   /* --- The control ----------------------------------------------------- */
@@ -79,38 +126,91 @@
     'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/></svg>';
 
+  var SYSTEM =
+    '<svg class="icon-system" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<circle cx="12" cy="12" r="8.4"/>' +
+    '<path d="M12 3.6a8.4 8.4 0 0 1 0 16.8z" fill="currentColor" stroke="none"/></svg>';
+
   function build() {
     var tools = document.querySelector(".sky-tools");
     if (!tools || tools.querySelector(".theme-switch")) return null;
 
-    var btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "theme-switch";
-    btn.innerHTML = '<i aria-hidden="true"></i>' + SUN + MOON;
+    /* A radiogroup, not a toggle button: three states cannot be expressed by
+       aria-pressed, and a reader needs to hear WHICH of three is active rather
+       than what the next click would do. */
+    var group = document.createElement("div");
+    group.className = "theme-switch";
+    group.setAttribute("role", "radiogroup");
+    group.setAttribute("aria-label", "Theme");
 
-    /* The switch reports the chart it is about to turn on, which is what a
-       screen reader user needs to hear before activating it. */
-    var label = function (theme) {
-      btn.setAttribute("data-mode", theme);
-      btn.setAttribute("aria-pressed", String(theme === "dark"));
-      btn.setAttribute(
-        "aria-label",
-        theme === "dark" ? "Dark theme on. Switch to light." : "Light theme on. Switch to dark."
-      );
-      btn.title = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+    var thumb = document.createElement("i");
+    thumb.setAttribute("aria-hidden", "true");
+    group.appendChild(thumb);
+
+    var OPTIONS = [
+      { value: "system", icon: SYSTEM, text: "Follow system theme" },
+      { value: "light", icon: SUN, text: "Light theme" },
+      { value: "dark", icon: MOON, text: "Dark theme" }
+    ];
+
+    var radios = OPTIONS.map(function (opt) {
+      var r = document.createElement("button");
+      r.type = "button";
+      r.setAttribute("role", "radio");
+      r.dataset.choice = opt.value;
+      r.innerHTML = opt.icon + '<span class="sr-only">' + opt.text + "</span>";
+      r.title = opt.text;
+      group.appendChild(r);
+      return r;
+    });
+
+    var label = function (sel) {
+      group.setAttribute("data-choice", sel);
+      radios.forEach(function (r) {
+        var on = r.dataset.choice === sel;
+        r.setAttribute("aria-checked", String(on));
+        /* Roving tabindex: the group is one tab stop, arrows move within it. */
+        r.tabIndex = on ? 0 : -1;
+      });
     };
 
-    label(current());
+    label(choice());
 
-    btn.addEventListener("click", function () {
-      var next = current() === "dark" ? "light" : "dark";
-      apply(next, true);
-      label(next);
+    var pick = function (sel, focus) {
+      setChoice(sel, true);
+      label(sel);
+      if (focus) {
+        radios.forEach(function (r) {
+          if (r.dataset.choice === sel) r.focus();
+        });
+      }
+    };
+
+    group.addEventListener("click", function (e) {
+      var r = e.target.closest("[role=radio]");
+      if (r) pick(r.dataset.choice, false);
     });
 
+    group.addEventListener("keydown", function (e) {
+      var i = radios.indexOf(document.activeElement);
+      if (i < 0) return;
+      var next = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (i + 1) % radios.length;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (i + radios.length - 1) % radios.length;
+      else if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = radios.length - 1;
+      if (next === null) return;
+      e.preventDefault();
+      pick(radios[next].dataset.choice, true);
+    });
+
+    /* Keep the control honest when the OS flips underneath a "system" reader. */
     document.addEventListener("themechange", function (e) {
-      label(e.detail.theme);
+      label(e.detail.choice || choice());
     });
+
+    var btn = group;
 
     /* Sits ahead of the menu button so the hamburger stays at the edge */
     var navToggle = tools.querySelector(".nav-toggle");
@@ -129,7 +229,7 @@
       var theme = systemTheme();
       root.setAttribute("data-theme", theme);
       paintBrowserChrome(theme);
-      document.dispatchEvent(new CustomEvent("themechange", { detail: { theme: theme } }));
+      announce(theme, "system");
     };
     if (mq.addEventListener) mq.addEventListener("change", onSystemChange);
     else if (mq.addListener) mq.addListener(onSystemChange);
@@ -144,5 +244,5 @@
   }
 
   /* Exposed so other layers (the particle canvas) can ask without guessing */
-  window.MODRACX_THEME = { current: current, apply: apply };
+  window.MODRACX_THEME = { current: current, apply: apply, choice: choice, setChoice: setChoice };
 })();

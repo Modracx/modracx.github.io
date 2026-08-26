@@ -48,7 +48,8 @@
   var SPRITES = [];
   function createSprites(dpr) {
     SPRITES = PALETTE.map(function (c) {
-      var size = Math.ceil(12 * dpr);
+      /* Large enough that a mote at the near plane upscales without banding. */
+      var size = Math.ceil(64 * dpr);
       var off = document.createElement("canvas");
       off.width = size;
       off.height = size;
@@ -86,6 +87,19 @@
     this.bind();
   }
 
+  /* One camera for the whole site: F and the vanishing point mirror
+     --persp-n: 900 and perspective-origin: 50% 42% in css/depth.css, so the
+     canvas and the CSS star planes read as the same space rather than two
+     unrelated effects. */
+  var F = 900;
+  var Z_NEAR = 160;
+  var Z_FAR = 900;
+  var Z_SPAN = Z_FAR - Z_NEAR;
+  var PARTICLE_V = 2; /* bump when the world model changes, to migrate old motes */
+  var IDLE_V = 0.06; /* world units/frame at rest — the field breathes */
+  var MAX_TRAIL = 64; /* px — a streak must read as motion, not as a scratch */
+  var TRAVEL_V = 0.16; /* world units per unit of scroll velocity */
+
   ParticleSystem.prototype.resize = function () {
     var w = window.innerWidth;
     var h = window.innerHeight;
@@ -103,13 +117,48 @@
     var target = Math.round(Math.min(180, Math.max(50, (w * h) / 8500)));
     if (this.isMobile) target = 24; // Low particle count on mobile for smooth 60fps scrolling
     this.target = target;
+
+    /* Vanishing point. depth.js nudges cx/cy with the same head-sway it
+       applies to perspective-origin, so both systems drift together. */
+    this.cx = w / 2;
+    this.cy = h * 0.42;
+    this.swayX = this.swayX || 0;
+    this.swayY = this.swayY || 0;
   };
 
-  ParticleSystem.prototype.makeParticle = function (x, y) {
+  /* World half-extent. Kept tight on purpose: a mote spawned far off-axis
+     sweeps out of frame almost immediately, so a narrow span means each mote
+     spends most of its travel on screen. */
+  ParticleSystem.prototype.spanX = function () {
+    return (this.w / F) * Z_FAR * 0.22;
+  };
+  ParticleSystem.prototype.spanY = function () {
+    return (this.h / F) * Z_FAR * 0.22;
+  };
+
+  ParticleSystem.prototype.respawn = function (p, far) {
+    p.wx = (Math.random() - 0.5) * 2 * this.spanX();
+    p.wy = (Math.random() - 0.5) * 2 * this.spanY();
+    /* Jitter the return depth, or every mote seeded in one frame arrives at
+       the near plane in the same frame and the field visibly pulses. */
+    p.z = far ? Z_NEAR + Z_SPAN * (0.55 + Math.random() * 0.45) : Z_NEAR + Math.random() * Z_SPAN;
+    p.pz = p.z;
+    return p;
+  };
+
+  /* wx/wy/z are authoritative. x/y are a per-frame projection cache written at
+     the end of step(), so hash(), the link pass, draw() and burst() keep
+     working in screen space exactly as before. */
+  ParticleSystem.prototype.makeParticle = function () {
     var toneIdx = (Math.random() * PALETTE.length) | 0;
-    return {
-      x: x === undefined ? Math.random() * this.w : x,
-      y: y === undefined ? Math.random() * this.h : y,
+    var p = {
+      v: PARTICLE_V,
+      x: 0,
+      y: 0,
+      wx: 0,
+      wy: 0,
+      z: 0,
+      pz: 0,
       vx: (Math.random() - 0.5) * 0.28,
       vy: (Math.random() - 0.5) * 0.28,
       r: Math.random() * 1.5 + 0.5,
@@ -120,12 +169,17 @@
       rate: Math.random() * 0.02 + 0.006,
       drift: Math.random() * 0.4 + 0.2
     };
+    return this.respawn(p, false);
   };
 
   ParticleSystem.prototype.seed = function () {
     var next = [];
     for (var i = 0; i < this.target; i++) {
-      next.push(this.particles[i] || this.makeParticle());
+      var existing = this.particles[i];
+      /* seed() reuses objects across resizes; a mote from an older world model
+         would carry an incompatible z range, so migrate it instead. */
+      if (existing && existing.v !== PARTICLE_V) existing = null;
+      next.push(existing || this.makeParticle());
     }
     this.particles = next;
   };
@@ -199,8 +253,16 @@
     }
   };
 
+  /* Fed by js/depth.js from the shared ticker, so the motes, the fog and the
+     head-sway all agree about how fast the reader is moving. */
+  ParticleSystem.prototype.setScroll = function (sv) {
+    this.sv = sv || 0;
+  };
+
   ParticleSystem.prototype.step = function (dt) {
     var pt = this.pointer;
+    var sv = this.sv || 0;
+    var coupling = this.isMobile ? 0.3 : 1;
     var dx = pt.x - pt.px;
     var dy = pt.y - pt.py;
     pt.speed = Math.min(Math.sqrt(dx * dx + dy * dy), 60);
@@ -218,6 +280,9 @@
       p.vx += Math.sin(p.phase * 0.6) * 0.004 * p.drift;
       p.vy += Math.cos(p.phase * 0.4) * 0.004 * p.drift;
 
+      /* Pointer force is measured in screen px but has to move world coords,
+         so the impulse scales by z/F — a far mote needs a proportionally
+         larger world push to shift the same number of pixels. */
       if (pt.inside && !this.isMobile) {
         var ax = p.x - pt.x;
         var ay = p.y - pt.y;
@@ -230,20 +295,43 @@
             : repelling
               ? falloff * (0.4 + pt.speed * 0.02)
               : -falloff * 0.09;
-          p.vx += (ax / d) * force;
-          p.vy += (ay / d) * force;
+          var world = p.z / F;
+          p.vx += (ax / d) * force * world;
+          p.vy += (ay / d) * force * world;
         }
       }
 
       p.vx *= 0.965;
       p.vy *= 0.965;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
+      p.wx += p.vx * dt;
+      p.wy += p.vy * dt;
 
-      if (p.x < -20) p.x = this.w + 20;
-      else if (p.x > this.w + 20) p.x = -20;
-      if (p.y < -20) p.y = this.h + 20;
-      else if (p.y > this.h + 20) p.y = -20;
+      /* Forward travel: depth closes toward the camera. A slow idle drift
+         keeps the field alive at rest; scrolling accelerates it. */
+      p.pz = p.z;
+      p.z -= (IDLE_V + Math.abs(sv) * TRAVEL_V * coupling) * dt * (sv < 0 ? -1 : 1);
+
+      /* dt is clamped to 3, and a fast fling can still cross the whole span in
+         one frame — so recycle with a loop, not a single if. */
+      while (p.z < Z_NEAR) {
+        this.respawn(p, true);
+      }
+      while (p.z > Z_FAR) {
+        p.z -= Z_SPAN;
+        p.pz = p.z;
+      }
+
+      /* Project. x/y are a cache from here on — everything downstream reads
+         them in screen space exactly as it always did. */
+      var inv = F / p.z;
+      p.x = this.cx + this.swayX + p.wx * inv;
+      p.y = this.cy + this.swayY + p.wy * inv;
+
+      /* A mote that has drifted far off-axis will never come back; recycle it
+         rather than integrating it forever. */
+      if (p.x < -this.w || p.x > this.w * 2 || p.y < -this.h || p.y > this.h * 2) {
+        this.respawn(p, true);
+      }
     }
 
     for (var b = this.bursts.length - 1; b >= 0; b--) {
@@ -259,8 +347,10 @@
     var pt = this.pointer;
     ctx.clearRect(0, 0, this.w, this.h);
 
-    // Skip heavy spatial hash link calculations on mobile screens
-    if (!this.isMobile) {
+    // At rest the sky is a chart; in motion it is a tunnel. Screen-space links
+    // between motes at very different depths would read as rubber bands into
+    // the screen and fight the fly-through, so they only exist when still.
+    if (!this.isMobile && Math.abs(this.sv || 0) <= 3) {
       this.hash();
       ctx.lineWidth = 0.6;
       var range = this.linkRange;
@@ -309,19 +399,50 @@
     // Render motes
     for (var i = 0; i < this.particles.length; i++) {
       var p = this.particles[i];
-      var twinkle = p.base + Math.sin(p.phase) * 0.24;
+      /* Depth drives everything: nearer is bigger and brighter. */
+      var near = Z_FAR / p.z;
+      var fade = Math.min(1, (p.z - Z_NEAR) / (Z_SPAN * 0.22)); /* ease in at the near plane */
+      var twinkle = (p.base + Math.sin(p.phase) * 0.24) * Math.min(1, 0.35 + near * 0.4) * fade;
       if (twinkle <= 0.02) continue;
 
+      /* The streak is simply where the mote was last frame projected against
+         where it is now — automatically radial from the vanishing point and
+         automatically longer the closer it gets. */
+      var sx = this.cx + this.swayX + p.wx * (F / p.pz);
+      var sy = this.cy + this.swayY + p.wy * (F / p.pz);
+      var tdx = sx - p.x;
+      var tdy = sy - p.y;
+      var trail = Math.sqrt(tdx * tdx + tdy * tdy);
+      if (trail > MAX_TRAIL) {
+        /* Near the camera one frame of travel can span the whole viewport.
+           Keep the direction, clamp the length. */
+        var k = MAX_TRAIL / trail;
+        sx = p.x + tdx * k;
+        sy = p.y + tdy * k;
+        trail = MAX_TRAIL;
+      }
+
+      if (trail > 2) {
+        var c2 = p.tone;
+        ctx.globalAlpha = twinkle * 0.7;
+        ctx.strokeStyle = "rgb(" + c2[0] + "," + c2[1] + "," + c2[2] + ")";
+        ctx.lineWidth = Math.max(0.6, p.r * near * 0.5);
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+
       var sprite = SPRITES[p.toneIdx];
-      var halo = p.r * 6.4;
+      var halo = p.r * 6.4 * near;
       ctx.globalAlpha = twinkle;
       ctx.drawImage(sprite, p.x - halo / 2, p.y - halo / 2, halo, halo);
 
       var c = p.tone;
-      ctx.globalAlpha = twinkle;
       ctx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r * 0.62, 0, 6.283);
+      ctx.arc(p.x, p.y, Math.max(0.4, p.r * 0.62 * near), 0, 6.283);
       ctx.fill();
     }
     ctx.globalAlpha = 1.0;

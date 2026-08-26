@@ -99,9 +99,17 @@
     }
 
     var targetThreshold = view * LINE_AT - currentBoxTop;
+    /* Four states from one distance: approaching, near, arrived, passed.
+       All positional, so scrolling back up reverses them for free. */
+    var nearBand = view * 0.4;
+    var pastBand = view * 0.15;
     for (var i = 0; i < cachedMarks.length; i++) {
       var cm = cachedMarks[i];
-      cm.el.classList.toggle("is-lit", cm.relTop < targetThreshold);
+      var d = targetThreshold - cm.relTop; /* >0 once the mark is above the line */
+      var lit = d > 0;
+      cm.el.classList.toggle("is-lit", lit);
+      cm.el.classList.toggle("is-near", !lit && d > -nearBand);
+      cm.el.classList.toggle("is-past", d > pastBand);
     }
   }
 
@@ -122,4 +130,14 @@
   window.addEventListener("scroll", schedule, { passive: true });
   window.addEventListener("load", build);
   build();
+
+  /* Anything that changes document height above the spine invalidates the
+     geometry cached in build(). Callers rebuild through here rather than
+     firing a synthetic resize, which would also re-seed the particle field. */
+  window.RealmPathway = {
+    rebuild: function () {
+      clearTimeout(rebuildTimer);
+      rebuildTimer = setTimeout(build, 60);
+    }
+  };
 })();

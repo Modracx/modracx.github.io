@@ -59,16 +59,34 @@
   };
 
   Starfield.prototype.render = function () {
+    /* The three star sheets are driven by js/depth.js, which moves the whole
+       rig once per frame and lets perspective divide the displacement per
+       plane. Touching them here as well would fight that transform.
+
+       The nebulae stay out of the 3D subtree — they carry blur(90px), and
+       scaling a blurred box re-rasterises it and scales the blur with it. */
+    if (window.RealmDepth) {
+      for (var n = 0; n < this.nebulae.length; n++) {
+        var f = (n + 1) * 0.012;
+        this.nebulae[n].style.translate =
+          (this.mx * f * 600).toFixed(2) + "px " +
+          (this.my * f * 400 - this.sy * f * 0.5).toFixed(2) + "px";
+      }
+      return;
+    }
+
+    /* No depth engine (older browser, or it bailed): the original flat
+       parallax, unchanged. */
     for (var i = 0; i < this.layers.length; i++) {
       var d = this.depths[i] || 0.02;
       var x = this.mx * d * 900;
       var y = this.my * d * 600 - this.sy * d * 2.4;
       this.layers[i].style.transform = "translate3d(" + x.toFixed(2) + "px," + y.toFixed(2) + "px,0)";
     }
-    for (var n = 0; n < this.nebulae.length; n++) {
-      var f = (n + 1) * 0.012;
-      this.nebulae[n].style.translate =
-        (this.mx * f * 600).toFixed(2) + "px " + (this.my * f * 400).toFixed(2) + "px";
+    for (var m = 0; m < this.nebulae.length; m++) {
+      var g = (m + 1) * 0.012;
+      this.nebulae[m].style.translate =
+        (this.mx * g * 600).toFixed(2) + "px " + (this.my * g * 400).toFixed(2) + "px";
     }
   };
 
@@ -128,25 +146,44 @@
       self.tx = e.clientX;
       self.ty = e.clientY;
       self.el.classList.add("is-lit");
+      self.wake();
     }, { passive: true });
 
     document.addEventListener("pointerleave", function () {
       self.el.classList.remove("is-lit");
-    });
+    }, { passive: true });
+  };
+
+  /* Previously an unconditional rAF that recursed forever, even with the
+     pointer untouched for an hour and the tab in the background. Now it
+     settles and unsubscribes, and wakes on the next pointermove. */
+  MagicCursor.prototype.wake = function () {
+    if (this.stopTick) {
+      window.RealmTicker.requestFrame();
+      return;
+    }
+    var self = this;
+    this.stopTick = window.RealmTicker.subscribe(function (dt) {
+      var k = Math.min(0.12 * dt, 1);
+      self.x += (self.tx - self.x) * k;
+      self.y += (self.ty - self.y) * k;
+      self.el.style.transform =
+        "translate3d(" + self.x.toFixed(1) + "px," + self.y.toFixed(1) + "px,0)";
+      if (Math.abs(self.tx - self.x) < 0.1 && Math.abs(self.ty - self.y) < 0.1) {
+        self.x = self.tx;
+        self.y = self.ty;
+        self.stopTick();
+        self.stopTick = null;
+      }
+    }, "continuous");
   };
 
   MagicCursor.prototype.loop = function () {
-    var self = this;
-    (function frame() {
-      self.x += (self.tx - self.x) * 0.12;
-      self.y += (self.ty - self.y) * 0.12;
-      self.el.style.transform = "translate3d(" + self.x.toFixed(1) + "px," + self.y.toFixed(1) + "px,0)";
-      requestAnimationFrame(frame);
-    })();
+    /* Nothing to start: the lerp only runs while the pointer is moving. */
   };
 
   var wisp = document.querySelector(".wisp");
-  if (wisp && window.matchMedia("(pointer: fine)").matches) {
+  if (wisp && window.RealmTicker && window.matchMedia("(pointer: fine)").matches) {
     new MagicCursor(wisp);
   }
 })();
