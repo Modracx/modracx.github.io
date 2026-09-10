@@ -200,8 +200,8 @@
         <p class="lede">An atomic symlink swap took ninety-four seconds to become visible on six of eight nodes, and the store stayed up the whole time serving broken pages. Zero-downtime is a state-compatibility problem, not a deploy-script problem.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 25 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 36 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -278,7 +278,7 @@
 
         <p>The standard layout is release directories and a symlink. On PHP stacks Deployer is the tool I reach for; Capistrano is the same idea for Ruby, and the pattern is old enough that every ecosystem has a version of it.</p>
 
-        <pre><code class="language-bash">/var/www/shop/
+        <code class="language-bash">/var/www/shop/
   releases/
     20260112143022/     # previous
     20260119091544/     # current
@@ -287,23 +287,23 @@
     var/log/
     pub/media/
     app/etc/env.php
-  current -> releases/20260119091544</code></pre>
+  current -> releases/20260119091544</code>
 
         <p>The critical detail, and it is a single character: the symlink swap must be atomic. <code>ln -s</code> onto an existing link fails; <code>rm</code> then <code>ln -s</code> leaves a window of tens of milliseconds where <code>current</code> does not exist, and on a busy node that window is hundreds of failed requests. The correct incantation creates a temporary link and renames it, because <code>rename(2)</code> is atomic on POSIX filesystems:</p>
 
-        <pre><code class="language-bash"># Wrong: there is a window with no symlink at all.
+        <code class="language-bash"># Wrong: there is a window with no symlink at all.
 rm -f /var/www/shop/current
 ln -s /var/www/shop/releases/20260126101233 /var/www/shop/current
 
 # Right: rename(2) replaces the link in a single atomic operation.
 ln -sfn /var/www/shop/releases/20260126101233 /var/www/shop/current.tmp
-mv -Tf /var/www/shop/current.tmp /var/www/shop/current</code></pre>
+mv -Tf /var/www/shop/current.tmp /var/www/shop/current</code>
 
         <p>Deployer's <code>deploy:symlink</code> task already does this correctly. I mention it because I have twice found hand-rolled deploy scripts doing the first version, in both cases written by someone competent who did not know the difference existed.</p>
 
         <p>A Deployer recipe for Magento 2, with the parts that matter annotated:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 namespace Deployer;
 
 require 'recipe/magento2.php';
@@ -351,7 +351,7 @@ task('lb:in', function () {
         --targets Id=$id");
 });
 
-after('deploy:failed', 'deploy:unlock');</code></pre>
+after('deploy:failed', 'deploy:unlock');</code>
 
         <p>Two opinions embedded in that file. Build once and ship an artifact, rather than running <code>composer install</code> on each node — I have seen a Composer registry blip produce two nodes on different minor versions of a dependency, which took a day to diagnose. And take the node out of the load balancer before you touch it, rather than relying on a health check to notice, because the health check's polling interval is your outage window.</p>
 
@@ -369,7 +369,7 @@ after('deploy:failed', 'deploy:unlock');</code></pre>
 
         <p>The good fix: do not put a symlink in the document root at all. Point nginx at the resolved release path and change the nginx config instead.</p>
 
-        <pre><code class="language-nginx"># /etc/nginx/conf.d/shop-release.conf — written by the deploy, then reloaded.
+        <code class="language-nginx"># /etc/nginx/conf.d/shop-release.conf — written by the deploy, then reloaded.
 # $realpath_root gives nginx's own resolution, and passing it to PHP means
 # PHP never has to resolve the symlink itself.
 map $host $release_root {
@@ -389,16 +389,16 @@ server {
         fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
         fastcgi_param DOCUMENT_ROOT   $realpath_root;
     }
-}</code></pre>
+}</code>
 
         <p>With <code>$realpath_root</code>, PHP is given a path like <code>/var/www/shop/releases/20260126101233/pub/index.php</code> and there is no symlink for it to cache. A deploy becomes visible on the very next request. No FPM reload, no opcache cold start.</p>
 
         <p>Set <code>open_file_cache</code> in nginx thoughtfully if you do this — nginx has its own caching of stat results, and a long <code>open_file_cache_valid</code> reintroduces the same problem one layer up:</p>
 
-        <pre><code class="language-nginx">open_file_cache          max=20000 inactive=60s;
+        <code class="language-nginx">open_file_cache          max=20000 inactive=60s;
 open_file_cache_valid    10s;   # not 300s; this is your deploy propagation delay
 open_file_cache_min_uses 2;
-open_file_cache_errors   off;   # or a 404 during deploy gets cached as a 404</code></pre>
+open_file_cache_errors   off;   # or a 404 during deploy gets cached as a 404</code>
 
         <p>That last line is not optional. With <code>open_file_cache_errors on</code>, a file that momentarily does not exist during a deploy gets its non-existence cached for the validity period, and you serve 404s for assets that are demonstrably present on disk. It is a wonderfully confusing bug.</p>
 
@@ -408,7 +408,7 @@ open_file_cache_errors   off;   # or a 404 during deploy gets cached as a 404</c
 
         <p>The sequence that actually drains cleanly:</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # drain.sh — take one node out of service and wait for genuine quiescence.
 set -euo pipefail
 
@@ -436,7 +436,7 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-echo "WARNING: still $active active after 60s; proceeding anyway" &gt;&amp;2</code></pre>
+echo "WARNING: still $active active after 60s; proceeding anyway" &gt;&amp;2</code>
 
         <p>Requiring <code>pm.status_path</code> to be enabled in your FPM pool is a small price for knowing rather than guessing. The fixed <code>sleep 30</code> that most deploy scripts use is either too short on a bad day or wasteful on a good one, and it never tells you which.</p>
 
@@ -454,20 +454,20 @@ echo "WARNING: still $active active after 60s; proceeding anyway" &gt;&amp;2</co
 
         <p>Release N+1 adds the new structure. It does not remove anything. Old code continues to work because nothing it depends on has changed.</p>
 
-        <pre><code class="language-sql">-- Release N+1. Additive only. Old code ignores the new column entirely.
+        <code class="language-sql">-- Release N+1. Additive only. Old code ignores the new column entirely.
 ALTER TABLE sales_order_grid
   ADD COLUMN fulfilment_channel VARCHAR(32) NULL DEFAULT NULL,
   ADD INDEX IDX_FULFILMENT_CHANNEL (fulfilment_channel);
 
 -- New code writes BOTH the old and the new field. Old code reads the old
 -- one and is none the wiser. This dual-write phase is what makes rollback
--- possible: revert to N and nothing is missing.</code></pre>
+-- possible: revert to N and nothing is missing.</code>
 
         <h3>Migrate</h3>
 
         <p>Backfill the new structure for existing rows, in batches, outside the deploy. This is not a deploy step and should never be one. A backfill that locks a 40-million-row table for eleven minutes is an outage regardless of how atomic your symlink was.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // A backfill worker. Batched, resumable, and rate-limited by replica lag.
 final class BackfillFulfilmentChannel
 {
@@ -509,7 +509,7 @@ final class BackfillFulfilmentChannel
             }
         }
     }
-}</code></pre>
+}</code>
 
         <p>The replica-lag check is the line people leave out and then regret. A tight backfill loop on the primary generates binlog faster than replicas can apply it, and if your read traffic goes to replicas you have just given yourself stale carts and missing orders without deploying a single line of application code.</p>
 
@@ -517,8 +517,8 @@ final class BackfillFulfilmentChannel
 
         <p>Release N+2, or N+5, or the following month — after you are certain no running code touches the old structure — removes it. Verify rather than assume. A query against your slow log, or a temporary trigger that logs writes to the deprecated column, is cheap insurance.</p>
 
-        <pre><code class="language-sql">-- Release N+3, once the old column has had zero reads for a fortnight.
-ALTER TABLE sales_order DROP COLUMN shipping_method_legacy;</code></pre>
+        <code class="language-sql">-- Release N+3, once the old column has had zero reads for a fortnight.
+ALTER TABLE sales_order DROP COLUMN shipping_method_legacy;</code>
 
         <p>The uncomfortable truth about expand/migrate/contract is that the contract step never gets scheduled. Teams do expand, do migrate, ship the feature, and the deprecated column sits there for four years growing an ever-more-elaborate mythology about whether anything still needs it. Put the contract migration in the backlog with a date, attached to the same ticket, or accept that you are building a schema you cannot change.</p>
 
@@ -526,7 +526,7 @@ ALTER TABLE sales_order DROP COLUMN shipping_method_legacy;</code></pre>
 
         <p>MySQL 8.0 does far more <code>ALGORITHM=INPLACE</code> operations than 5.7 did, but "inplace" is not the same as "non-blocking", and adding an index to a large <code>sales_order_grid</code> will still hold a metadata lock at the start and end of the operation. On tables above a few million rows I use <code>pt-online-schema-change</code> or <code>gh-ost</code>.</p>
 
-        <pre><code class="language-bash"># gh-ost: builds a shadow table, tails the binlog to keep it in sync,
+        <code class="language-bash"># gh-ost: builds a shadow table, tails the binlog to keep it in sync,
 # then does an atomic cut-over. The throttle flags are the important part.
 gh-ost \
   --host=db-primary.internal --database=shop --table=sales_order \
@@ -539,7 +539,7 @@ gh-ost \
   --throttle-control-replicas='db-replica-01.internal,db-replica-02.internal' \
   --allow-on-master \
   --postpone-cut-over-flag-file=/tmp/ghost.postpone \
-  --execute</code></pre>
+  --execute</code>
 
         <p>The <code>postpone-cut-over-flag-file</code> is the flag I would not run without. It lets gh-ost do all its work and then wait, indefinitely, until you delete that file. You do the copy at 3am on a Sunday and the cut-over at 10am on a Monday with the whole team watching, rather than having a cut-over fire unattended.</p>
 
@@ -551,7 +551,7 @@ gh-ost \
 
         <p>The split you want:</p>
 
-        <pre><code class="language-bash"># 1. Find out whether anything is actually pending. On most deploys the
+        <code class="language-bash"># 1. Find out whether anything is actually pending. On most deploys the
 #    answer is nothing, and the whole step can be skipped.
 bin/magento setup:db:status
 # echo $? -> 0 = up to date, 1 = upgrade needed, 2 = manual action required
@@ -565,7 +565,7 @@ bin/magento setup:db-schema:upgrade
 
 # 4. Data patches after the code is live everywhere, because patches often
 #    depend on new code being present.
-bin/magento setup:db-data:upgrade</code></pre>
+bin/magento setup:db-data:upgrade</code>
 
         <p>My working rule on any Magento project of size: <strong>a deploy that requires a schema change is a different kind of deploy and gets a different runbook.</strong> Ninety percent of deploys touch no schema at all, and <code>setup:db:status</code> returning 0 lets you skip the expensive step entirely. Reserve the schema deploy for a scheduled slot, with the expand/contract discipline above applied to whatever the modules want to do.</p>
 
@@ -610,7 +610,7 @@ bin/magento setup:db-data:upgrade</code></pre>
 
         <p><strong>Version the session namespace when you have no choice.</strong> If you genuinely must break compatibility, change the Redis key prefix. Every customer gets a new empty session, which is bad, but it is bad in an obvious way you can announce rather than bad in a way that silently drops carts.</p>
 
-        <pre><code class="language-php">// app/etc/env.php — the prefix is the escape hatch. Bumping it invalidates
+        <code class="language-php">// app/etc/env.php — the prefix is the escape hatch. Bumping it invalidates
 // every session at once. Use it deliberately, never as routine hygiene.
 'session' =&gt; [
     'save' =&gt; 'redis',
@@ -623,7 +623,7 @@ bin/magento setup:db-data:upgrade</code></pre>
         'break_after_frontend' =&gt; '5',
         'prefix' =&gt; 'sess_v4_',
     ],
-],</code></pre>
+],</code>
 
         <p>Keep sessions in a different Redis database — or a different instance entirely — from your cache. When you flush cache during a deploy, and you will, a shared instance means you flushed every cart on the site. I have watched this happen on a Friday afternoon. The <code>FLUSHALL</code> was in the deploy script, had been for two years, and had only ever been run against a Redis where sessions did not live.</p>
 
@@ -637,7 +637,7 @@ bin/magento setup:db-data:upgrade</code></pre>
 
         <p>If assets go to S3 or a CDN bucket rather than the app nodes, this is easier: upload new assets, never delete old ones on deploy, and prune with a lifecycle rule at 30 days.</p>
 
-        <pre><code class="language-bash"># Sync new assets. Note the absence of --delete; that flag is what turns a
+        <code class="language-bash"># Sync new assets. Note the absence of --delete; that flag is what turns a
 # deploy into an outage for anyone holding older HTML.
 aws s3 sync pub/static/ "s3://shop-static/${RELEASE}/" \
   --cache-control 'public, max-age=31536000, immutable' \
@@ -646,11 +646,11 @@ aws s3 sync pub/static/ "s3://shop-static/${RELEASE}/" \
 
 # Prune separately, on a schedule, well outside any deploy.
 aws s3 rm "s3://shop-static/" --recursive \
-  --exclude '*' --include "*/" --dryrun   # review before removing --dryrun</code></pre>
+  --exclude '*' --include "*/" --dryrun   # review before removing --dryrun</code>
 
         <p><strong>API contract drift.</strong> Old JavaScript calling a changed endpoint. The mitigations, in order of how much I like them: do not break endpoints (add fields, never remove or repurpose them); version the endpoint if you must; and, as a last line, have the client send its release identifier and let the server respond with a "please reload" signal when the gap is too wide.</p>
 
-        <pre><code class="language-javascript">// Injected into the page at build time.
+        <code class="language-javascript">// Injected into the page at build time.
 const CLIENT_RELEASE = '20260126101233';
 
 async function api(path, init = {}) {
@@ -666,7 +666,7 @@ async function api(path, init = {}) {
     showBanner('A new version is available. Refresh to continue.');
   }
   return res;
-}</code></pre>
+}</code>
 
         <p>I am deliberately not auto-reloading there. Blowing away a half-filled checkout form to fix a compatibility problem the customer cannot see is a bad trade. Tell them, let them choose.</p>
 
@@ -682,15 +682,15 @@ async function api(path, init = {}) {
 
         <p><strong>Soft-purge</strong> where your CDN supports it. Fastly's soft purge marks content stale rather than removing it, so the first request after the purge gets the stale copy immediately while a background fetch revalidates. Your cache hit ratio does not fall off a cliff.</p>
 
-        <pre><code class="language-bash"># Fastly soft purge by surrogate key — stale-while-revalidate semantics
+        <code class="language-bash"># Fastly soft purge by surrogate key — stale-while-revalidate semantics
 # rather than a hole in the cache.
 curl -X POST "https://api.fastly.com/service/${SERVICE_ID}/purge/cms-block-homepage-hero" \
   -H "Fastly-Key: ${FASTLY_TOKEN}" \
-  -H "Fastly-Soft-Purge: 1"</code></pre>
+  -H "Fastly-Soft-Purge: 1"</code>
 
         <p><strong>Warm before you cut over</strong> if you must flush hard. A crawler over your top 500 URLs, run against the new release before it takes traffic, costs two minutes and removes the herd entirely.</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # warm.sh — hit the top N URLs against a specific node before it rejoins
 # the load balancer. Concurrency deliberately modest: this is meant to
 # populate the cache, not to load-test the node you are about to depend on.
@@ -699,7 +699,7 @@ NODE="$1"
 xargs -a top-500-urls.txt -P 8 -I{} \
   curl -s -o /dev/null -w '%{http_code} %{time_total} {}\n' \
     --resolve "shop.example.com:443:${NODE}" "https://shop.example.com{}" \
-  | awk '$1 != "200" { print "WARN", $0 }'</code></pre>
+  | awk '$1 != "200" { print "WARN", $0 }'</code>
 
         <p>The <code>--resolve</code> flag is what makes this target one specific node rather than whatever the load balancer feels like. Without it you warm the fleet you were already serving from and learn nothing.</p>
 
@@ -709,7 +709,7 @@ xargs -a top-500-urls.txt -P 8 -I{} \
 
         <p>A health check should assert the dependencies the node actually needs, and it should be able to say "not yet" during a deploy without saying "broken".</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // pub/health.php — deliberately outside the framework so a broken DI
 // container still produces a useful answer rather than a 500.
 header('Content-Type: application/json');
@@ -761,7 +761,7 @@ $checks['schema_version'] = $db-&gt;query(
 )-&gt;fetchColumn() ?: 'unknown';
 
 http_response_code($ok ? 200 : 503);
-echo json_encode(['status' =&gt; $ok ? 'ok' : 'fail', 'release' =&gt; $release] + $checks);</code></pre>
+echo json_encode(['status' =&gt; $ok ? 'ok' : 'fail', 'release' =&gt; $release] + $checks);</code>
 
         <p>Two design points. The drain flag is checked first and returns 503 without touching any dependency, so a node you are deliberately removing does not page anyone. And the health check reports the release identifier, which means your load balancer's target health page becomes a live view of which nodes are on which version during a rollout — genuinely useful, and free.</p>
 
@@ -791,7 +791,7 @@ echo json_encode(['status' =&gt; $ok ? 'ok' : 'fail', 'release' =&gt; $release] 
 
         <p><strong>Cron overlapping a deploy.</strong> Magento's cron runs every minute and its jobs can run for many minutes. A deploy that swaps code underneath a running indexer produces class-not-found fatals mid-reindex, and depending on the indexer, a partially rebuilt index that looks fine to every health check. Disable cron before the deploy and re-enable after, and make that part of the deploy, not a wiki page.</p>
 
-        <pre><code class="language-php">// deploy.php — bracket the whole deploy for cron hosts.
+        <code class="language-php">// deploy.php — bracket the whole deploy for cron hosts.
 task('cron:pause', function () {
     run('crontab -l | sed "s|^\([^#]\)|#\1|" | crontab -');
     // Wait for anything already running to finish rather than yanking it.
@@ -803,7 +803,7 @@ task('cron:resume', function () {
 })-&gt;select('role=cron');
 
 before('deploy:symlink', 'cron:pause');
-after('deploy:success', 'cron:resume');</code></pre>
+after('deploy:success', 'cron:resume');</code>
 
         <p><strong>Message format changes.</strong> A queue is a durable buffer of messages written by one version and read by another, which makes it a distributed-systems compatibility problem wearing a friendly hat. If N+1 changes a message schema, N+1's consumers must still handle N's messages sitting in the queue, and N's consumers — still running for the next few minutes — must not choke on N+1's. Same expand/contract rule, same three-release cadence.</p>
 
@@ -901,11 +901,19 @@ after('deploy:success', 'cron:resume');</code></pre>
           <ul>
             <li>
               <strong><a href="/blog/cicd-pipeline-ecommerce/">Building CI/CD Pipelines for Enterprise E-Commerce Deployments</a></strong>
-              <p>Automated GitHub Actions workflows.</p>
+              <p>Vendor-neutral CI/CD for ecommerce: build once deploy many, gates that block vs warn, expand...</p>
             </li>
             <li>
-              <strong><a href="/blog/security-hardening-checklist/">Comprehensive Security Hardening Checklist for Magento 2</a></strong>
-              <p>Linux file permissions and SSH access control.</p>
+              <strong><a href="/blog/azure-devops-magento-shopify-cicd/">Azure DevOps CI/CD Pipelines for Enterprise E-Commerce</a></strong>
+              <p>Build-once-deploy-many Azure Pipelines for Magento 2 and Shopify themes: artefacts, static c...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Decoupling Front-End &amp; Back-End</a></strong>
+              <p>An honest engineering assessment of headless commerce: what decoupling genuinely buys you, t...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/edge-personalization/">Leveraging Edge Computing for Real-Time Personalization</a></strong>
+              <p>Geo and segment personalisation at the edge without destroying cacheability: cache keys inst...</p>
             </li>
           </ul>
         </div>

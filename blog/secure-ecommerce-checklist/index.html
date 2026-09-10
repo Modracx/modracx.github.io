@@ -218,8 +218,8 @@
         <p class="lede">An old contractor account with a reused password edited a CMS block, and the block rendered on checkout. Nobody exploited anything. Here is the operational checklist that would have caught it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
+          <span>Reading Time: 34 min read</span> •
+          <span>Category: <a href="/blog/archive/#security-compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
 
@@ -292,7 +292,7 @@
 
         <p>You can get a rough version of the third list mechanically. On a Magento 2 estate:</p>
 
-        <pre><code class="language-bash"># Everything installed, including things nobody remembers installing
+        <code class="language-bash"># Everything installed, including things nobody remembers installing
 bin/magento module:status --enabled | sort
 
 # Composer packages that are not first-party, with their installed versions
@@ -301,11 +301,11 @@ composer show --direct --format=json \
 
 # Anything that has been patched in place — a classic source of upgrade pain
 ls -la vendor/*/*/ 2>/dev/null | grep -i patch
-composer show -i 2>/dev/null | wc -l</code></pre>
+composer show -i 2>/dev/null | wc -l</code>
 
         <p>And in the browser, on the live site, for the client-side half:</p>
 
-        <pre><code class="language-javascript">// Paste into the console on a product page and again on checkout.
+        <code class="language-javascript">// Paste into the console on a product page and again on checkout.
 // The two lists are usually different, and the difference is the interesting part.
 const here = location.origin;
 const rows = performance.getEntriesByType('resource')
@@ -316,7 +316,7 @@ const rows = performance.getEntriesByType('resource')
 // Collapse to hosts so the output is readable rather than exhaustive
 const byHost = {};
 for (const r of rows) byHost[r.host] = (byHost[r.host] || 0) + 1;
-console.table(byHost);</code></pre>
+console.table(byHost);</code>
 
         <p>Run that on a real customer journey rather than a cold page load — some vendors only inject their second-stage script after a consent event or a cart action, and a single page view will not see them.</p>
 
@@ -338,7 +338,7 @@ console.table(byHost);</code></pre>
 
         <p>The reason nobody reconciles accounts is that it takes an hour of clicking. Automate the export and it takes five minutes.</p>
 
-        <pre><code class="language-sql">-- Magento 2: admin users, last login, and 2FA state.
+        <code class="language-sql">-- Magento 2: admin users, last login, and 2FA state.
 -- Run this monthly and diff it against last month.
 SELECT
   u.username,
@@ -349,7 +349,7 @@ SELECT
   DATEDIFF(NOW(), u.logdate)      AS days_since_login,
   (SELECT COUNT(*) FROM tfa_user_config c WHERE c.user_id = u.user_id) AS tfa_rows
 FROM admin_user u
-ORDER BY days_since_login DESC;</code></pre>
+ORDER BY days_since_login DESC;</code>
 
         <p>Anything with a null last login, or more than sixty days idle, or zero 2FA rows, is a question. Not necessarily a problem — the release account may legitimately be idle — but a question with an answer that someone writes down.</p>
 
@@ -379,7 +379,7 @@ ORDER BY days_since_login DESC;</code></pre>
 
         <p><strong>Make the boring path the easy path.</strong> If applying a security release requires a two-day regression test by hand, you will not do it monthly. The investment that pays here is a smoke test suite covering the twenty journeys that matter — add to cart, checkout, login, search, admin order edit — that runs in under fifteen minutes. That is what converts patching from a project into a routine.</p>
 
-        <pre><code class="language-yaml"># .github/workflows/security-watch.yml
+        <code class="language-yaml"># .github/workflows/security-watch.yml
 # Runs nightly. Fails loudly rather than opening a PR nobody reviews.
 name: security-watch
 on:
@@ -406,7 +406,7 @@ jobs:
           image-ref: ghcr.io/example/storefront:latest
           severity: HIGH,CRITICAL
           exit-code: '1'
-          ignore-unfixed: true   # a CVE with no fix available is a decision, not a build failure</code></pre>
+          ignore-unfixed: true   # a CVE with no fix available is a decision, not a build failure</code>
 
         <p>The <code>ignore-unfixed</code> flag is the one I would draw attention to. Without it, teams learn within a fortnight that the security job is always red and start ignoring it, which is worse than not having it. A scanner that cries wolf is a scanner you have disabled.</p>
 
@@ -432,7 +432,7 @@ jobs:
 
         <p>For the checkout page specifically, the bar should be much higher than everywhere else, and PCI DSS v4.0 now requires you to be able to justify and inventory every script that runs on it. The mechanics of that requirement, and the scope questions underneath it, are in the <a href="/blog/pci-dss-compliance/">PCI DSS blueprint</a>. The operational version, which is what belongs on this checklist, is simpler: maintain a file in your repository listing every third-party script on the payment page with an owner and a reason, and fail the build if the rendered page contains a script host that is not in it.</p>
 
-        <pre><code class="language-python">#!/usr/bin/env python3
+        <code class="language-python">#!/usr/bin/env python3
 """checkout-scripts.py — compare live checkout script hosts to the allowlist.
 Run in CI after deploy, and nightly. Exit 1 on drift."""
 import re
@@ -458,7 +458,7 @@ if unexpected:
         print(f"  {h}", file=sys.stderr)
     sys.exit(1)
 
-print(f"checkout ok — {len(hosts)} known hosts")</code></pre>
+print(f"checkout ok — {len(hosts)} known hosts")</code>
 
         <p>That catches the markup case only. Scripts injected at runtime by other scripts need a browser to see, which means running the same idea in a headless browser against a real page load — more setup, and worth it for a payment page.</p>
 
@@ -470,12 +470,12 @@ print(f"checkout ok — {len(hosts)} known hosts")</code></pre>
 
         <p>For existing secrets, the uncomfortable truth is that if a credential has ever been committed, it is compromised, even if the commit was reverted and the repository is private. Git history is durable, backups exist, clones exist, and a former contractor's laptop exists. Rotate it. A scan takes minutes:</p>
 
-        <pre><code class="language-bash"># Full-history scan. On a large repo this takes a while — let it run.
+        <code class="language-bash"># Full-history scan. On a large repo this takes a while — let it run.
 docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
   detect --source=/repo --report-format=json --report-path=/repo/gitleaks.json
 
 # Then, for a Magento estate specifically, the file that matters most
-grep -n 'crypt\|key' app/etc/env.php | head</code></pre>
+grep -n 'crypt\|key' app/etc/env.php | head</code>
 
         <p>The Magento encryption key deserves its own sentence. It encrypts payment configuration and other sensitive values in the database. If it leaks, the database dump that leaked with it is far more interesting to an attacker. If you find it in a repository, in a Slack message, or in a wiki page, rotating it is a real piece of work — it re-encrypts values across the install — but it is work you have to do, and the mechanics belong in the same conversation as the file permission rules covered in the <a href="/blog/security-hardening-checklist/">server hardening checklist</a>.</p>
 
@@ -509,7 +509,7 @@ grep -n 'crypt\|key' app/etc/env.php | head</code></pre>
 
         <p><strong>Outbound connections to hosts you did not expect.</strong> Data exfiltration and command-and-control both look like this. Harder to set up and disproportionately valuable.</p>
 
-        <pre><code class="language-bash"># A poor man's file integrity monitor for a Magento tree.
+        <code class="language-bash"># A poor man's file integrity monitor for a Magento tree.
 # Baseline after deploy; compare on a timer.
 BASE=/var/backups/fim
 APP=/var/www/shop
@@ -531,7 +531,7 @@ case "${1:-check}" in
       exit 1
     fi
     echo "no drift" ;;
-esac</code></pre>
+esac</code>
 
         <p>That is deliberately crude. Proper file integrity monitoring tools exist and are better. But a crude one that runs beats a good one that is on the roadmap, and I have found real problems with almost exactly this script.</p>
 
@@ -674,20 +674,20 @@ esac</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/security-hardening-checklist/">Comprehensive Security Hardening Checklist for Magento 2</a></strong>
-              <p>Linux file permissions and SSH access control.</p>
+              <strong><a href="/blog/security-hardening-checklist/">Security Hardening Checklist for Magento 2</a></strong>
+              <p>Server and infrastructure hardening for a Magento stack: SSH, firewalls, file permissions, P...</p>
             </li>
             <li>
-              <strong><a href="/blog/pci-dss-compliance/">PCI-DSS 4.0 Compliance Checklist for E-Commerce Developers</a></strong>
-              <p>Payment gateway iframe sandboxing and auditing.</p>
+              <strong><a href="/blog/csp-implementation/">Content Security Policy (CSP) Directives for E-Commerce</a></strong>
+              <p>Nonces, strict-dynamic, report-only rollout and the Magento and Shopify specifics of shippin...</p>
             </li>
             <li>
-              <strong><a href="/blog/waf-implementation/">Implementing a Web Application Firewall (WAF) for Ecommerce</a></strong>
-              <p>Cloudflare &amp; AWS WAF expression rules.</p>
+              <strong><a href="/blog/cybersecurity-best-practices-ecommerce/">Cybersecurity Best Practices for E-Commerce Merchants</a></strong>
+              <p>The merchant threat model for ecommerce security: Magecart script governance, credential stu...</p>
             </li>
             <li>
-              <strong><a href="/blog/secure-payment-gateways/">Architecting Secure Payment Gateways</a></strong>
-              <p>Stripe, Adyen, and headless checkout flows.</p>
+              <strong><a href="/blog/sri-implementation/">Subresource Integrity (SRI) Implementation</a></strong>
+              <p>A practical guide to Subresource Integrity for ecommerce: generating hashes, the CORS requir...</p>
             </li>
           </ul>
         </div>

@@ -28,7 +28,7 @@
         "url": "https://www.modracx.com/blog/sfcc-architecture-developer-guide/",
         "datePublished": "2026-08-08T00:00:00Z",
         "dateModified": "2026-08-08T00:00:00Z",
-        "timeRequired": "PT90M",
+        "timeRequired": "PT21M",
         "author": {
           "@type": "Person",
           "name": "Kenneth D'Silva",
@@ -198,8 +198,8 @@
         <p class="lede">When a premier model railway manufacturer attempted to synchronize their sprawling catalog of 140,000 highly specified locomotive parts across six regional storefronts during their holiday season peak, a cascade of silent job failures triggered a database lock. I watched their B2C Commerce (SFCC) instance burn through its entire API quota limit in less than 40 minutes. Here is the unvarnished reality of cartridge shadowing, job collisions, and the exact architectural blueprint required to make Salesforce Commerce Cloud scale without collapsing under its own weight.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 90 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 21 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture & Cloud</a></span>
         </div>
       </div>
       <div class="orrery reveal" aria-hidden="true">
@@ -231,7 +231,7 @@
         <p>If a junior developer creates a file named <code>Product.js</code> in a low-priority cartridge, and another developer later creates a file with the exact same name and directory structure in a high-priority cartridge intending merely to extend it, they often inadvertently obliterate the base functionality. Because the search halts at the high-priority file, the platform silently serves the shadowing file, completely bypassing the intended core logic. Critical functions—like tax calculation bindings, cache headers, or security middleware—are suddenly missing.</p>
         <p>To mitigate this systemic risk, you must strictly adhere to the <code>module.superModule</code> pattern for all controllers and core scripts, and aggressively avoid full-file overrides unless the explicit architectural intent is to completely destroy the underlying logic. Below is a highly detailed example of correctly extending an SFRA controller without destroying the underlying execution context, maintaining the middleware chain, and securely injecting custom data:</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // app_custom_railway/cartridge/controllers/Product.js
 'use strict';
 
@@ -296,7 +296,7 @@ server.prepend('Variation', function (req, res, next) {
 });
 
 module.exports = server.exports();
-</code></pre>
+</code>
 
         <h2>3. OCAPI vs SCAPI: The Architectural Divergence</h2>
         <p>For merchants embarking on headless builds, progressive web apps, or native mobile applications, SFCC provides two distinct API paradigms: the Open Commerce API (OCAPI) and the Salesforce Commerce API (SCAPI). Understanding the deep architectural divergence between these two gateways is critical for designing a system that does not collapse under load.</p>
@@ -330,7 +330,7 @@ module.exports = server.exports();
               <td>Authentication & Identity Federation</td>
               <td>OAuth 2.0 (Business Manager controlled, difficult to federate securely for headless).</td>
               <td>SLAS (Shopper Login and API Access), designed specifically for stateless clients.</td>
-              <td>Migrate entirely to SLAS for seamless headless identity and JWT token management.</td>
+              <td>Migrate entirely to SLAS for unified headless identity and JWT token management.</td>
             </tr>
             <tr>
               <td>Extensibility & Custom Hooks</td>
@@ -353,7 +353,7 @@ module.exports = server.exports();
         <p>If the third-party tax service experiences a minor latency spike—delaying responses from 200ms to 4000ms—the SFCC execution thread blocks, waiting for the HTTP response. When this blockage is multiplied by thousands of concurrent checkout attempts during a holiday rush, you rapidly exhaust the concurrent connection quota. The entire pod locks down, and your storefront crashes entirely due to a downstream failure completely out of your control.</p>
         <p>To survive this hostile architecture, you must aggressively utilize the <code>LocalServiceRegistry</code> and enforce rigid, unyielding timeout parameters. You must treat every external service as actively hostile. Below is the comprehensive, production-grade configuration and execution of an external service call, guaranteeing that a third-party failure does not cascade into a catastrophic storefront outage:</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // app_custom_railway/cartridge/scripts/services/TaxService.js
 'use strict';
 
@@ -470,7 +470,7 @@ function getSerializedLineItems(basket) {
 module.exports = {
     calculateTax: calculateTax
 };
-</code></pre>
+</code>
 
         <h2>5. Multi-Site Caching, Remote Includes, and the B2C Edge</h2>
         <p>SFCC operates an incredibly robust embedded Content Delivery Network (eCDN) powered by Cloudflare. This tier is your primary line of defense against traffic surges. However, controlling these caching layers requires precise, deliberate interaction with the platform's cache control objects within your ISML templates and controller definitions. The most critical mistake developers make is destroying cacheability by mixing static and dynamic data.</p>
@@ -479,7 +479,7 @@ module.exports = {
         <p>By heavily caching the outer layout (the header, footer, and the static product grid framework) and utilizing a highly targeted, explicitly uncacheable remote include specifically for the inventory badge, you maintain a 98% edge cache hit ratio while successfully delivering real-time data to the shopper. This is achieved using the <code>&lt;isinclude url="..." /&gt;</code> tag, mapping to a specialized controller that explicitly disables caching via <code>res.cachePeriod(0)</code>.</p>
         <p>Below is the architectural diagram demonstrating how this fragment assembly functions under the hood:</p>
 
-<pre><code class="language-text">
+<code class="language-text">
 +-------------------------------------------------------------+
 |  SFCC eCDN (Cloudflare Edge)                                |
 |                                                             |
@@ -492,13 +492,13 @@ module.exports = {
 |  |  [Product Card 1]                                     |  |
 |  |  +--------------------+                               |  |
 |  |  | Image & Title      |                               |  |
-|  |  | <isinclude url="/Inventory-Badge?pid=123" />       |--|--+ (Asynchronous Fetch to Origin)
+|  |  | &lt;isinclude url="/Inventory-Badge?pid=123" />       |--|--+ (Asynchronous Fetch to Origin)
 |  |  +--------------------+                               |  |  |
 |  |                                                       |  |  |
 |  |  [Product Card 2]                                     |  |  |
 |  |  +--------------------+                               |  |  |
 |  |  | Image & Title      |                               |  |  |
-|  |  | <isinclude url="/Inventory-Badge?pid=456" />       |--|--+ (Asynchronous Fetch to Origin)
+|  |  | &lt;isinclude url="/Inventory-Badge?pid=456" />       |--|--+ (Asynchronous Fetch to Origin)
 |  |  +--------------------+                               |  |
 |  +-------------------------------------------------------+  |
 +-------------------------------------------------------------+
@@ -516,7 +516,7 @@ module.exports = {
                                                       | "<span class='urgent'> |
                                                       | Only 2 Left!</span>"   |
                                                       +------------------------+
-</code></pre>
+</code>
 
         <h2>6. The Job Framework: Asynchronous Orchestration and Chunking</h2>
         <p>Returning to the incident that opened this exhaustive analysis: how do you prevent database deadlocks during large-scale catalog synchronizations? The answer lies in mastering the SFCC Job Framework's advanced chunking capabilities.</p>
@@ -524,7 +524,7 @@ module.exports = {
         <p>A ChunkJob requires you to define three distinct execution phases: <code>read</code>, <code>process</code>, and <code>write</code>. It reads data in discrete, configurable batches (e.g., 200 records at a time), processes those 200 records, and commits the transaction immediately. It releases the lock, then begins the next chunk. If a lock contention occurs during the write phase of chunk #45, only that specific chunk fails. The job framework can gracefully record the failure, skip those 200 records, and continue processing chunk #46, rather than violently crashing the entire multihour process and rolling back every single change.</p>
         <p>Furthermore, you must rigorously stagger job schedules in the Business Manager cron configurations. You must utilize the <code>JobExecutionContext</code> to verify system state before execution. If the import job detects that the export job is still marked as 'Running', it should intentionally abort its own execution and retry later, rather than blindly crashing into the active database locks.</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // app_custom_railway/cartridge/scripts/jobs/InventoryChunkJob.js
 'use strict';
 
@@ -612,7 +612,7 @@ exports.process = function (item, parameters, stepExecution) {
  * This function is automatically wrapped in a Transaction by the SFCC framework.
  */
 exports.write = function (lines, parameters, stepExecution) {
-    for (var i = 0; i < lines.length; i++) {
+    for (var i = 0; i &lt; lines.length; i++) {
         var line = lines[i];
         try {
             // Update the inventory record. 
@@ -638,7 +638,7 @@ exports.afterStep = function (success, parameters, stepExecution) {
     }
     Logger.info("Inventory Job completed. Processed: {0}. Errors: {1}.", processedCount, errorCount);
 };
-</code></pre>
+</code>
 
         <h2>7. Retrospective: Designing for Constraint</h2>
         <p>B2C Commerce is absolutely not a playground for experimental architecture. It is an enterprise-grade, highly opinionated, rigidly structured SaaS environment expressly designed to process massive transaction volumes securely. When you fight the platform—by attempting to blindly bypass quotas, ignoring the Cartridge Path priorities, or treating legacy OCAPI endpoints as if they were infinitely scalable microservices—the platform will invariably break your storefront.</p>
@@ -686,16 +686,20 @@ exports.afterStep = function (success, parameters, stepExecution) {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization</a></strong>
-              <p>Tuning the frontend for core web vitals and fast loading.</p>
+              <strong><a href="/blog/headless-api-data-architecture/">Headless API &amp; Data Architecture for Large-Scale Ecommerce</a></strong>
+              <p>Designing decoupled ecommerce backends: Storefront API budgets, persisted query optimization...</p>
             </li>
             <li>
-              <strong><a href="/blog/security-hardening-checklist/">Security Hardening Checklist</a></strong>
-              <p>Essential production server and application hardening.</p>
+              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 on AWS: Cloud Architecture, Migration &amp; Cost Optimization</a></strong>
+              <p>Deploying Magento 2 on AWS: design patterns for ECS/EKS nodes, Aurora RDS performance tuning...</p>
             </li>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Why SEO Matters in E-commerce</a></strong>
-              <p>Search intent, crawlability, and conversion optimization.</p>
+              <strong><a href="/blog/bigcommerce-store-creation-guide/">BigCommerce Store Creation: Technical Setup, Stencil Themes &amp; API Architecture</a></strong>
+              <p>A comprehensive technical guide to building an enterprise-grade BigCommerce store, covering ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/multi-cdn-architectures/">Multi-CDN Architectures: High Availability &amp; Edge Failover for Enterprise Commerce</a></strong>
+              <p>How to build a Multi-CDN architecture for global ecommerce: Anycast DNS steering, Cloudflare...</p>
             </li>
           </ul>
         </div>

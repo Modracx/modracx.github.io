@@ -200,8 +200,8 @@
         <p class="lede">A lighting retailer's catalogue tripled and their build went from eleven minutes to four hours and twenty. The static model works — until the parts of commerce that change every minute meet it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 25 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 32 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -307,7 +307,7 @@
 
         <p><strong>Fetch the catalogue once, not once per page.</strong> This is the single largest win available and it is usually a two-hour change. Pull the entire catalogue in a bulk operation at the start of the build, write it to a local file, and have every page read from that.</p>
 
-        <pre><code class="language-javascript">// scripts/fetch-catalogue.mjs — runs once, before the build.
+        <code class="language-javascript">// scripts/fetch-catalogue.mjs — runs once, before the build.
 // Bulk operations return a JSONL file instead of paginating a
 // GraphQL query 20,000 times.
 const mutation = `
@@ -332,13 +332,13 @@ do {
 } while (op.status === 'RUNNING');
 
 const jsonl = await (await fetch(op.url)).text();
-await writeFile('.cache/catalogue.jsonl', jsonl);</code></pre>
+await writeFile('.cache/catalogue.jsonl', jsonl);</code>
 
         <p>On the lighting site this took the data phase from 3h 58m to 90 seconds. One bulk operation instead of twenty thousand queries. The build went from 4h 20m to about 18 minutes without touching anything else.</p>
 
         <p><strong>Cache image processing across builds.</strong> The second biggest cost, and it is entirely wasted work — the same source image gets resized to the same six variants on every build. Key the cache on a hash of the source URL plus the transform parameters and persist it in CI.</p>
 
-        <pre><code class="language-yaml"># Persisting the image cache is usually worth more than any
+        <code class="language-yaml"># Persisting the image cache is usually worth more than any
 # other CI optimisation on a catalogue build.
 - uses: actions/cache@v4
   with:
@@ -346,11 +346,11 @@ await writeFile('.cache/catalogue.jsonl', jsonl);</code></pre>
       .next/cache
       .cache/images
     key: build-cache-${{ github.sha }}
-    restore-keys: build-cache-</code></pre>
+    restore-keys: build-cache-</code>
 
         <p><strong>Do not pre-render pages nobody visits.</strong> On the lighting catalogue, 38% of products had received zero organic sessions in twelve months. Pre-rendering the top 60% by traffic and rendering the rest on demand, cached at the edge after the first request, cut the build again with no user-visible difference. The first visitor to a long-tail product waits an extra 400ms; every visitor after that gets the cached copy.</p>
 
-        <pre><code class="language-javascript">// Next.js: pre-render the pages that matter, defer the rest.
+        <code class="language-javascript">// Next.js: pre-render the pages that matter, defer the rest.
 export async function generateStaticParams() {
   const all = await getCatalogue();
   // Traffic data exported weekly from analytics into the build.
@@ -362,7 +362,7 @@ export async function generateStaticParams() {
 
 // Anything not in the list above is generated on first request
 // and then cached, rather than 404ing.
-export const dynamicParams = true;</code></pre>
+export const dynamicParams = true;</code>
 
         <p><strong>Parallelise across machines only after the above.</strong> Sharding a build across four workers is the lever people reach for first and it is the least effective, because it does nothing about rate limits — four workers hitting a 40-request-per-second API get 10 each. Fix the data access pattern and you probably will not need the shards.</p>
 
@@ -380,7 +380,7 @@ export const dynamicParams = true;</code></pre>
 
         <p><strong>Regeneration is per edge node in some setups.</strong> Depending on the platform, a page cached at the Frankfurt edge and the Sydney edge revalidates independently. Two customers in different regions can see different versions of the same page for a window, which makes bug reports interesting.</p>
 
-        <pre><code class="language-javascript">// Revalidation periods I actually use, and why.
+        <code class="language-javascript">// Revalidation periods I actually use, and why.
 export const revalidate = 3600;   // Product content: hourly is generous.
                                   // Descriptions and images change rarely.
 
@@ -388,7 +388,7 @@ export const revalidate = 3600;   // Product content: hourly is generous.
 // availability badges shift more often.
 export const revalidate = 600;
 
-// Never rely on this for price or stock. See below.</code></pre>
+// Never rely on this for price or stock. See below.</code>
 
         <p>The right mental model: time-based revalidation is a safety net that stops pages drifting indefinitely. It is not a synchronisation mechanism. If you need a change to be live within a known time, you need the next section.</p>
 
@@ -396,7 +396,7 @@ export const revalidate = 600;
 
         <p>Webhook-driven invalidation is what makes the merchandising team stop hating you. When a product changes in the backend, the backend tells the frontend, and that specific page regenerates within seconds.</p>
 
-        <pre><code class="language-javascript">// app/api/revalidate/route.js
+        <code class="language-javascript">// app/api/revalidate/route.js
 import { revalidatePath, revalidateTag } from 'next/cache';
 import crypto from 'node:crypto';
 
@@ -425,7 +425,7 @@ export async function POST(request) {
   }
 
   return Response.json({ revalidated: true });
-}</code></pre>
+}</code>
 
         <p>Two details that matter more than the code.</p>
 
@@ -445,7 +445,7 @@ export async function POST(request) {
 
         <p>The answer is to stop pre-rendering stock at all. Bake in what is stable, fetch what is not.</p>
 
-        <pre><code class="language-javascript">// The product page is static. The availability element is not.
+        <code class="language-javascript">// The product page is static. The availability element is not.
 // It renders a neutral placeholder in the static HTML and fills
 // in on the client from a short-cached endpoint.
 export function Availability({ sku, lastKnown }) {
@@ -464,7 +464,7 @@ export function Availability({ sku, lastKnown }) {
   // Keep it coarse: "available" or "discontinued", never a count.
   const shown = state ?? lastKnown;
   return &lt;span data-live={Boolean(state)}&gt;{label(shown)}&lt;/span&gt;;
-}</code></pre>
+}</code>
 
         <p>The build-time value in that component is deliberate and it needs care. Googlebot indexes what is in the HTML, so your <code>availability</code> in the Product schema comes from the build. If a product is out of stock for two days and your schema says <code>InStock</code>, you will get a Merchant Center mismatch and possibly a suspension. My rule: pre-render availability at a coarse grain that changes slowly — is this product still sold at all — and treat the precise, right-now number as strictly client-side and strictly not in the structured data.</p>
 
@@ -486,7 +486,7 @@ export function Availability({ sku, lastKnown }) {
 
         <p><strong>Fetch anything customer-specific after load, and expect it to look bad.</strong> A trade customer sees the list price for 200ms and then it changes. This is a real experience problem and I have not found a fully satisfying answer. What helps: rendering the price element with a subtle loading treatment for authenticated sessions so the change reads as "loading your price" rather than "the price went up", and detecting the logged-in state from a cookie at the edge so you know before paint which treatment to use.</p>
 
-        <pre><code class="language-javascript">// middleware.js — the edge knows the session before the page renders.
+        <code class="language-javascript">// middleware.js — the edge knows the session before the page renders.
 export function middleware(request) {
   const isTrade = request.cookies.has('trade_session');
   const response = NextResponse.next();
@@ -496,7 +496,7 @@ export function middleware(request) {
   return response;
 }
 
-export const config = { matcher: ['/products/:path*'] };</code></pre>
+export const config = { matcher: ['/products/:path*'] };</code>
 
         <p><strong>For a small number of price variants, generate them all.</strong> Three currencies and two tax modes is six variants per page, which is a build you can afford. Route them by path — <code>/uk/</code>, <code>/de/</code>, <code>/us/</code> — rather than by cookie, because path-based variants are separately cacheable, separately indexable, and can carry hreflang. Cookie-based price switching on a CDN-cached page is a category of bug I would rather not have again; the first time a Frankfurt edge node serves a euro price to a UK customer, you will understand why.</p>
 
@@ -512,7 +512,7 @@ export const config = { matcher: ['/products/:path*'] };</code></pre>
 
         <p>The one thing to watch is the cart count badge in the header, because the header is in every pre-rendered page. Render it empty in the static HTML and populate it on the client. If you render a count into the static page, every visitor sees whatever count was true at build time, which is a genuinely funny bug the first time and an embarrassing one when it reaches production.</p>
 
-        <pre><code class="language-javascript">// The header is baked into 20,000 pages. Anything personal in it
+        <code class="language-javascript">// The header is baked into 20,000 pages. Anything personal in it
 // must start empty and fill in, or you ship one customer's state
 // to everybody.
 export function CartBadge() {
@@ -522,7 +522,7 @@ export function CartBadge() {
   }, []);
   // null renders nothing at all — no zero, no skeleton, no shift.
   return count ? &lt;span className="badge"&gt;{count}&lt;/span&gt; : null;
-}</code></pre>
+}</code>
 
         <p>The same principle applies to anything else personal in shared chrome: recently viewed items, a greeting with the customer's name, a loyalty points balance. Every one of those has to be a hole in the static HTML that gets filled client-side, and every one of those holes is a potential layout shift. Reserve the space.</p>
 
@@ -546,7 +546,7 @@ export function CartBadge() {
 
         <p>The split I use: pre-render a curated list of facet combinations — typically the ones with search volume, which the SEO team can supply — as real static pages with proper titles, descriptions, and copy. Everything else is handled client-side against the search service and marked noindex. This gets you the landing pages without the index bloat, and it keeps the build finite.</p>
 
-        <pre><code class="language-javascript">// Curated facet landing pages, from a file the SEO team maintains.
+        <code class="language-javascript">// Curated facet landing pages, from a file the SEO team maintains.
 // Anything not on this list resolves client-side and is noindexed.
 import curated from '../data/facet-landing-pages.json';
 
@@ -562,7 +562,7 @@ export async function generateMetadata({ params }) {
     description: page.description,
     alternates: { canonical: `/c/${page.slug}` }
   };
-}</code></pre>
+}</code>
 
         <p>Keeping that list in a JSON file the marketing team can edit through a pull request has worked better for me than any admin interface. It is version controlled, it is reviewable, and it makes the deliberate decision to create an indexable page visible to everyone.</p>
 
@@ -576,7 +576,7 @@ export async function generateMetadata({ params }) {
 
         <p>Islands architecture — Astro's model, and increasingly available elsewhere via server components — ships JavaScript only for the components that need it. Rebuilding the lighting product page as static HTML with three interactive islands took the hydration cost to 40ms and the JavaScript payload from 210KB to 34KB.</p>
 
-        <pre><code class="language-html">&lt;!-- Astro: everything is static HTML unless you say otherwise. --&gt;
+        <code class="language-html">&lt;!-- Astro: everything is static HTML unless you say otherwise. --&gt;
 &lt;ProductGallery images={product.images} client:visible /&gt;
 &lt;!-- client:visible defers loading until it scrolls into view --&gt;
 
@@ -585,7 +585,7 @@ export async function generateMetadata({ params }) {
      form submit until then, so it works without JavaScript --&gt;
 
 &lt;SpecificationTable specs={product.specs} /&gt;
-&lt;!-- No directive: pure HTML, zero JavaScript, forever --&gt;</code></pre>
+&lt;!-- No directive: pure HTML, zero JavaScript, forever --&gt;</code>
 
         <p>The detail I would underline is the progressive enhancement on the add-to-cart. Making it a real form post to a real endpoint that works before hydration means the most important interaction on the page is never dead. It costs a server route you would otherwise not need and it is the difference between a fast page and a page that only looks fast.</p>
 
@@ -644,7 +644,7 @@ export async function generateMetadata({ params }) {
 
         <p>Draft mode solves it: a signed cookie that switches specific routes from cached static output to live server rendering against draft data.</p>
 
-        <pre><code class="language-javascript">// app/api/preview/route.js
+        <code class="language-javascript">// app/api/preview/route.js
 import { draftMode } from 'next/headers';
 
 export async function GET(request) {
@@ -656,7 +656,7 @@ export async function GET(request) {
 
   draftMode().enable();
   return Response.redirect(new URL(searchParams.get('path'), request.url));
-}</code></pre>
+}</code>
 
         <p>Two things worth doing alongside it. Put a persistent, obvious banner on the page when draft mode is active, because an editor who forgets they are in preview will report bugs about content that is not live. And make sure preview routes send <code>noindex</code> and are excluded from the CDN cache, because a preview URL that gets shared and indexed is a draft in the search results.</p>
 
@@ -709,12 +709,20 @@ export async function GET(request) {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
-              <p>Combining JAMstack SSG with Next.js edge revalidation.</p>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Decoupling Front-End &amp; Back-End</a></strong>
+              <p>An honest engineering assessment of headless commerce: what decoupling genuinely buys you, t...</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
-              <p>GraphQL backend integrations.</p>
+              <strong><a href="/blog/node-js-high-concurrency-microservices/">Building High-Concurrency Node.js Microservices</a></strong>
+              <p>Event loop lag, load shedding, worker threads, connection pooling and graceful shutdown — bu...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
+              <p>The content layer for headless commerce: modelling in Sanity, Strapi and Contentful, preview...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/containerization-docker-kubernetes/">Containerizing Monolithic E-Commerce: Docker &amp; Kubernetes</a></strong>
+              <p>Containerising a Magento or Node commerce monolith: multi-stage Dockerfiles, persistent medi...</p>
             </li>
           </ul>
         </div>

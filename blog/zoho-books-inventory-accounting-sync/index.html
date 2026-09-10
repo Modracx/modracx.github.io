@@ -200,8 +200,8 @@
         <p class="lede">A sales ledger and a gateway settlement report disagreed by £18,412. Fourteen months of refunds had never been written back as credit notes.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 23 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 31 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -319,7 +319,7 @@
 
         <p><strong>Bulk endpoints exist and are worth using.</strong> Several resources support batch creation, and the search endpoints let you fetch many records at once. Caching contact and item identifiers locally, rather than resolving them per order, is usually the single biggest reduction in call volume available.</p>
 
-        <pre><code class="language-python">import time, requests
+        <code class="language-python">import time, requests
 
 class ZohoBooksClient:
     """Thin client. The interesting parts are token refresh and the
@@ -368,7 +368,7 @@ class ZohoBooksClient:
                           headers=headers, params=params, json=payload, timeout=30)
         if r.status_code == 429:
             raise RateLimited(retry_after=int(r.headers.get("Retry-After", 60)))
-        return r.json()</code></pre>
+        return r.json()</code>
 
         <h2>6. Idempotency, and the Duplicate Invoice Problem</h2>
 
@@ -378,7 +378,7 @@ class ZohoBooksClient:
 
         <p>The pattern I use: put the storefront's order identifier into a custom field on the Zoho document, and before creating anything, search for a document already carrying that reference. It costs one extra call and it is the difference between a safe retry and a duplicated ledger entry.</p>
 
-        <pre><code class="language-python">def ensure_invoice(client, order, state_store):
+        <code class="language-python">def ensure_invoice(client, order, state_store):
     """Create the invoice at most once, whatever the caller does."""
     ref = f"MAG-{order.increment_id}"
 
@@ -401,7 +401,7 @@ class ZohoBooksClient:
     created = client.post("invoices", build_invoice_payload(order, ref))
     invoice_id = created["invoice"]["invoice_id"]
     state_store.put_invoice_id(ref, invoice_id)
-    return invoice_id</code></pre>
+    return invoice_id</code>
 
         <p>Note that the reference number must be genuinely unique and derived from the order, not generated per attempt. A UUID minted on each retry defeats the entire mechanism while looking, in code review, completely correct. I have seen that exact bug pass review twice.</p>
 
@@ -423,7 +423,7 @@ class ZohoBooksClient:
 
         <p>My preference is emphatically the first, with a validation step that compares the returned document total against the storefront total and refuses to proceed if they differ.</p>
 
-        <pre><code class="language-python">def assert_totals_match(order, zoho_invoice, tolerance=Decimal("0.00")):
+        <code class="language-python">def assert_totals_match(order, zoho_invoice, tolerance=Decimal("0.00")):
     """A penny of drift compounds into an unreconcilable ledger.
     Fail loudly at creation, when it is one order, rather than at
     year end, when it is four thousand."""
@@ -437,7 +437,7 @@ class ZohoBooksClient:
             f"order {order.increment_id}: storefront {ours} vs Zoho {theirs}; "
             f"tax config divergence — check rate mapping for "
             f"{order.shipping_address.country_id}"
-        )</code></pre>
+        )</code>
 
         <h3>Place of supply and the contact record</h3>
 
@@ -465,7 +465,7 @@ class ZohoBooksClient:
 
         <p><strong>What happens to tax.</strong> A credit note reverses the tax as well as the net, at the rate that applied on the original invoice — not at today's rate. If a VAT rate changed between sale and return, this matters, and it is a genuine reason to copy the rate identifiers from the original invoice lines rather than recomputing them.</p>
 
-        <pre><code class="language-python">def sync_credit_memo(client, memo, invoice_id, invoice_lines):
+        <code class="language-python">def sync_credit_memo(client, memo, invoice_id, invoice_lines):
     """Mirror a Magento credit memo into Zoho Books as a credit note,
     then refund it against the same account the payment landed in."""
 
@@ -502,7 +502,7 @@ class ZohoBooksClient:
             "amount":     str(memo.refunded_online_amount),
             "account_id": GATEWAY_CLEARING_ACCOUNT_ID,
         })
-    return cn_id</code></pre>
+    return cn_id</code>
 
         <h2>10. Payments, Gateway Fees, and the Clearing Account</h2>
 
@@ -514,7 +514,7 @@ class ZohoBooksClient:
 
         <p>Customer payments post to the clearing account, not the bank. When the gateway settles, you post a transfer from clearing to bank for the settlement amount, and an expense for the fees. The clearing account balance at any moment is money captured but not yet settled, which is a number that ought to exist and that most small merchants cannot produce.</p>
 
-        <pre><code class="language-python"># Settlement import: one deposit, many receipts, one fee expense.
+        <code class="language-python"># Settlement import: one deposit, many receipts, one fee expense.
 # The clearing account should return to (approximately) zero after each
 # settlement cycle. A clearing balance that only grows means receipts are
 # being recorded that never settle — usually duplicate payments.
@@ -543,7 +543,7 @@ def post_settlement(client, batch):
         "amount":           str(fees),
         "date":             batch.settlement_date.isoformat(),
         "reference_number": f"SETTLE-FEE-{batch.id}",
-    })</code></pre>
+    })</code>
 
         <p>That assertion is worth more than it looks. A settlement that does not balance means either a transaction is missing from your capture records or a fee model has changed, and both are things you want to know on the day rather than at year end.</p>
 
@@ -575,7 +575,7 @@ def post_settlement(client, batch):
 
         <p>What I build instead is webhooks for latency plus polling for completeness. The webhook makes the common case fast. A scheduled reconciliation sweep — every fifteen minutes for recent documents, nightly for a wider window — catches everything the webhook missed. The sweep is cheap because you are querying by last-modified time, and it converts a fragile mechanism into a reliable one.</p>
 
-        <pre><code class="language-python"># Sweep: authoritative, idempotent, and cheap because it filters server-side.
+        <code class="language-python"># Sweep: authoritative, idempotent, and cheap because it filters server-side.
 # Run every 15 minutes with a deliberate overlap on the window — reprocessing
 # a document you already have costs nothing if your handlers are idempotent,
 # and missing one costs a manual correction.
@@ -598,7 +598,7 @@ def sweep_modified_invoices(client, since, state):
             break
         page += 1
 
-    return datetime.now(timezone.utc)</code></pre>
+    return datetime.now(timezone.utc)</code>
 
         <p>The overlap window is deliberate. Clock skew between your worker and Zoho's servers is small but not zero, and a sweep with an exact boundary will eventually miss a document that was written in the same second the previous sweep ended.</p>
 
@@ -634,7 +634,7 @@ def sweep_modified_invoices(client, since, state):
 
         <p><strong>Clearing account balance trend.</strong> The gateway clearing account should oscillate around zero as settlements land. A balance that only grows means receipts are being recorded that never settle, which is the signature of duplicate payments.</p>
 
-        <pre><code class="language-sql">-- Storefront side of the daily completeness check.
+        <code class="language-sql">-- Storefront side of the daily completeness check.
 -- Anything returned here is either in flight or lost, and after the
 -- expected lag those are the same thing until someone looks.
 SELECT
@@ -655,7 +655,7 @@ WHERE o.created_at &gt;= NOW() - INTERVAL 14 DAY
         -- refunded on the storefront but no credit note exists
      OR (cm.entity_id IS NOT NULL AND cm.zoho_creditnote_id IS NULL)
       )
-ORDER BY o.created_at;</code></pre>
+ORDER BY o.created_at;</code>
 
         <p>Publish the results somewhere visible even when they are clean. A report that shows zero divergence every morning builds the habit of looking, so the morning it shows four rows, somebody notices. A report that only emails on failure gets filtered into a folder within a month.</p>
 
@@ -714,12 +714,20 @@ ORDER BY o.created_at;</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
-              <p>Syncing customer leads and order histories.</p>
+              <strong><a href="/blog/sap-commerce-cloud-erp-sync/">SAP Commerce Cloud &amp; S/4HANA ERP Synchronization</a></strong>
+              <p>SAP Commerce Cloud to S/4HANA integration: deciding system of record per field, idempotent o...</p>
             </li>
             <li>
-              <strong><a href="/blog/enterprise-erp-systems-ecommerce/">Enterprise ERP Systems Integration for High-Volume E-Commerce</a></strong>
-              <p>NetSuite and SAP inventory connectors.</p>
+              <strong><a href="/blog/square-point-of-sale-pos-integration/">Square POS Integration for Retail &amp; E-Commerce Sync</a></strong>
+              <p>Building a Square POS integration that survives promotions, offline tills and cross-channel ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
+              <p>Technical guide to syncing customers, orders, inventory, and deals between Magento 2 / Shopi...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/shopify-app-creation-guide/">Creating a Shopify App: From Scaffold to App Store Submission</a></strong>
+              <p>A comprehensive technical guide to creating, building, and submitting a Shopify app to the A...</p>
             </li>
           </ul>
         </div>

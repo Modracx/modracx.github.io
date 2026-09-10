@@ -116,8 +116,8 @@
         <p class="lede">Polyfill.io showed what happens when a script you trusted quietly changes. Here is how to pin third-party code by hash, why tag managers break the model, and what PCI DSS 4.0 now requires of your checkout page.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 23 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
+          <span>Reading Time: 30 min read</span> •
+          <span>Category: <a href="/blog/archive/#security-compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
 
@@ -174,10 +174,10 @@
 
         <p>You add a cryptographic hash of the file you expect, and the browser refuses to execute anything that doesn't match:</p>
 
-        <pre><code class="language-html">&lt;script
+        <code class="language-html">&lt;script
   src="https://cdn.example.com/checkout-widget-4.2.1.js"
   integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC"
-  crossorigin="anonymous"&gt;&lt;/script&gt;</code></pre>
+  crossorigin="anonymous"&gt;&lt;/script&gt;</code>
 
         <p>The browser downloads the resource, hashes the bytes it received, compares that against the value you declared, and either runs the file or discards it entirely. A mismatch is treated as a network error: the script does not execute, an error event fires, and the console logs a failure. There is no partial execution and no "run it anyway" prompt.</p>
 
@@ -187,10 +187,10 @@
 
         <p>You may supply multiple hashes separated by whitespace, and the browser accepts the resource if <em>any</em> of them matches:</p>
 
-        <pre><code class="language-html">&lt;script src="/app.js"
+        <code class="language-html">&lt;script src="/app.js"
   integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC
              sha384-Rp/nBnZBJTRQK5oJdvOMWY2rSCQBwGYVjRGMS9RvfhzTZ6PW0nMhFhLnJ6Ni7Qk2"
-  crossorigin="anonymous"&gt;&lt;/script&gt;</code></pre>
+  crossorigin="anonymous"&gt;&lt;/script&gt;</code>
 
         <p>That's not redundancy for its own sake — it's the mechanism that makes zero-downtime rotation possible, which I'll come back to when we get to rotation. It is one of the most useful and least-known parts of the feature.</p>
 
@@ -216,37 +216,37 @@
 
         <p>From the command line, hash whatever you'll actually be serving:</p>
 
-        <pre><code class="language-bash"># From a local build artifact
+        <code class="language-bash"># From a local build artifact
 openssl dgst -sha384 -binary dist/checkout-widget.js | openssl base64 -A
 # 4EhaLRJ2VVvVhWjK3n8QpQY6dLoM0mvWJ+7C9tRzQqB3XkFhPq0nZ1sYcHwLtDgN
 
 # From the URL you will actually reference — the more reliable option
 curl -sS https://cdn.example.com/widget-4.2.1.js \
   | openssl dgst -sha384 -binary \
-  | openssl base64 -A</code></pre>
+  | openssl base64 -A</code>
 
         <p>Prefer the second. Hashing your local build assumes your CDN serves it untouched, and CDNs do not always oblige — some inject headers into JavaScript, rewrite URLs, or apply their own minification tier. Hash what the browser will receive.</p>
 
         <p>A wrapper worth keeping around, because you'll do this often:</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # sri.sh — print a ready-to-paste integrity attribute for a URL
 set -euo pipefail
 url="${1:?usage: sri.sh &lt;url&gt; [algo]}"
 algo="${2:-sha384}"
 hash=$(curl -fsSL "$url" | openssl dgst "-${algo}" -binary | openssl base64 -A)
-echo "integrity=\"${algo}-${hash}\" crossorigin=\"anonymous\""</code></pre>
+echo "integrity=\"${algo}-${hash}\" crossorigin=\"anonymous\""</code>
 
         <p>In Node, if you'd rather keep it in the toolchain:</p>
 
-        <pre><code class="language-javascript">import { createHash } from 'node:crypto';
+        <code class="language-javascript">import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 export async function sriFor(path, algo = 'sha384') {
   const bytes = await readFile(path);
   const digest = createHash(algo).update(bytes).digest('base64');
   return `${algo}-${digest}`;
-}</code></pre>
+}</code>
 
         <p>Two failure modes to know about. Trailing whitespace: if your build appends a newline that the CDN strips, or vice versa, the hash changes and everything breaks. Hash the served bytes and this disappears. And transport compression: gzip and Brotli are applied after hashing and removed before verification, so they don't affect the digest — but a CDN that <em>stores</em> a pre-compressed variant built from slightly different source bytes absolutely will. If a hash mismatches only on some edge locations, this is why.</p>
 
@@ -263,11 +263,11 @@ export async function sriFor(path, algo = 'sha384') {
 
         <p>If the second isn't true, you cannot use SRI on that resource. Full stop. No workaround exists on your side, because the whole point is that the remote server must opt into being read.</p>
 
-        <pre><code class="language-bash"># Does this CDN allow SRI?
+        <code class="language-bash"># Does this CDN allow SRI?
 curl -sI -H "Origin: https://shop.example.com" https://cdn.vendor.net/tag.js \
   | grep -i access-control-allow-origin
-# access-control-allow-origin: *      <- good, SRI is possible
-# (nothing)                           <- SRI is not possible; talk to the vendor</code></pre>
+# access-control-allow-origin: *      &lt;- good, SRI is possible
+# (nothing)                           &lt;- SRI is not possible; talk to the vendor</code>
 
         <p>Same-origin resources don't need CORS and don't need the attribute, though adding it is harmless. Most people add it everywhere for consistency and to avoid the class of bug where a file moves to a CDN and the attribute is forgotten.</p>
 
@@ -289,7 +289,7 @@ curl -sI -H "Origin: https://shop.example.com" https://cdn.vendor.net/tag.js \
 
         <p>Run this in the console on your live checkout, and again on the order confirmation page:</p>
 
-        <pre><code class="language-javascript">// Every script the page has loaded, third-party first, with SRI status
+        <code class="language-javascript">// Every script the page has loaded, third-party first, with SRI status
 const here = location.origin;
 const rows = [...document.querySelectorAll('script[src]')].map(s =&gt; ({
   src: s.src,
@@ -310,7 +310,7 @@ new PerformanceObserver(list =&gt; {
       console.warn('dynamically injected:', e.name);
     }
   }
-}).observe({ type: 'resource', buffered: true });</code></pre>
+}).observe({ type: 'resource', buffered: true });</code>
 
         <p>That second block is the one that produces the surprises. The scripts in your HTML are the ones you know about. The scripts those scripts load are the actual attack surface, and they rarely appear in anyone's documentation.</p>
 
@@ -377,15 +377,15 @@ new PerformanceObserver(list =&gt; {
 
         <p>Say you're moving from 4.2.1 to 4.3.0. Deploy one: add the new hash alongside the old, still pointing at the old URL. Both hashes are now accepted; nothing has changed behaviourally.</p>
 
-        <pre><code class="language-html">&lt;script src="https://cdn.example.com/widget-4.2.1.js"
+        <code class="language-html">&lt;script src="https://cdn.example.com/widget-4.2.1.js"
   integrity="sha384-OLD_HASH_HERE sha384-NEW_HASH_HERE"
-  crossorigin="anonymous"&gt;&lt;/script&gt;</code></pre>
+  crossorigin="anonymous"&gt;&lt;/script&gt;</code>
 
         <p>Deploy two: switch the <code>src</code> to the new file. The new hash is already trusted, so it loads immediately, and if you need to roll back the old hash is still there.</p>
 
-        <pre><code class="language-html">&lt;script src="https://cdn.example.com/widget-4.3.0.js"
+        <code class="language-html">&lt;script src="https://cdn.example.com/widget-4.3.0.js"
   integrity="sha384-OLD_HASH_HERE sha384-NEW_HASH_HERE"
-  crossorigin="anonymous"&gt;&lt;/script&gt;</code></pre>
+  crossorigin="anonymous"&gt;&lt;/script&gt;</code>
 
         <p>Deploy three, once you're confident: drop the old hash. Leaving both indefinitely isn't dangerous — the old URL is no longer referenced — but it's clutter that will confuse whoever reads this next year.</p>
 
@@ -397,7 +397,7 @@ new PerformanceObserver(list =&gt; {
 
         <h3>Vite</h3>
 
-        <pre><code class="language-javascript">// vite.config.js
+        <code class="language-javascript">// vite.config.js
 import { defineConfig } from 'vite';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -431,7 +431,7 @@ function sri() {
   };
 }
 
-export default defineConfig({ plugins: [sri()] });</code></pre>
+export default defineConfig({ plugins: [sri()] });</code>
 
         <p>Community plugins exist for both Vite and webpack and are worth using instead of hand-rolling; I've included the above mainly so the mechanism is legible rather than magic. Whichever you use, verify the output HTML in CI — a plugin that silently stops matching after a config change is a common and quiet failure.</p>
 
@@ -439,7 +439,7 @@ export default defineConfig({ plugins: [sri()] });</code></pre>
 
         <p>Magento's asset pipeline doesn't emit integrity attributes, and its bundling and minification settings change the served bytes, so hashes must be generated after static content deployment. The workable approach is a post-deploy step that walks <code>pub/static</code>, computes digests, and writes them into a map the layout can read:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\Security\Model;
@@ -469,7 +469,7 @@ class IntegrityMap
     {
         return 'sha384-' . base64_encode(hash_file('sha384', $absolutePath, true));
     }
-}</code></pre>
+}</code>
 
         <p>Run the map generation as the last step of your deploy, after <code>setup:static-content:deploy</code>, and fail the deploy if a referenced file is missing from the map. A partially-applied SRI deployment is worse than none, because it creates confidence without coverage.</p>
 
@@ -483,13 +483,13 @@ class IntegrityMap
 
         <p>The <code>error</code> event fires on the element:</p>
 
-        <pre><code class="language-html">&lt;script
+        <code class="language-html">&lt;script
   src="https://cdn.example.com/widget-4.3.0.js"
   integrity="sha384-NEW_HASH_HERE"
   crossorigin="anonymous"
-  onerror="window.__sriFailure &amp;&amp; window.__sriFailure(this.src)"&gt;&lt;/script&gt;</code></pre>
+  onerror="window.__sriFailure &amp;&amp; window.__sriFailure(this.src)"&gt;&lt;/script&gt;</code>
 
-        <pre><code class="language-javascript">// Defined early, before any pinned script
+        <code class="language-javascript">// Defined early, before any pinned script
 window.__sriFailure = function (src) {
   // Keep this dependency-free — the thing that failed may be your SDK
   navigator.sendBeacon('/_telemetry/sri', JSON.stringify({
@@ -506,7 +506,7 @@ window.addEventListener('error', (e) =&gt; {
   if (el instanceof HTMLScriptElement &amp;&amp; el.integrity) {
     window.__sriFailure(el.src);
   }
-}, true);</code></pre>
+}, true);</code>
 
         <p>Note the <code>true</code> on the listener — resource errors don't bubble, so you need the capture phase. This is a two-character mistake that makes the whole handler silently useless, and I have shipped it.</p>
 
@@ -516,7 +516,7 @@ window.addEventListener('error', (e) =&gt; {
 
         <p>SRI verifies files you named. CSP constrains everything, including what your verified scripts do next. They cover different halves of the problem and you want both — and both sit inside the wider set covered in <a href="/blog/secure-http-headers/">the security headers guide</a>.</p>
 
-        <pre><code class="language-http">Content-Security-Policy:
+        <code class="language-http">Content-Security-Policy:
   default-src 'self';
   script-src 'self' https://js.stripe.com https://cdn.example.com;
   connect-src 'self' https://api.stripe.com https://metrics.example.com;
@@ -525,7 +525,7 @@ window.addEventListener('error', (e) =&gt; {
   base-uri 'self';
   form-action 'self';
   object-src 'none';
-  report-uri /_csp-report</code></pre>
+  report-uri /_csp-report</code>
 
         <p>The two directives that do the most work against a supply-chain compromise are the ones people skip. <code>connect-src</code> limits where any script can send data — a compromised tag that can't reach the attacker's collection endpoint has stolen nothing. And <code>form-action</code> stops an injected form posting card details somewhere else, which is precisely the Magecart pattern.</p>
 
@@ -569,7 +569,7 @@ window.addEventListener('error', (e) =&gt; {
 
         <p><strong>Fail the build on unpinned third-party scripts.</strong> A grep over your templates for <code>&lt;script src="http</code> without a neighbouring <code>integrity=</code> catches most of it. Allow exceptions by explicit annotation, so the exception is a decision someone wrote down rather than an oversight:</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # Fails if a template loads an external script without integrity or a waiver
 set -uo pipefail
 bad=0
@@ -581,7 +581,7 @@ while IFS= read -r hit; do
   echo "unpinned external script: $hit"
   bad=1
 done &lt; &lt;(grep -rn '&lt;script[^&gt;]*src="https\?://' app/design/ --include='*.phtml')
-exit $bad</code></pre>
+exit $bad</code>
 
         <p><strong>Re-verify from the outside on a schedule.</strong> A nightly fetch-and-compare over every pinned URL. This catches vendor-side changes before a customer does, and it is the mechanism you point at when someone asks how requirement 11.6.1 is met.</p>
 
@@ -627,7 +627,24 @@ exit $bad</code></pre>
 
         <p>The hash is the easy part. Knowing what you're running is the whole job.</p>
 
-        <div class="blog-suggested-reads"><h3>Suggested &amp; Related Reading</h3><ul><li><a href="/blog/cybersecurity-best-practices-ecommerce/">Cybersecurity Best Practices for E-Commerce Merchants</a></li></ul></div>
+        <div class="blog-suggested-reads">
+          <h3>Suggested &amp; Related Reading</h3>
+          <p>Explore related engineering guides from Kenneth D'Silva:</p>
+          <ul>
+            <li>
+              <strong><a href="/blog/csp-implementation/">Content Security Policy (CSP) Directives for E-Commerce</a></strong>
+              <p>Nonces, strict-dynamic, report-only rollout and the Magento and Shopify specifics of shippin...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/cybersecurity-best-practices-ecommerce/">Cybersecurity Best Practices for E-Commerce Merchants</a></strong>
+              <p>The merchant threat model for ecommerce security: Magecart script governance, credential stu...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/secure-http-headers/">Configuring Secure HTTP Headers for E-Commerce</a></strong>
+              <p>Security headers for ecommerce: HSTS, CSP, nosniff, Referrer-Policy, frame-ancestors and Per...</p>
+            </li>
+          </ul>
+        </div>
       </article>
     </section>
   </main>

@@ -63,10 +63,10 @@
   <!-- Theme: apply the stored chart before first paint so there is no flash. -->
   <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
   <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
-  <title>Real-Time Storefront Profiling: Building Magento 2 Frontend Dev Tools | MODRACX</title>
-  <meta name="description" content="Optimizing storefront block execution times, layout handle trees, N+1 query loops, and template diagnostics without breaking page layouts. The complete architectural blueprint behind Frontend Dev Tools by Kenneth D'Silva." />
-  <meta property="og:title" content="Real-Time Storefront Profiling: Building Magento 2 Frontend Dev Tools | MODRACX" />
-  <meta property="og:description" content="Inside the architecture, block render interceptors, SQL query attribution, and layout handle analyzers of Frontend Dev Tools by Kenneth D'Silva." />
+  <title>Magento 2 Frontend Dev Tools: Real-Time Storefront Profiler & Debug Toolbar | MODRACX</title>
+  <meta name="description" content="Real-time storefront profiling for Magento 2: measure block render times, layout handle trees, database query counts, and template path hints with zero production overhead." />
+  <meta property="og:title" content="Magento 2 Frontend Dev Tools: Real-Time Storefront Profiler & Debug Toolbar | MODRACX" />
+  <meta property="og:description" content="Real-time storefront profiling for Magento 2: measure block render times, layout handle trees, database query counts, and template path hints with zero production overhead." />
   <meta property="og:type" content="article" />
   <link rel="canonical" href="https://www.modracx.com/blog/frontend-dev-tools/" />
   <link rel="alternate" hreflang="en" href="https://www.modracx.com/blog/frontend-dev-tools/" />
@@ -90,7 +90,7 @@
         "url": "https://www.modracx.com/blog/frontend-dev-tools/",
         "datePublished": "2026-08-12",
         "dateModified": "2026-08-14",
-        "timeRequired": "PT29M",
+        "timeRequired": "PT23M",
         "mainEntityOfPage": "https://www.modracx.com/blog/frontend-dev-tools/",
         "image": "https://www.modracx.com/og-image.png",
         "author": {
@@ -249,8 +249,12 @@
         <p class="lede">Diagnosing slow product pages, tracking down N+1 database loops, and untangling layout handle trees in Magento 2 shouldn't destroy your storefront CSS. Here is how I engineered an isolated, zero-overhead storefront profiling suite.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 29 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
+        </div>
+        <div class="spell-row" style="margin-top: 1.25rem; margin-bottom: 0.5rem;">
+          <a class="spell" href="https://github.com/Modracx/frontend-dev-tools" target="_blank" rel="noopener">GitHub: Modracx/frontend-dev-tools ↗</a>
+          <a class="spell-ghost" href="/docs/frontend-dev-tools/">Read Frontend Dev Tools Manual ↗</a>
         </div>
       </div>
 
@@ -309,7 +313,7 @@
 
         <p>The module is structured under <code>app/code/Modracx/FrontendDevTools</code> following clean Magento 2 dependency injection patterns:</p>
 
-        <pre><code class="language-text">app/code/Modracx/FrontendDevTools/
+        <code class="language-text">app/code/Modracx/FrontendDevTools/
 ├── etc/
 │   ├── acl.xml                         # Admin ACL definition for config
 │   ├── config.xml                      # Default thresholds & warning limits
@@ -349,7 +353,7 @@
             ├── css/
             │   └── toolbar.css         # Scoped dark-mode styles
             └── js/
-                └── toolbar.js          # Interactive panel switcher & tree renderer</code></pre>
+                └── toolbar.js          # Interactive panel switcher & tree renderer</code>
 
         <h2>4. High-Resolution Block Timing Without Layout Distortion</h2>
 
@@ -357,7 +361,7 @@
 
         <p>To measure block execution times without altering HTML strings, <code>Plugin/View/BlockRenderPlugin.php</code> places an <code>around</code> plugin on <code>AbstractBlock::toHtml()</code>. Before invoking <code>$proceed()</code>, the plugin records high-resolution monotonic time via <code>hrtime(true)</code> and pushes the current block identifier onto an execution call stack in <code>ProfileCollector</code>.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\FrontendDevTools\Plugin\View;
@@ -415,7 +419,7 @@ class BlockRenderPlugin
 
         return $html;
     }
-}</code></pre>
+}</code>
 
         <p>This design preserves pristine HTML output. The rendered string returned by <code>$proceed()</code> is passed back to the caller completely untouched, guaranteeing that CSS layouts, flexbox flows, and JSON-LD scripts are 100% authentic.</p>
 
@@ -423,12 +427,12 @@ class BlockRenderPlugin
 
         <p>The most common cause of catastrophic Magento 2 performance degradation is the <strong>N+1 query anti-pattern</strong>. A developer creates a custom category widget or related products slider. Inside the block's <code>.phtml</code> template, they write a loop over twenty products:</p>
 
-        <pre><code class="language-php">&lt;!-- Anti-Pattern in custom template --&gt;
+        <code class="language-php">&lt;!-- Anti-Pattern in custom template --&gt;
 &lt;?php foreach ($block-&gt;getProductCollection() as $product): ?&gt;
     &lt;?php $stockItem = $stockRegistry-&gt;getStockItem($product-&gt;getId()); ?&gt;
     &lt;?php $brand = $productRepository-&gt;getById($product-&gt;getId())-&gt;getCustomAttribute('brand_name')-&gt;getValue(); ?&gt;
     &lt;span&gt;&lt;?= $product-&gt;getName() ?&gt; - &lt;?= $brand ?&gt;&lt;/span&gt;
-&lt;?php endforeach; ?&gt;</code></pre>
+&lt;?php endforeach; ?&gt;</code>
 
         <p>In this loop, calling <code>$productRepository-&gt;getById()</code> and <code>$stockRegistry-&gt;getStockItem()</code> on each iteration issues forty to sixty individual database queries. In local development with ten products, the page loads in 250ms and the developer merges the code. In production with forty products, the page makes 180 SQL queries, driving TTFB to two seconds.</p>
 
@@ -436,7 +440,7 @@ class BlockRenderPlugin
 
         <p>How do we detect exactly which block generated those queries? When <code>BlockRenderPlugin</code> pushes a block onto <code>ProfileCollector</code>'s stack, that block becomes the active database context. <code>Plugin/Db/ProfilerAdapterPlugin.php</code> intercepts the Zend DB PDO adapter before and after every query execution:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\FrontendDevTools\Plugin\Db;
@@ -475,7 +479,7 @@ class ProfilerAdapterPlugin
             );
         }
     }
-}</code></pre>
+}</code>
 
         <p>When the query completes, the collector normalizes the SQL statement (replacing numerical IDs and literal strings with <code>?</code> placeholders) and increments a signature counter. If the same query signature fires more than three times during a single request, the toolbar flags it with an amber badge. If it fires more than ten times, it flashes red with a direct link to the offending block class and template path.</p>
 
@@ -531,7 +535,7 @@ class ProfilerAdapterPlugin
 
         <p>In <code>Plugin/Event/ObserverTimingPlugin.php</code>, we intercept <code>Magento\Framework\Event\Invoker\InvokerDefault::dispatch()</code> to track every observer invoked during the request:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\FrontendDevTools\Plugin\Event;
@@ -575,7 +579,7 @@ class ObserverTimingPlugin
             );
         }
     }
-}</code></pre>
+}</code>
 
         <p>This panel immediately reveals if an analytics integration or marketing tracker is spending 120ms building an API payload on every single catalog page view.</p>
 
@@ -587,7 +591,7 @@ class ObserverTimingPlugin
 
         <p>Frontend Dev Tools intercepts <code>Magento\Framework\View\Model\Layout\Merge::load()</code> to record all active handles, their application sequence, and the exact XML source files contributing instructions:</p>
 
-        <pre><code class="language-text">Applied Layout Handle Sequence:
+        <code class="language-text">Applied Layout Handle Sequence:
 ├── 1. default (Loaded from 14 modules, 2 themes)
 │   ├── Magento_Theme::view/frontend/layout/default.xml
 │   ├── Magento_Customer::view/frontend/layout/default.xml
@@ -596,7 +600,7 @@ class ObserverTimingPlugin
 │   ├── Magento_Catalog::view/frontend/layout/catalog_category_view.xml
 │   └── Magento_CatalogSearch::view/frontend/layout/catalog_category_view.xml
 ├── 3. catalog_category_view_type_layered
-└── 4. catalog_category_view_id_42 (Specific category override)</code></pre>
+└── 4. catalog_category_view_id_42 (Specific category override)</code>
 
         <p>In the toolbar UI, this is rendered as an interactive, collapsible tree. Clicking any handle filters the Block Timings panel to show only the blocks introduced by that handle.</p>
 
@@ -606,7 +610,7 @@ class ObserverTimingPlugin
 
         <p>We use <code>Plugin/App/ResponseInjector.php</code>, an <code>after</code> plugin on <code>Magento\Framework\App\FrontControllerInterface::dispatch()</code>:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\FrontendDevTools\Plugin\App;
@@ -653,7 +657,7 @@ class ResponseInjector
 
         return $response;
     }
-}</code></pre>
+}</code>
 
         <h2>9. Production Access Control &amp; Zero-Overhead Security Gate</h2>
 
@@ -666,7 +670,7 @@ class ResponseInjector
           <li><strong>Developer Token Cookie:</strong> Verifies the presence of an encrypted, SHA-256 hashed session cookie (<code>modracx_devtoken</code>).</li>
         </ol>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\FrontendDevTools\Model;
@@ -733,7 +737,7 @@ class AccessGate
 
         return ($ip &amp; $mask) === $subnet;
     }
-}</code></pre>
+}</code>
 
         <p>If neither condition matches, <code>isAuthorized()</code> returns <code>false</code> in under <strong>0.02 milliseconds</strong>, and the remainder of the module's interceptors completely skip profiling logic.</p>
 
@@ -741,9 +745,9 @@ class AccessGate
 
         <p>The floating devbar is styled using scoped CSS variables with an astronomical dark palette matching MODRACX's design system. When collapsed, it takes up just 28px of vertical height at the bottom edge of the screen:</p>
 
-        <pre><code class="language-text">┌────────────────────────────────────────────────────────────────────────────────────────┐
+        <code class="language-text">┌────────────────────────────────────────────────────────────────────────────────────────┐
 │ ✦ MODRACX PROFILER │ ⏱ 248ms │ 💾 38.4MB │ 🗄 18 queries (24ms) │ 🧩 42 blocks │ ⚡ 8 events  │
-└────────────────────────────────────────────────────────────────────────────────────────┘</code></pre>
+└────────────────────────────────────────────────────────────────────────────────────────┘</code>
 
         <p>Clicking any metric expands a 450px docked modal with searchable, sortable tables for that domain:</p>
 
@@ -758,7 +762,7 @@ class AccessGate
 
         <p>To grasp why Frontend Dev Tools introduces negligible overhead while profiling hundreds of nested blocks and queries, we must analyze the precise call lifecycle of an incoming HTTP storefront request:</p>
 
-        <pre><code class="language-text">Frontend Dev Tools Request Interception Pipeline:
+        <code class="language-text">Frontend Dev Tools Request Interception Pipeline:
 [Client HTTP Request] ──> [FrontController::dispatch()]
        │
        ▼
@@ -776,7 +780,7 @@ class AccessGate
        └──> [LayoutMergePlugin] ──> [Record Merged Handle Sequences &amp; Contributing XML Files]
                  │
                  ▼
-[ResponseInjector::afterDispatch()] ──> [Compile Devbar Payload] ──> [Inject Pre-&lt;/body&gt;] ──> [Rendered Page]</code></pre>
+[ResponseInjector::afterDispatch()] ──> [Compile Devbar Payload] ──> [Inject Pre-&lt;/body&gt;] ──> [Rendered Page]</code>
 
         <p>When an unauthorized shopper accesses the storefront, <code>AccessGate</code> evaluates to false in under 0.02 milliseconds. The interceptors immediately yield to native framework execution without initializing data arrays, capturing timestamps, or allocating memory buffers.</p>
 
@@ -868,7 +872,7 @@ class AccessGate
 
         <p>Profiling capabilities must be governed by strict environmental lifecycle rules across development tiers:</p>
 
-        <pre><code class="language-text">Storefront Profiling Governance Matrix:
+        <code class="language-text">Storefront Profiling Governance Matrix:
 ┌─────────────────────┬──────────────────────┬──────────────────────┬─────────────────────┐
 │ Environment Tier    │ Devbar UI Visibility │ SQL Query Logging    │ Security Gate       │
 ├─────────────────────┼──────────────────────┼──────────────────────┼─────────────────────┤
@@ -876,7 +880,7 @@ class AccessGate
 │ CI / Testing        │ Disabled             │ Off                  │ Headless Mock       │
 │ Staging / UAT       │ Token / IP Whitelist │ Full SQL + Traces    │ HMAC SHA-256 Token  │
 │ Production Origin   │ Token + 2FA Session  │ Sanitized SQL Only   │ Strict Dual-Factor  │
-└─────────────────────┴──────────────────────┴──────────────────────┴─────────────────────┘</code></pre>
+└─────────────────────┴──────────────────────┴──────────────────────┴─────────────────────┘</code>
 
         <p>On production origins, SQL query parameters are automatically sanitized to replace credit card data, email addresses, and customer names with generic placeholders before rendering inside the devbar console.</p>
 
@@ -928,26 +932,26 @@ class AccessGate
         <p>Integrating Frontend Dev Tools into your Magento 2 store involves five straightforward steps:</p>
 
         <h3>Step 1: Install via Composer</h3>
-        <pre><code class="language-bash">composer require modracx/frontend-dev-tools --dev</code></pre>
+        <code class="language-bash">composer require modracx/frontend-dev-tools --dev</code>
 
         <h3>Step 2: Enable Module and Recompile Dependency Injection</h3>
-        <pre><code class="language-bash">bin/magento module:enable Modracx_FrontendDevTools
+        <code class="language-bash">bin/magento module:enable Modracx_FrontendDevTools
 bin/magento setup:upgrade
-bin/magento setup:di:compile</code></pre>
+bin/magento setup:di:compile</code>
 
         <h3>Step 3: Configure Developer Security Token</h3>
         <p>Navigate to <strong>Stores &gt; Configuration &gt; MODRACX &gt; Frontend Dev Tools</strong>. Generate a cryptographically secure 64-character token and enter your office/VPN CIDR subnets.</p>
 
         <h3>Step 4: Set Developer Cookie in Browser</h3>
         <p>In your browser developer console, execute the following snippet to authenticate your session:</p>
-        <pre><code class="language-javascript">document.cookie = "modracx_devtoken=YOUR_CONFIGURED_SECRET_TOKEN; path=/; Secure; SameSite=Strict";
-location.reload();</code></pre>
+        <code class="language-javascript">document.cookie = "modracx_devtoken=YOUR_CONFIGURED_SECRET_TOKEN; path=/; Secure; SameSite=Strict";
+location.reload();</code>
 
         <h2>18. Testing, Static Analysis &amp; Verification</h2>
 
         <p>The module is validated by exhaustive test suites covering all interceptor plugins, timer models, and security gates:</p>
 
-        <pre><code class="language-bash"># Run unit test suite
+        <code class="language-bash"># Run unit test suite
 vendor/bin/phpunit -c dev/tests/unit/phpunit.xml.dist \
   app/code/Modracx/FrontendDevTools/Test/Unit/
 
@@ -955,7 +959,7 @@ vendor/bin/phpunit -c dev/tests/unit/phpunit.xml.dist \
 vendor/bin/phpstan analyse -c phpstan.neon app/code/Modracx/FrontendDevTools
 
 # Validate Magento 2 Coding Standards (PHPCS)
-vendor/bin/phpcs --standard=Magento2 app/code/Modracx/FrontendDevTools</code></pre>
+vendor/bin/phpcs --standard=Magento2 app/code/Modracx/FrontendDevTools</code>
 
         <h2>19. Comprehensive Questions &amp; Answers (FAQ)</h2>
 
@@ -1070,19 +1074,19 @@ vendor/bin/phpcs --standard=Magento2 app/code/Modracx/FrontendDevTools</code></p
           <ul>
             <li>
               <strong><a href="/blog/admin-dev-tools/">Building Magento 2 Admin Dev Tools: Why I Built an In-Browser Control Panel</a></strong>
-              <p>In-process cache flushing, reverse-seek log tailing, and DI wiring reflection inside the Admin.</p>
+              <p>Inside Magento 2 Admin Dev Tools: in-browser control panel for 1-click cache flushing, index...</p>
             </li>
             <li>
-              <strong><a href="/blog/custom-magento-module/">Building a Custom Magento 2 Module: From Architecture to Deployment</a></strong>
-              <p>Dependency injection, plugins versus observers versus preferences, and declarative schema.</p>
+              <strong><a href="/blog/shopify-coding-standards/">Shopify Coding Standards: Theme &amp; App Development Best Practices</a></strong>
+              <p>A comprehensive technical guide to Shopify coding standards. Master Liquid performance, mode...</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
-              <p>Redis caching architectures, Varnish FPC rules, and catalog database query indexing.</p>
+              <strong><a href="/blog/dabiro-database-manager/">Designing Dabiro: Single-File Database Management in PHP &amp; Node.js (phpMyAdmin &amp; Adminer Alternative)</a></strong>
+              <p>Dabiro is a fast, zero-dependency, single-file database manager and modern alternative to ph...</p>
             </li>
             <li>
-              <strong><a href="/blog/dabiro-database-manager/">Designing Dabiro: Single-File Database Management in PHP &amp; Node.js</a></strong>
-              <p>Zero-dependency multi-database administration for MySQL, PostgreSQL, and SQLite.</p>
+              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
+              <p>Serverless ecommerce architecture: decomposing a monolith, function boundaries, connection m...</p>
             </li>
           </ul>
         </div>

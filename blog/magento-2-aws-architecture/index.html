@@ -208,8 +208,8 @@
         <p class="lede">At 08:03 on a Tuesday in November, a boutique manufacturer of scale model aircraft kits dropped a limited-edition 1/32 scale Supermarine Spitfire Mk. IX. The ensuing traffic exhausted their PHP-FPM pool and took the site down in four minutes.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -276,7 +276,7 @@
 
         <p>Running cron jobs on the same containers serving web traffic is a recipe for sporadic latency spikes. Magento's indexers are notoriously resource-hungry. By isolating background processes into their own ECS service, we ensure that a massive catalog reindex never starves the web tier of CPU cycles. The web service scales horizontally based on Request Count per Target; the cron service operates on a fixed schedule or scales based on the RabbitMQ queue depth.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "family": "magento-web",
   "cpu": "2048",
   "memory": "4096",
@@ -302,7 +302,7 @@
       ]
     }
   ]
-}</code></pre>
+}</code>
 
         <p>The task definition explicitly couples Nginx and PHP-FPM within the same task. They communicate over localhost via TCP (or a shared UNIX socket if a shared memory volume is mounted), eliminating network latency between the web server and the application server. The CPU and memory allocations (2 vCPU, 4GB RAM) are the sweet spot for a Magento 2 node; allocating more leads to diminishing returns and poor utilization, while allocating less risks OOM kills during heavy checkout flows or complex GraphQL queries.</p>
 
@@ -322,7 +322,7 @@
 
         <p><strong>Max Allowed Packet and Timeout Configurations.</strong> The `max_allowed_packet` size must be increased to at least 128MB. Magento's indexers, particularly the catalog search fulltext indexer, routinely generate massive bulk INSERT statements that exceed the default 4MB limit, causing silent indexer failures. Similarly, `innodb_lock_wait_timeout` should be reduced from the default 50 seconds to something more aggressive, like 15 seconds. If a query locks for 15 seconds, the HTTP request is already ruined; fail fast, kill the query, and let the application retry rather than piling up deadlocked threads.</p>
 
-        <pre><code class="language-hcl">resource "aws_rds_cluster_parameter_group" "magento_aurora" {
+        <code class="language-hcl">resource "aws_rds_cluster_parameter_group" "magento_aurora" {
   name        = "magento-aurora-cluster-params"
   family      = "aurora-mysql5.7"
   description = "Magento 2 specific Aurora parameters"
@@ -352,7 +352,7 @@
     name  = "query_cache_type"
     value = "0"
   }
-}</code></pre>
+}</code>
 
         <p><strong>Query Cache is Dead.</strong> Do not attempt to rely on the MySQL query cache. Aurora disables it by default in newer versions, but if you are migrating from an older setup, ensure it is explicitly set to `0`. It becomes a bottleneck due to invalidation contention. Magento relies on Redis for object caching; the database should focus purely on rapid raw data retrieval. A query cache hit rate on Magento is universally abysmal because the data is highly volatile.</p>
 
@@ -383,7 +383,7 @@
 
         <p><strong>Compression and Connection Pooling.</strong> You must use the `predis` or `phpredis` extension properly in `env.php`. Enable persistent connections (`persistent: 1`) to reduce TCP handshake overhead. The connection latency to ElastiCache must be under a millisecond; ensure the Redis nodes are deployed in the same private subnets as the ECS Fargate tasks. Additionally, enable compression (`compress_data: 1`) for the object cache. Magento's layout blocks are massive strings of HTML; compressing them before shipping them to Redis reduces network bandwidth and memory consumption drastically.</p>
 
-        <pre><code class="language-php">'cache' =&gt; [
+        <code class="language-php">'cache' =&gt; [
     'frontend' =&gt; [
         'default' =&gt; [
             'id_prefix' =&gt; 'abc_',
@@ -405,7 +405,7 @@
             ],
         ],
     ],
-],</code></pre>
+],</code>
 
         <p><strong>L2 Caching for Redis.</strong> Magento 2 introduced an L2 cache feature that is frequently overlooked. By utilizing an in-memory L1 cache (like APCu on the local PHP container) backed by the L2 Redis cache, you can eliminate thousands of network round-trips for highly static configuration data. We enable APCu on the Fargate containers specifically to cache the global config tree, falling back to ElastiCache only when the local cache is empty.</p>
 
@@ -419,7 +419,7 @@
 
         <p>The fix is absolute: <strong>Provisioned Throughput or Elastic Throughput</strong>. You must configure EFS to use Provisioned Throughput mode, explicitly defining the required MiB/s, or switch to Elastic Throughput mode (which scales dynamically but costs more per read/write). Never rely on Bursting mode for a production commerce site. For the model kit company, we established a baseline of 100 MiB/s Provisioned Throughput.</p>
 
-        <pre><code class="language-hcl">resource "aws_efs_file_system" "magento_media" {
+        <code class="language-hcl">resource "aws_efs_file_system" "magento_media" {
   creation_token = "magento-media-efs"
   performance_mode = "generalPurpose"
   throughput_mode  = "provisioned"
@@ -428,7 +428,7 @@
   lifecycle_policy {
     transition_to_ia = "AFTER_30_DAYS"
   }
-}</code></pre>
+}</code>
 
         <p>Additionally, mount the EFS volume with the correct NFS options in your ECS task definition. You must use `nfsvers=4.1`, `rsize=1048576`, `wsize=1048576`, `hard`, `timeo=600`, `retrans=2`, and `noresvport`. Failing to optimize these mount options results in crippling latency on every image read. Furthermore, implement an aggressively caching CDN in front of these images so that EFS is only touched for the origin fetch. If your CDN hit rate for images is below 99%, you are abusing your EFS mount unnecessarily.</p>
 
@@ -444,7 +444,7 @@
 
         <p>The VCL (Varnish Configuration Language) must explicitly strip cookies for static assets and catalog pages, otherwise Varnish will bypass the cache entirely. If your hit rate is below 90%, your VCL is wrong.</p>
 
-        <pre><code class="language-vcl">sub vcl_recv {
+        <code class="language-vcl">sub vcl_recv {
   # Bypass cache for checkout and admin
   if (req.url ~ "^/(checkout|admin|customer|rest)/") {
     return (pass);
@@ -469,7 +469,7 @@
       unset req.http.Accept-Encoding;
     }
   }
-}</code></pre>
+}</code>
 
         <p>We also implemented shielding. Shielding designates a specific Fastly POP as the "shield" node in front of your AWS origin. If a piece of content is not cached at the local edge node, it checks the shield node. Only if the shield node misses does the request go to AWS. This drastically reduces origin fetch load, particularly during global product drops where traffic originates from multiple continents simultaneously.</p>
 
@@ -537,16 +537,20 @@
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization</a></strong>
-              <p>Tuning the frontend for core web vitals and fast loading.</p>
+              <strong><a href="/blog/azure-cloud-architecture-magento/">Enterprise Azure Cloud Architecture for Magento 2</a></strong>
+              <p>Running Magento 2 on Azure: AKS node pool design, MySQL Flexible Server tuning, the shared m...</p>
             </li>
             <li>
-              <strong><a href="/blog/security-hardening-checklist/">Security Hardening Checklist</a></strong>
-              <p>Essential production server and application hardening.</p>
+              <strong><a href="/blog/wix-to-magento-migration-technical/">Wix to Magento: The Brutal Reality of Platform Migration</a></strong>
+              <p>Complete technical guide for migrating from Wix to Magento 2: exporting product catalogs, cu...</p>
             </li>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Why SEO Matters in E-commerce</a></strong>
-              <p>Search intent, crawlability, and conversion optimization.</p>
+              <strong><a href="/blog/magento-2-installation-guide/">Magento 2 Installation Guide: Server Setup, Configuration &amp; Post-Install Hardening</a></strong>
+              <p>A comprehensive technical guide to installing Magento 2.4.7 on Ubuntu 22.04, configuring Ngi...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/browser-vs-server-load-testing/">Browser-Originated vs Server-Side Load Testing: When &amp; How to Benchmark from the Client</a></strong>
+              <p>An architectural comparison between client browser load testing and CLI engines like k6, wrk...</p>
             </li>
           </ul>
         </div>

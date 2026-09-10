@@ -154,7 +154,7 @@
         ]
       }
     ],
-    "timeRequired": "PT22M"
+    "timeRequired": "PT38M"
   }
   </script>
 </head>
@@ -201,8 +201,8 @@
         <p class="lede">Fastly went down for 49 minutes in June 2021 and a client lost roughly GBP 34,000. We built them a two-provider steering layer. Eighteen months later we turned most of it off, and here is why.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 38 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -315,7 +315,7 @@
 
         <p>The workhorse. Your zone is hosted by a managed DNS provider that supports health checks and weighted or geographic answers — NS1, Cedexis, Constellix, Route 53 with health checks. A resolver asks for <code>www.example.com</code>, and the DNS provider decides which CDN's CNAME to hand back based on where the query came from, current health, and whatever weights you have set.</p>
 
-<pre><code class="language-text"># Conceptually, the zone looks like this. The apex is a steering
+<code class="language-text"># Conceptually, the zone looks like this. The apex is a steering
 # record rather than a fixed CNAME.
 
 www.example.com.   30   IN   CNAME   &lt;steered&gt;
@@ -323,11 +323,11 @@ www.example.com.   30   IN   CNAME   &lt;steered&gt;
                                        └── example.cdn.cloudflare.net.
 
 # Health checks poll a known object on each provider.
-# Weights shift traffic; a failed check drops a provider from the pool.</code></pre>
+# Weights shift traffic; a failed check drops a provider from the pool.</code>
 
         <p>The configuration in practice, using Route 53 as the example because most people have access to it:</p>
 
-<pre><code class="language-json">{
+<code class="language-json">{
   "Comment": "Weighted failover between two CDNs, health-checked",
   "Changes": [
     {
@@ -355,7 +355,7 @@ www.example.com.   30   IN   CNAME   &lt;steered&gt;
       }
     }
   ]
-}</code></pre>
+}</code>
 
         <p>Note the 80/20 split rather than 100/0. This is deliberate and it is the single most important detail in the whole design. A secondary that carries no traffic is a secondary you have never tested, with a cold cache, whose configuration has silently drifted from the primary's over six months. When you fail over to it, you discover all of that at once, during an incident, while your origin absorbs a 100% miss rate.</p>
 
@@ -389,7 +389,7 @@ www.example.com.   30   IN   CNAME   &lt;steered&gt;
 
         <p>Your HTML is served by the primary. A small script measures both providers on a sample of page loads and rewrites asset URLs — images, scripts, video — to whichever is performing better for that specific user.</p>
 
-<pre><code class="language-javascript">// Sampled client-side probe. Runs on 2% of loads, at idle, and
+<code class="language-javascript">// Sampled client-side probe. Runs on 2% of loads, at idle, and
 // stores a verdict that later loads read from.
 const PROVIDERS = {
   fastly:     'https://a.cdn.example.com/probe.gif?',
@@ -428,7 +428,7 @@ async function probe() {
 if (Math.random() &lt; 0.02) {
   requestIdleCallback ? requestIdleCallback(probe, { timeout: 5000 })
                       : setTimeout(probe, 3000);
-}</code></pre>
+}</code>
 
         <p>The obvious limitation is that it cannot help with the HTML document, because by the time your script runs the document has already been fetched. So it is not an availability mechanism for the thing that matters most.</p>
 
@@ -450,7 +450,7 @@ if (Math.random() &lt; 0.02) {
 
         <p><strong>It must have hysteresis.</strong> Fail fast, recover slow. Two consecutive failures to mark down; ten consecutive successes to mark up. Without this, a flapping provider oscillates your traffic, and each oscillation dumps a cold-cache load onto your origin. The flapping is worse than the outage.</p>
 
-<pre><code class="language-python">#!/usr/bin/env python3
+<code class="language-python">#!/usr/bin/env python3
 """Multi-region CDN health probe with quorum and hysteresis.
 Runs on a schedule; writes a verdict the DNS layer reads."""
 
@@ -499,7 +499,7 @@ def demote(name):
     print(f"DEMOTE {name} at {time.time()}")
 
 def promote(name):
-    print(f"PROMOTE {name} at {time.time()}")</code></pre>
+    print(f"PROMOTE {name} at {time.time()}")</code>
 
         <p>The comment on <code>demote</code> is the part I would emphasise. Moving 100% of traffic to your secondary in one step means that provider's cache, which has been carrying 20% of your traffic, now faces 100% — and every miss goes to your origin. Shifting in two or three steps over a couple of minutes lets the secondary warm as it takes load, and lets you abort if the origin starts struggling.</p>
 
@@ -529,7 +529,7 @@ def promote(name):
 
         <p>Warm the head of the distribution, not the whole thing. Pull your top URLs from analytics, weight by revenue rather than pageviews, and warm those.</p>
 
-<pre><code class="language-bash">#!/usr/bin/env bash
+<code class="language-bash">#!/usr/bin/env bash
 # Warm the top N URLs on every provider edge.
 # Requests go directly to each provider's hostname with a Host header
 # override, so we warm a specific edge rather than whatever DNS picks.
@@ -562,7 +562,7 @@ for name in "${!EDGES[@]}"; do
         bash -c "warm_one '${EDGES[$name]}' '{}'" \
     | awk '{ n++; if ($1 != 200) bad++; t += $2 }
            END { printf "  %d urls, %d non-200, avg %.3fs\n", n, bad, t/n }'
-done</code></pre>
+done</code>
 
         <p>Two warnings from having got this wrong. First, warming through a provider that is currently in a bad state generates a flood of origin fetches at exactly the wrong moment; gate the warmer on the health check. Second, warming after a purge-all across two providers doubles the origin load of an operation that was already the most dangerous thing in your runbook. Stagger by provider and rate-limit hard.</p>
 
@@ -576,7 +576,7 @@ done</code></pre>
 
         <p>What I do about it:</p>
 
-<pre><code class="language-python">#!/usr/bin/env python3
+<code class="language-python">#!/usr/bin/env python3
 """Fan a tag purge out to every provider, in parallel, with retries.
 The contract is 'eventually consistent within N seconds', and the
 job's real output is the worst-case propagation time so that the
@@ -620,7 +620,7 @@ def purge_all(tags):
         # content indefinitely.
         raise RuntimeError(f"purge failed on {failed} for tags {tags}")
 
-    return max(d for _, _, d in results)</code></pre>
+    return max(d for _, _, d in results)</code>
 
         <p>The exception on partial failure is the important line. The instinct is to log a warning and move on, because the purge mostly worked. But a provider that missed an invalidation is now serving content that everyone agrees is wrong, to 15% of your customers, until its TTL expires. Treat a failed purge as an availability event on that provider and demote it. I learned this from a client whose Cloudflare token had expired unnoticed; product pages served through Cloudflare were up to eleven hours stale for two days before anyone connected the dots.</p>
 
@@ -636,7 +636,7 @@ def purge_all(tags):
 
         <p><strong>Configuration as code, in one repository, with a single source of truth that generates both.</strong> Not two Terraform modules maintained in parallel — one abstract description of your caching policy, and two renderers.</p>
 
-<pre><code class="language-yaml"># cdn-policy.yaml — the single source of truth.
+<code class="language-yaml"># cdn-policy.yaml — the single source of truth.
 # A generator emits Fastly VCL and a Cloudflare ruleset from this.
 # Nobody edits either provider's console directly; the console is
 # read-only in production and that rule is enforced by an audit job.
@@ -667,11 +667,11 @@ routes:
   - match: "\\.(js|css|woff2)$"
     ttl_edge: 31536000
     ttl_browser: 31536000
-    immutable: true</code></pre>
+    immutable: true</code>
 
         <p><strong>A differ that runs on a schedule and shouts.</strong> Fetch the same set of URLs through both providers and compare the response headers that matter. Anything that differs and is not on an allowlist of expected differences is an alert.</p>
 
-<pre><code class="language-python">#!/usr/bin/env python3
+<code class="language-python">#!/usr/bin/env python3
 """Compare responses across providers. Runs hourly in CI.
 Catches the drift that a 15% traffic share will never surface."""
 
@@ -714,7 +714,7 @@ for path in PATHS:
                       f"{other}={b!r}")
                 failures += 1
 
-sys.exit(1 if failures else 0)</code></pre>
+sys.exit(1 if failures else 0)</code>
 
         <p>That differ has caught more real problems for me than the health checks ever have. On one build it found that a security header added during a PCI review nine months earlier existed on the primary only, which meant a failover would have quietly dropped it — and the PCI evidence pack said otherwise.</p>
 
@@ -724,7 +724,7 @@ sys.exit(1 if failures else 0)</code></pre>
 
         <p>Instrument this before you need it. Every response should carry a header naming the provider and the PoP, normalised into one field rather than the six different vendor-specific headers you would otherwise be reading. Both providers can inject a synthetic header at the edge; the names differ, the technique does not.</p>
 
-<pre><code class="language-javascript">// Collected in RUM alongside the timings, so that every performance
+<code class="language-javascript">// Collected in RUM alongside the timings, so that every performance
 // number in your dashboard can be sliced by provider. Without this,
 // a regression on one provider averages away into noise.
 addEventListener('load', () =&gt; {
@@ -745,7 +745,7 @@ addEventListener('load', () =&gt; {
     pop: st.pop || '',
     cache: st.cache || '',
   }));
-});</code></pre>
+});</code>
 
         <p>Then build exactly one dashboard: p75 TTFB by provider by country, with the request share alongside. Everything else you will want can be derived from that table. The share column matters because a provider carrying 3% of traffic will show wild percentile swings that mean nothing, and you need to see the denominator to avoid chasing them.</p>
 
@@ -759,7 +759,7 @@ addEventListener('load', () =&gt; {
 
         <p>The compromise I have settled on is regional primaries with a small global bleed. Each region routes 90% to its best provider and 10% to the other, so that no cache is entirely cold anywhere. Something like this:</p>
 
-<pre><code class="language-yaml"># steering.yaml — consumed by the DNS provider's API.
+<code class="language-yaml"># steering.yaml — consumed by the DNS provider's API.
 # Weights are per-region, and no region sends less than 10% to its
 # secondary, because a cache at 0% share is a cache that does not exist.
 regions:
@@ -782,7 +782,7 @@ failover:
   # two steps 90 seconds apart rather than one, so the surviving
   # provider's cache and your origin get a chance to absorb it.
   steps: [50, 100]
-  step_interval_seconds: 90</code></pre>
+  step_interval_seconds: 90</code>
 
         <p>Set those weights from your own measurements, not from a vendor's coverage map. Coverage maps show PoP locations, which tells you almost nothing about the path your customers' networks actually take to reach them. The client-side probe data described above is the input that matters, and it will occasionally tell you something surprising — on one build the provider with fewer PoPs in Australia was consistently faster there, because of peering with the dominant local ISP.</p>
 
@@ -899,12 +899,20 @@ failover:
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/cdn-speed-seo/">CDN Speed Optimization &amp; Edge Caching for Global Stores</a></strong>
-              <p>Cloudflare &amp; Fastly Cache-Control header rules.</p>
+              <strong><a href="/blog/multi-cdn-architectures/">Multi-CDN Architectures: High Availability &amp; Edge Failover for Enterprise Commerce</a></strong>
+              <p>How to build a Multi-CDN architecture for global ecommerce: Anycast DNS steering, Cloudflare...</p>
             </li>
             <li>
-              <strong><a href="/blog/edge-computing-ecommerce/">Edge Computing &amp; Serverless Logic for E-Commerce</a></strong>
-              <p>Vercel Edge Functions and Cloudflare Workers.</p>
+              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
+              <p>The content layer for headless commerce: modelling in Sanity, Strapi and Contentful, preview...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
+              <p>How headless commerce backends actually perform: Storefront API budgets, persisted queries, ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/node-js-high-concurrency-microservices/">Building High-Concurrency Node.js Microservices</a></strong>
+              <p>Event loop lag, load shedding, worker threads, connection pooling and graceful shutdown — bu...</p>
             </li>
           </ul>
         </div>

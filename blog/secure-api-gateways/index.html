@@ -84,7 +84,7 @@
     "@type": "TechArticle",
     "headline": "Securing E-Commerce REST & GraphQL API Gateways",
     "description": "Technical guide on API rate limiting, JWT token validation, and OAuth 2.0 authorization for Magento 2 and Shopify API gateways.",
-    "timeRequired": "PT22M",
+    "timeRequired": "PT39M",
     "url": "https://www.modracx.com/blog/secure-api-gateways/",
     "datePublished": "2026-07-28",
     "dateModified": "2026-08-03",
@@ -201,8 +201,8 @@
         <p class="lede">A logistics partner's non-expiring token could read the entire customer database, because the gateway checked that the caller was authenticated and never asked what they were allowed to do. Authentication, scopes, mTLS and schema validation at the edge.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
+          <span>Reading Time: 39 min read</span> •
+          <span>Category: <a href="/blog/archive/#security-compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
 
@@ -287,7 +287,7 @@
 
         <p><strong>Key rotation via JWKS, with sane caching.</strong> Fetch the issuer's key set, cache it, and re-fetch on an unknown <code>kid</code> — but rate-limit that re-fetch, or an attacker sending tokens with random <code>kid</code> values turns your gateway into a denial-of-service amplifier against your identity provider.</p>
 
-        <pre><code class="language-javascript">import { createRemoteJWKSet, jwtVerify, errors } from 'jose';
+        <code class="language-javascript">import { createRemoteJWKSet, jwtVerify, errors } from 'jose';
 
 // The JWKS client caches keys and re-fetches on an unknown kid. cooldownDuration
 // is the important knob: without it, tokens carrying random kid values force a
@@ -338,7 +338,7 @@ export async function authenticate(req) {
     tenant: claims.tenant_id,
     expiresAt: claims.exp,
   };
-}</code></pre>
+}</code>
 
         <p>Two things worth arguing about in there.</p>
 
@@ -354,7 +354,7 @@ export async function authenticate(req) {
 
         <p>What I actually recommend, and it is not a compromise so much as picking the right tool per audience: opaque tokens for anything a browser holds, because those are the tokens that leak and immediate revocation matters most; JWTs for service-to-service, where the caller is inside your trust boundary and the latency of introspection on every hop compounds badly. Cache introspection results for a short window — 30 to 60 seconds — which recovers most of the performance without meaningfully weakening revocation.</p>
 
-        <pre><code class="language-python">import time, httpx, hashlib
+        <code class="language-python">import time, httpx, hashlib
 
 class Introspector:
     """RFC 7662 introspection with a short cache and a fail-closed breaker."""
@@ -393,7 +393,7 @@ class Introspector:
         # Never cache past the token's own expiry.
         ttl = min(self.ttl, max(0, data.get("exp", 0) - time.time()))
         self._cache[key] = (data, time.time() + ttl)
-        return data</code></pre>
+        return data</code>
 
         <p>The breaker failing closed is a deliberate and occasionally unpopular choice. If your auth server is unavailable, your API stops accepting authenticated requests. The alternative — accept requests you cannot verify — means an auth server outage becomes an authorisation bypass, which is a much worse incident than downtime. Make the auth server highly available rather than making the gateway optimistic.</p>
 
@@ -429,7 +429,7 @@ class Introspector:
 
         <p>Enforce scopes declaratively next to the route definition, not in each handler, so that adding an endpoint without declaring its scope is a configuration error rather than a silent grant.</p>
 
-        <pre><code class="language-yaml"># Route policy. Vendor-neutral shape; every gateway has an equivalent.
+        <code class="language-yaml"># Route policy. Vendor-neutral shape; every gateway has an equivalent.
 # The default is deny: an operation with no policy entry is not routable.
 default_policy: deny
 
@@ -456,7 +456,7 @@ routes:
     scopes: [customers:read:pii, finance:read]   # BOTH required, not either
     auth: [mtls]
     rate_limit: sensitive
-    audit: full</code></pre>
+    audit: full</code>
 
         <p>Two details there that matter. <code>default_policy: deny</code> means a new endpoint deployed without a policy entry returns 404 at the gateway rather than being exposed with no checks — the single most valuable line in the file. And the last route requires both scopes rather than either, which is how you express "finance systems only" without inventing a role system inside your scope strings.</p>
 
@@ -470,7 +470,7 @@ routes:
 
         <p><strong>Pass identity downstream in a form the service must use.</strong> Strip any client-supplied identity headers at the edge — unconditionally, including ones you do not recognise — and inject verified ones. A service that reads <code>X-Customer-Id</code> from an inbound request without knowing whether the gateway set it or the client did is one curl away from an incident.</p>
 
-        <pre><code class="language-nginx">location /v1/ {
+        <code class="language-nginx">location /v1/ {
     # Remove ANY inbound identity headers before we add our own. A client that
     # sends X-Customer-Id must not be able to influence what the service sees.
     proxy_set_header X-Customer-Id "";
@@ -491,11 +491,11 @@ routes:
     proxy_set_header X-Request-Id  $request_id;   # correlate across services
 
     proxy_pass http://orders_upstream;
-}</code></pre>
+}</code>
 
         <p><strong>Then make the service query with the identity, not filter after.</strong> The pattern that fails is fetching by id and then checking ownership, because someone eventually writes a code path that skips the check. The pattern that holds is making ownership part of the query, so there is no version of the code that returns the wrong row.</p>
 
-        <pre><code class="language-sql">-- Wrong shape: fetch, then check in application code.
+        <code class="language-sql">-- Wrong shape: fetch, then check in application code.
 SELECT * FROM sales_order WHERE entity_id = :order_id;
 
 -- Right shape: ownership is a predicate, so a missed check cannot leak.
@@ -507,7 +507,7 @@ WHERE  o.entity_id = :order_id
   AND  (
         (:auth_type = 'customer' AND o.customer_id = :customer_id)
      OR (:auth_type = 'partner'  AND o.trade_account_id = ANY(:partner_accounts))
-  );</code></pre>
+  );</code>
 
         <p>The 404-not-403 detail is worth internalising. Returning 403 for an object that exists but is not yours is an existence oracle: an attacker walks the id space and learns your order volume, or worse, learns which ids are real before trying harder. Return 404 for both cases and log the difference internally.</p>
 
@@ -529,7 +529,7 @@ WHERE  o.entity_id = :order_id
 
         <p><strong>Alert on approaching expiry loudly and early.</strong> 30, 14, and 7 days, to both parties. The most common mTLS incident by a wide margin is an expired client certificate on a Sunday.</p>
 
-        <pre><code class="language-nginx">server {
+        <code class="language-nginx">server {
     listen 443 ssl;
     server_name partner-api.example.com;
 
@@ -557,7 +557,7 @@ WHERE  o.entity_id = :order_id
 
         proxy_pass http://partner_upstream;
     }
-}</code></pre>
+}</code>
 
         <p>A caution that has bitten me. If you terminate TLS at a CDN or a cloud load balancer, client certificate information may not survive to your origin, or may arrive in a vendor-specific header that a client could also send. Verify what actually reaches your application, and if the identity arrives in a header, strip that header from client-supplied input at the very first hop. I found exactly this on a review once: mTLS was configured, the origin trusted a header the load balancer set, and the load balancer did not strip the same header when a client sent it. The mTLS was decorative.</p>
 
@@ -569,7 +569,7 @@ WHERE  o.entity_id = :order_id
 
         <p>Then run limits at more than one granularity, because they solve different problems. A per-second burst limit protects your infrastructure from a runaway loop. A per-hour or per-day quota expresses a commercial agreement. A per-endpoint limit protects the expensive operations specifically — a partner making 200 requests a second to a cached product endpoint is fine, and 200 a second to order search is not.</p>
 
-        <pre><code class="language-lua">-- Redis Lua: sliding-window counter, atomic, one round trip.
+        <code class="language-lua">-- Redis Lua: sliding-window counter, atomic, one round trip.
 -- Fixed windows allow 2x the intended rate across a boundary; a sliding window
 -- weights the previous window by how far into the current one we are.
 local key_prev, key_curr = KEYS[1], KEYS[2]
@@ -592,13 +592,13 @@ end
 
 redis.call('INCRBY', key_curr, cost)
 redis.call('EXPIRE', key_curr, window * 2)
-return {1, math.floor(limit - estimated - cost), 0}</code></pre>
+return {1, math.floor(limit - estimated - cost), 0}</code>
 
         <p>The <code>cost</code> parameter is the part people leave out and then regret. Not all requests are equal: a product lookup by SKU is cheap, a filtered order search across two years is expensive, a bulk export is enormously expensive. Assign a cost per operation and limit on the total, so one client cannot exhaust your database while remaining comfortably within a request-count limit.</p>
 
         <p>Return the standard headers so clients can behave. This matters more than it sounds — a partner who can see their remaining quota will back off; a partner who only ever sees a 429 will retry immediately and turn your rate limit into a load generator.</p>
 
-        <pre><code class="language-http">HTTP/1.1 429 Too Many Requests
+        <code class="language-http">HTTP/1.1 429 Too Many Requests
 RateLimit-Limit: 1000
 RateLimit-Remaining: 0
 RateLimit-Reset: 47
@@ -612,7 +612,7 @@ Content-Type: application/problem+json
   "detail": "1000 requests per hour for client logistics-partner-3. Resets in 47s.",
   "policy": "partner-standard",
   "documentation": "https://developers.example.com/limits"
-}</code></pre>
+}</code>
 
         <p>One operational note that has saved a client's Black Friday. Have a documented, fast path to raise a specific partner's limit without a deploy — a configuration value in a store the gateway reads at runtime. During peak trading somebody always needs more headroom, and the choice between "deploy a config change under freeze" and "let the integration fail" is a choice you should not have to make at 11pm.</p>
 
@@ -624,7 +624,7 @@ Content-Type: application/problem+json
 
         <p>What it actually buys. Malformed payloads never reach your services, so a parser bug in a downstream library is unreachable from outside. Unknown fields are rejected rather than silently ignored, which closes mass-assignment — the bug where a client posts <code>{"total": 0.01}</code> to an order endpoint and a permissive ORM writes it. Size and depth limits stop resource exhaustion before it consumes a worker. And it gives clients consistent, specific error messages, which reduces integration support load dramatically.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "shipment-create.v1",
   "type": "object",
@@ -665,11 +665,11 @@ Content-Type: application/problem+json
     },
     "dispatched_at": { "type": "string", "format": "date-time" }
   }
-}</code></pre>
+}</code>
 
         <p><code>additionalProperties: false</code> is the line doing the security work. It is also the line that breaks partners who send extra fields, so version your schemas and give partners a grace period with warning headers before you enforce. I usually run new schemas in report-only mode for two weeks, logging what would have been rejected, and it always surfaces at least one integration sending something unexpected.</p>
 
-        <pre><code class="language-javascript">import Ajv from 'ajv';
+        <code class="language-javascript">import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 
 const ajv = new Ajv({ allErrors: true, strict: true, removeAdditional: false });
@@ -707,7 +707,7 @@ export function validateRequest({ reportOnly = false } = {}) {
     }
     return problem(res, 400, 'Request body failed validation', errors);
   };
-}</code></pre>
+}</code>
 
         <h3>Validating the response too</h3>
 
@@ -731,7 +731,7 @@ export function validateRequest({ reportOnly = false } = {}) {
 
         <p><strong>Field-level authorisation in the schema.</strong> Because the gateway cannot see which fields a query touches without parsing it, the enforcement point moves into the resolvers. Directives declared on the schema are the maintainable form of this.</p>
 
-        <pre><code class="language-graphql"># Authorisation declared on the schema, enforced in a directive resolver, so
+        <code class="language-graphql"># Authorisation declared on the schema, enforced in a directive resolver, so
 # adding a sensitive field without a rule is visible in code review.
 directive @requiresScope(scopes: [String!]!) on FIELD_DEFINITION
 directive @cost(complexity: Int! = 1, multipliers: [String!]) on FIELD_DEFINITION
@@ -752,7 +752,7 @@ type Query {
   products(first: Int = 24, after: String): ProductConnection!
       @cost(complexity: 2, multipliers: ["first"])
   customer(id: ID!): Customer @requiresScope(scopes: ["customers:read"])
-}</code></pre>
+}</code>
 
         <p>Also: disable introspection in production, and turn off field suggestions in error messages. The "did you mean <code>creditLimit</code>" hint is a schema disclosure mechanism that survives disabling introspection, and almost nobody switches it off.</p>
 
@@ -764,7 +764,7 @@ type Query {
 
         <p>What a webhook receiver needs. Signature verification using the sender's documented scheme, compared in constant time, with the raw body rather than a re-serialised version — re-serialising changes whitespace and key order and breaks the signature in ways that lead people to disable verification. A timestamp check to prevent replay, five minutes or less. Idempotency, keyed on the sender's event id, because every serious webhook provider will eventually deliver twice and a duplicate payment capture is a real incident. And an allowlist of source addresses where the sender publishes them, as a second factor rather than the primary one.</p>
 
-        <pre><code class="language-python">import hmac, hashlib, time
+        <code class="language-python">import hmac, hashlib, time
 from fastapi import Request, HTTPException
 
 MAX_SKEW = 300   # seconds
@@ -788,7 +788,7 @@ async def verify_webhook(request: Request, secret: bytes) -&gt; dict:
     # Idempotency: claim the event id atomically. Second delivery is a no-op.
     if not await claim_event(event["id"], ttl=86_400):
         return {"status": "duplicate", "id": event["id"]}
-    return event</code></pre>
+    return event</code>
 
         <p>And return 200 fast. Acknowledge, enqueue, process asynchronously. A webhook handler that does the work inline will time out under load, the sender will retry, and you will process the same event three times while your queue is empty and your web workers are all blocked.</p>
 
@@ -800,7 +800,7 @@ async def verify_webhook(request: Request, secret: bytes) -&gt; dict:
 
         <p>The detections worth building on top, which are all straightforward once the fields above exist. A client's 403 rate rising — someone is probing or an integration has drifted. A client accessing a resource type it has never touched in 90 days. A single client's request volume rising more than an order of magnitude within an hour. Sequential-looking id access patterns against object endpoints, which is enumeration in progress. And access to high-sensitivity scopes outside the caller's normal hours, which catches the credential-used-from-elsewhere case surprisingly often.</p>
 
-        <pre><code class="language-sql">-- Enumeration detector: one client walking an id space.
+        <code class="language-sql">-- Enumeration detector: one client walking an id space.
 -- Runs every 15 minutes against the gateway access log.
 WITH ordered AS (
   SELECT client_id, path_object_id::bigint AS oid, ts,
@@ -819,7 +819,7 @@ WHERE  prev IS NOT NULL
 GROUP  BY client_id
 -- A legitimate client fetches the orders it knows about, in no particular
 -- order. Consecutive ids in volume is someone counting.
-HAVING count(*) FILTER (WHERE oid - prev BETWEEN 1 AND 3) &gt; 40;</code></pre>
+HAVING count(*) FILTER (WHERE oid - prev BETWEEN 1 AND 3) &gt; 40;</code>
 
         <h2>13. The Supplier, Rebuilt</h2>
 
@@ -896,16 +896,20 @@ HAVING count(*) FILTER (WHERE oid - prev BETWEEN 1 AND 3) &gt; 40;</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/graphql-rest-api-performance/">GraphQL vs. REST API Performance Optimization</a></strong>
-              <p>Query depth limiting and complexity analysis.</p>
+              <strong><a href="/blog/zero-trust-security/">Zero-Trust Security Architecture for E-Commerce Enterprise Infrastructure</a></strong>
+              <p>Implementing zero trust on a real ecommerce estate: identity-aware proxies, short-lived cred...</p>
             </li>
             <li>
-              <strong><a href="/blog/waf-implementation/">Implementing a Web Application Firewall (WAF)</a></strong>
-              <p>API gateway WAF expression rules.</p>
+              <strong><a href="/blog/referrer-policy/">Referrer-Policy Header Implementation</a></strong>
+              <p>How to set Referrer-Policy on an ecommerce site: the eight values compared, where checkout U...</p>
             </li>
             <li>
-              <strong><a href="/blog/secure-ecommerce-checklist/">Secure E-Commerce Deployment Checklist</a></strong>
-              <p>Comprehensive security validation for headless and monolithic architectures.</p>
+              <strong><a href="/blog/waf-implementation/">Implementing a Web Application Firewall (WAF) for Ecommerce</a></strong>
+              <p>Deploying a WAF on Magento and Shopify: OWASP CRS anomaly scoring, Cloudflare and AWS rules,...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/api-rate-limiting-probing-guide/">How to Probe and Tune API Rate Limits: A Practical Engineering Guide</a></strong>
+              <p>A step-by-step engineering guide to probing API rate limits, analyzing 429 Too Many Requests...</p>
             </li>
           </ul>
         </div>

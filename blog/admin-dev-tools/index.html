@@ -63,10 +63,10 @@
   <!-- Theme: apply the stored chart before first paint so there is no flash. -->
   <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
   <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
-  <title>Building Magento 2 Admin Dev Tools: Why I Built an In-Browser Control Panel | MODRACX</title>
-  <meta name="description" content="Flashing caches, running indexers, tailing 500MB logs without OOM crashes, and inspecting DI wiring in Magento 2. The deep architectural story behind admin-dev-tools by Kenneth D'Silva." />
-  <meta property="og:title" content="Building Magento 2 Admin Dev Tools: Why I Built an In-Browser Control Panel | MODRACX" />
-  <meta property="og:description" content="Inside the architecture, reverse-seek log reader, DI wiring inspector, and cache internals of Magento 2 Admin Dev Tools by Kenneth D'Silva." />
+  <title>Magento 2 Admin Dev Tools: Developer Toolbar, Cache & Profiler Extension | MODRACX</title>
+  <meta name="description" content="Inside Magento 2 Admin Dev Tools: in-browser control panel for 1-click cache flushing, indexer triggers, memory-safe log tailing, and live DI preference/plugin inspection." />
+  <meta property="og:title" content="Magento 2 Admin Dev Tools: Developer Toolbar, Cache & Profiler Extension | MODRACX" />
+  <meta property="og:description" content="Inside Magento 2 Admin Dev Tools: in-browser control panel for 1-click cache flushing, indexer triggers, memory-safe log tailing, and live DI preference/plugin inspection." />
   <meta property="og:type" content="article" />
   <link rel="canonical" href="https://www.modracx.com/blog/admin-dev-tools/" />
   <link rel="alternate" hreflang="en" href="https://www.modracx.com/blog/admin-dev-tools/" />
@@ -90,7 +90,7 @@
         "url": "https://www.modracx.com/blog/admin-dev-tools/",
         "datePublished": "2026-08-12",
         "dateModified": "2026-08-14",
-        "timeRequired": "PT27M",
+        "timeRequired": "PT29M",
         "mainEntityOfPage": "https://www.modracx.com/blog/admin-dev-tools/",
         "image": "https://www.modracx.com/og-image.png",
         "author": {
@@ -249,8 +249,12 @@
         <p class="lede">Flashing caches, running indexers, reading raw log tails, and tracing dependency injection wiring in Magento 2 usually burns hours in SSH terminals. Here is how and why I engineered an in-browser control suite directly into the Magento backend.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 29 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
+        </div>
+        <div class="spell-row" style="margin-top: 1.25rem; margin-bottom: 0.5rem;">
+          <a class="spell" href="https://github.com/Modracx/admin-dev-tools" target="_blank" rel="noopener">GitHub: Modracx/admin-dev-tools ↗</a>
+          <a class="spell-ghost" href="/docs/admin-dev-tools/">Read Admin Dev Tools Manual ↗</a>
         </div>
       </div>
 
@@ -309,7 +313,7 @@
 
         <p>The module is organised into clean, single-responsibility layers. Below is the complete physical file layout of the extension within <code>app/code/Modracx/AdminDevTools</code>:</p>
 
-        <pre><code class="language-text">app/code/Modracx/AdminDevTools/
+        <code class="language-text">app/code/Modracx/AdminDevTools/
 ├── Controller/
 │   └── Adminhtml/
 │       ├── Cache/
@@ -359,7 +363,7 @@
             ├── css/
             │   └── devbar.css       # Scoped dark-mode styles & layout
             └── js/
-                └── devbar.js        # Vanilla JS asynchronous controller</code></pre>
+                └── devbar.js        # Vanilla JS asynchronous controller</code>
 
         <p>Notice that there is no <code>Setup/Patch/Data/</code> or <code>Setup/Patch/Schema/</code>. The entire module is completely stateless on the database level. Installing or removing the extension leaves absolute zero schema baggage behind.</p>
 
@@ -410,7 +414,7 @@
 
         <p>Here is how <code>Model/CacheAction.php</code> performs clean, programmatic invalidation using Magento's native <code>Magento\Framework\App\Cache\TypeListInterface</code> and <code>Pool</code> without side effects:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\AdminDevTools\Model;
@@ -499,7 +503,7 @@ class CacheAction
             return false;
         }
     }
-}</code></pre>
+}</code>
 
         <p>Because the controller returns a clean JSON structure, the front-end JavaScript updates the toolbar's badge indicators instantly, playing a subtle visual flash to confirm cache invalidation without forcing a full document reload.</p>
 
@@ -509,7 +513,7 @@ class CacheAction
 
         <p>In <code>AdminDevTools</code>, the Indexer panel surfaces all indexer states in real time: <code>valid</code> (ready), <code>invalid</code> (reindex required), and <code>working</code> (in progress). Clicking the reindex button on an individual row triggers <code>Model/IndexerAction.php</code>, which isolates the exact indexer instance by ID and invokes its indexing process synchronously.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\AdminDevTools\Model;
@@ -561,7 +565,7 @@ class IndexerAction
             'elapsed_sec' => $elapsed
         ];
     }
-}</code></pre>
+}</code>
 
         <p>By hitting only <code>catalog_product_price</code> or <code>catalog_category_product</code>, reindex times drop from several minutes to under two seconds.</p>
 
@@ -589,7 +593,7 @@ class IndexerAction
 
         <p>The memory footprint of this approach is strictly bounded by the size of the 4KB chunk and the resulting 100 extracted lines. Even when tailing a 4-gigabyte log file, peak memory usage remains under <strong>1.8 megabytes of RAM</strong>, executing in under 6 milliseconds.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\AdminDevTools\Model;
@@ -668,7 +672,7 @@ class LogTail
         // Run through security sanitizer to scrub passwords, secrets, and auth tokens
         return array_map([$this-&gt;valueMasker, 'maskLine'], array_values($lines));
     }
-}</code></pre>
+}</code>
 
         <h2>7. Security &amp; Sensitive Value Masking</h2>
 
@@ -676,7 +680,7 @@ class LogTail
 
         <p>To eliminate the risk of accidental secret exposure, <code>Model/ValueMasker.php</code> parses every log line through a compiled regex engine that masks credit card numbers, Bearer tokens, private keys, and passwords before JSON serialization.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\AdminDevTools\Model;
@@ -716,7 +720,7 @@ class ValueMasker
 
         return (string) $sanitized;
     }
-}</code></pre>
+}</code>
 
         <h2>8. The DI Wiring Inspector: Resolving the Hidden Object Graph</h2>
 
@@ -726,7 +730,7 @@ class ValueMasker
 
         <p>The DI Wiring Inspector in <code>AdminDevTools</code> answers this question instantly. You type any class or interface name into the devbar, and <code>Model/WiringInspector.php</code> queries Magento's internal DI configuration container (<code>Magento\Framework\ObjectManager\ConfigInterface</code>) and the interceptor metadata pool.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\AdminDevTools\Model;
@@ -811,7 +815,7 @@ class WiringInspector
 
         return $hooks;
     }
-}</code></pre>
+}</code>
 
         <p>The resulting visual output renders the exact plugin interceptor pipeline. If a third-party extension is intercepting <code>ProductRepository::save()</code> with an around plugin that suppresses exceptions or adds 150ms of overhead, you see it within two seconds.</p>
 
@@ -821,14 +825,14 @@ class WiringInspector
 
         <p>The Config panel in <code>AdminDevTools</code> provides a real-time path query interface with auto-complete suggestions. Typing <code>dev/debug</code> immediately returns all matching config paths across default, website, and store scopes. You can also edit and save values directly from the UI, with automatic cache invalidation of the <code>config</code> type triggered on save.</p>
 
-        <pre><code class="language-text">Query: dev/template_hints
+        <code class="language-text">Query: dev/template_hints
 Matches:
   [default/0]  dev/debug/template_hints_storefront  =&gt; 0
   [default/0]  dev/debug/template_hints_admin       =&gt; 0
   [website/1]  dev/debug/template_hints_storefront  =&gt; 1
 
 Action: Set [default/0] dev/debug/template_hints_admin = 1
-Result: Saved. Type 'config' cleaned in 41ms.</code></pre>
+Result: Saved. Type 'config' cleaned in 41ms.</code>
 
         <h2>10. Cron Status &amp; On-Demand Synchronous Execution</h2>
 
@@ -838,7 +842,7 @@ Result: Saved. Type 'config' cleaned in 41ms.</code></pre>
 
         <p>When clicked, <code>Model/CronManager.php</code> instantiates the configured job class through the Object Manager and executes its entry method synchronously within the current HTTP request, returning the execution time and any thrown exception traces directly in the UI:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 declare(strict_types=1);
 
 namespace Modracx\AdminDevTools\Model;
@@ -891,7 +895,7 @@ class CronManager
             'output' =&gt; is_scalar($result) ? (string)$result : 'Executed without scalar return'
         ];
     }
-}</code></pre>
+}</code>
 
         <h2>11. Security Hardening: Multi-Tier Access Control</h2>
 
@@ -935,7 +939,7 @@ class CronManager
 
         <p>The ACL definition in <code>etc/acl.xml</code> allows enterprise system administrators to grant junior developers cache flush permissions while restricting cron execution and log reading:</p>
 
-        <pre><code class="language-xml">&lt;?xml version="1.0"?&gt;
+        <code class="language-xml">&lt;?xml version="1.0"?&gt;
 &lt;config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="urn:magento:framework:Acl/etc/acl.xsd"&gt;
     &lt;acl&gt;
@@ -952,7 +956,7 @@ class CronManager
             &lt;/resource&gt;
         &lt;/resources&gt;
     &lt;/acl&gt;
-&lt;/config&gt;</code></pre>
+&lt;/config&gt;</code>
 
         <h2>12. Front-End Engineering: Vanilla ES6+ and CSS Isolation</h2>
 
@@ -960,7 +964,7 @@ class CronManager
 
         <p>To ensure total visual isolation, <code>AdminDevTools</code> uses a strict BEM naming convention prefixed with <code>modracx-devbar__</code> and encapsulates its design with CSS custom variables scoped strictly to the container:</p>
 
-        <pre><code class="language-css">/* view/adminhtml/web/css/devbar.css */
+        <code class="language-css">/* view/adminhtml/web/css/devbar.css */
 .modracx-devbar-root {
   --devbar-bg: #07071a;
   --devbar-surface: #0f0f2d;
@@ -1014,13 +1018,13 @@ class CronManager
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}</code></pre>
+}</code>
 
         <h2>13. Detailed Execution Flows &amp; Micro-Benchmark Architecture</h2>
 
         <p>To understand why direct in-process interaction provides such a drastic performance improvement over traditional CLI tools, we must examine the internal execution pipeline of both approaches. When an engineer executes <code>bin/magento cache:clean</code>, the operating system kernel must spawn a new process, map dynamic link libraries, and initialize PHP's Zend Engine.</p>
 
-        <pre><code class="language-text">Comparison of Execution Pipelines:
+        <code class="language-text">Comparison of Execution Pipelines:
 CLI Execution Model (bin/magento):
 [OS Process Fork] ──> [PHP Zend Engine Init] ──> [Composer ClassMap (4,000+ classes)]
        │
@@ -1036,7 +1040,7 @@ Admin Dev Tools In-Process Model (AJAX Fast-Path):
        │
        ▼
 [FormKey &amp; ACL Check] ──> [Direct Cache Backend Clean] ──> [JSON Response Stream]
-       └──> Total Wall-Clock Latency: 28ms – 52ms (99.1% Reduction)</code></pre>
+       └──> Total Wall-Clock Latency: 28ms – 52ms (99.1% Reduction)</code>
 
         <p>In high-throughput enterprise staging environments with Redis clustering, programmatic invalidation bypasses framework boot overhead entirely. In our lab benchmarks across 1,000 sequential cache operations, the in-process execution model showed a <strong>99.1% reduction in wall-clock latency</strong> and eliminated CPU spikes on development containers.</p>
 
@@ -1129,7 +1133,7 @@ Admin Dev Tools In-Process Model (AJAX Fast-Path):
 
         <p>In modern enterprise development, code progresses through Local Development, Automated CI/CD Pipelines, QA Staging, and Production Origin clusters. Managing configuration and access across these tiers requires clear isolation rules:</p>
 
-        <pre><code class="language-text">Deployment Tier Strategy:
+        <code class="language-text">Deployment Tier Strategy:
 ┌─────────────────────┬──────────────────────┬──────────────────────┬─────────────────────┐
 │ Environment Tier    │ DevTools UI State    │ Allowed Features     │ Security Gate       │
 ├─────────────────────┼──────────────────────┼──────────────────────┼─────────────────────┤
@@ -1137,7 +1141,7 @@ Admin Dev Tools In-Process Model (AJAX Fast-Path):
 │ CI / Test Runners   │ Headless Mode        │ CLI Diagnostics Only │ Disabled in Tests   │
 │ Staging / UAT       │ Active via ACL       │ All Panels &amp; Tools   │ VPN / CIDR + FormKey│
 │ Production Origin   │ Restricted / Audited │ Caches, DI Inspector │ Strict 2FA + IP Gate│
-└─────────────────────┴──────────────────────┴──────────────────────┴─────────────────────┘</code></pre>
+└─────────────────────┴──────────────────────┴──────────────────────┴─────────────────────┘</code>
 
         <p>On production environments, dangerous write operations (such as raw config modification or manual indexer triggers during peak hours) can be completely disabled via <code>app/etc/env.php</code> environment flags while leaving read-only diagnostic panels (DI wiring reflection and masked log tailing) accessible to senior site reliability engineers.</p>
 
@@ -1194,12 +1198,12 @@ Admin Dev Tools In-Process Model (AJAX Fast-Path):
         <p>To integrate Admin Dev Tools into an existing enterprise Magento 2 codebase, follow this step-by-step implementation workflow:</p>
 
         <h3>Step 1: Install Package via Composer</h3>
-        <pre><code class="language-bash">composer require modracx/admin-dev-tools --dev</code></pre>
+        <code class="language-bash">composer require modracx/admin-dev-tools --dev</code>
 
         <h3>Step 2: Enable Module and Run Declarative Setup</h3>
-        <pre><code class="language-bash">bin/magento module:enable Modracx_AdminDevTools
+        <code class="language-bash">bin/magento module:enable Modracx_AdminDevTools
 bin/magento setup:upgrade
-bin/magento setup:di:compile</code></pre>
+bin/magento setup:di:compile</code>
 
         <h3>Step 3: Configure Role-Based Permissions in Admin</h3>
         <p>Navigate to <strong>System &gt; User Roles &gt; Role Resources</strong>. Select the target role (e.g. "Senior Developers") and check the custom <code>Modracx_AdminDevTools</code> permission nodes. Restrict production roles to read-only diagnostic tools.</p>
@@ -1211,7 +1215,7 @@ bin/magento setup:di:compile</code></pre>
 
         <p>Developer tools must maintain higher reliability standards than standard application code. <code>Modracx_AdminDevTools</code> is verified through automated continuous integration testing:</p>
 
-        <pre><code class="language-bash"># Run unit test suite covering LogTail reverse-seeking algorithm
+        <code class="language-bash"># Run unit test suite covering LogTail reverse-seeking algorithm
 vendor/bin/phpunit -c dev/tests/unit/phpunit.xml.dist \
   app/code/Modracx/AdminDevTools/Test/Unit/Model/LogTailTest.php
 
@@ -1219,7 +1223,7 @@ vendor/bin/phpunit -c dev/tests/unit/phpunit.xml.dist \
 vendor/bin/phpstan analyse -c phpstan.neon app/code/Modracx/AdminDevTools
 
 # Validate Magento 2 Coding Standards (MEQP / PHPCS)
-vendor/bin/phpcs --standard=Magento2 app/code/Modracx/AdminDevTools</code></pre>
+vendor/bin/phpcs --standard=Magento2 app/code/Modracx/AdminDevTools</code>
 
         <p>All automated test fixtures simulate corrupted log files, unreadable stream handles, circular DI references, and missing cache pools to verify graceful error recovery across all failure states.</p>
 
@@ -1323,19 +1327,19 @@ vendor/bin/phpcs --standard=Magento2 app/code/Modracx/AdminDevTools</code></pre>
           <ul>
             <li>
               <strong><a href="/blog/frontend-dev-tools/">Real-Time Storefront Profiling: Building Magento 2 Frontend Dev Tools</a></strong>
-              <p>Optimizing block execution times, layout handle trees, query counts, and template diagnostics.</p>
+              <p>Real-time storefront profiling for Magento 2: measure block render times, layout handle tree...</p>
             </li>
             <li>
-              <strong><a href="/blog/custom-magento-module/">Building a Custom Magento 2 Module: From Architecture to Deployment</a></strong>
-              <p>Dependency injection, plugins versus observers versus preferences, and declarative schema.</p>
+              <strong><a href="/blog/dabiro-database-manager/">Designing Dabiro: Single-File Database Management in PHP &amp; Node.js (phpMyAdmin &amp; Adminer Alternative)</a></strong>
+              <p>Dabiro is a fast, zero-dependency, single-file database manager and modern alternative to ph...</p>
             </li>
             <li>
-              <strong><a href="/blog/dabiro-database-manager/">Designing Dabiro: Single-File Database Management in PHP &amp; Node.js</a></strong>
-              <p>Zero-dependency multi-database administration for MySQL, PostgreSQL, and SQLite.</p>
+              <strong><a href="/blog/node-js-high-concurrency-microservices/">Building High-Concurrency Node.js Microservices</a></strong>
+              <p>Event loop lag, load shedding, worker threads, connection pooling and graceful shutdown — bu...</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
-              <p>Redis caching architectures, Varnish FPC configuration, and database indexer scaling.</p>
+              <strong><a href="/blog/pwa-for-ecommerce/">PWA for Ecommerce: Native Experience on Web</a></strong>
+              <p>The business and UX case for an ecommerce PWA: when to fire the install prompt, what standal...</p>
             </li>
           </ul>
         </div>

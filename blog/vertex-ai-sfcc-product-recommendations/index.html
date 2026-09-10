@@ -208,8 +208,8 @@
         <p class="lede">How we replaced a monolithic SFCC recommendation engine with Google Vertex AI (Cloud Retail API): catalog ingestion pipelines, client-side hydration islands, BigQuery tuning, and cold-start mitigation.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 30 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 26 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -266,7 +266,7 @@
 
 <p>Here is the core logic of the Steptype script that iterates over the catalog and streams it to a custom JSONL file.</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 /**
  * ExportCatalogToJSONL.js
  * 
@@ -357,7 +357,7 @@ function mapToRetailAPI(product) {
 }
 
 module.exports.execute = execute;
-</code></pre>
+</code>
 
 <p>This script runs nightly at 3:00 AM. A subsequent job step uploads the generated JSONL file to a Google Cloud Storage (GCS) bucket using a custom SFCC Service configured with a Google Service Account JWT for authentication. We do not use WebDAV for external system transfers. WebDAV is a relic. We use direct HTTPS PUT requests to the GCS JSON API.</p>
 
@@ -367,7 +367,7 @@ module.exports.execute = execute;
 
 <p>Here is the Airflow DAG that handles the ingestion and model retraining:</p>
 
-<pre><code class="language-python">
+<code class="language-python">
 from airflow import models
 from airflow.providers.google.cloud.operators.gcs import GCSListObjectsOperator
 from airflow.providers.google.cloud.operators.vertex_ai.dataset import ImportDataVertexAIOperator
@@ -439,7 +439,7 @@ with models.DAG(
     # trigger_model_retrain = ...
 
     list_files >> import_catalog
-</code></pre>
+</code>
 
 <p>This DAG ensures that the Retail API is always aware of the latest products, categories, and custom brewing attributes. If the import fails, PagerDuty fires, and someone looks at the logs. We do not tolerate stale catalogs.</p>
 
@@ -456,7 +456,7 @@ with models.DAG(
 
 <p>Here is a snippet of the Express controller that handles the recommendation request. Notice how we handle timeouts. We enforce a strict 300ms SLA on this API. If Google doesn't respond in time, we return an empty array. The client will just hide the carousel. A missing carousel is infinitely better than a broken page or a hanging request.</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 const express = require('express');
 const { PredictionServiceClient } = require('@google-cloud/retail').v2;
 const LaunchDarkly = require('launchdarkly-node-server-sdk');
@@ -524,7 +524,7 @@ router.post('/api/recommendations/:placementId', async (req, res) => {
 });
 
 module.exports = router;
-</code></pre>
+</code>
 
 <p>This middleware is deployed across three GCP regions (us-central1, us-east4, us-west1) behind an external HTTP(S) load balancer. We use Cloud CDN to cache static assets, but the `/api/recommendations` endpoint is explicitly set to `Cache-Control: no-store`. Recommendations must be real-time and context-aware based on the user's browsing history.</p>
 
@@ -534,7 +534,7 @@ module.exports = router;
 
 <p>Instead, we render empty container divs with data attributes describing the context.</p>
 
-<pre><code class="language-html">
+<code class="language-html">
 &lt;!-- product-detail-page.isml --&gt;
 &lt;div class="mod-recommendation-zone" 
      data-placement="pdp_frequently_bought_together"
@@ -542,11 +542,11 @@ module.exports = router;
     &lt;!-- Skeleton loader injected via CSS --&gt;
     &lt;div class="skeleton-carousel"&gt;&lt;/div&gt;
 &lt;/div&gt;
-</code></pre>
+</code>
 
 <p>A vanilla JavaScript controller initializes on `DOMContentLoaded`. It finds all elements with the `mod-recommendation-zone` class, extracts the configuration, and fires requests to our routing API using the `IntersectionObserver` API. We only fetch recommendations when the carousel is about to scroll into the viewport. This saves massive amounts of API quota and bandwidth.</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // recommendations.js
 class RecommendationManager {
     constructor() {
@@ -631,7 +631,7 @@ class RecommendationManager {
 document.addEventListener('DOMContentLoaded', () => {
     new RecommendationManager();
 });
-</code></pre>
+</code>
 
 <p>This approach completely isolates the storefront performance from the recommendation engine performance. If the Node.js API goes down, or if Vertex AI experiences an outage, the customer sees a product detail page without a "Frequently Bought Together" section. The core funnel remains intact. They can still add to cart. They can still checkout. We preserve revenue during partial degradation.</p>
 
@@ -645,7 +645,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <p>Within SFCC, we have hooks tied to inventory updates. Whenever an inventory record is modified (usually via an integration with our ERP, NetSuite), SFCC fires a lightweight webhook to our middleware layer.</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // SFCC Hook: app.inventory.update
 var HTTPClient = require('dw/net/HTTPClient');
 var Logger = require('dw/system/Logger');
@@ -669,11 +669,11 @@ exports.afterPATCH = function(inventoryRecord) {
         Logger.error('Failed to stream inventory update for {0}: {1}', payload.productId, e.message);
     }
 };
-</code></pre>
+</code>
 
 <p>Our Node.js middleware receives this webhook, authenticates it, and immediately publishes a message to a Pub/Sub topic.</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // Node.js Webhook Receiver
 const { PubSub } = require('@google-cloud/pubsub');
 const pubsub = new PubSub();
@@ -695,7 +695,7 @@ router.post('/webhooks/inventory', authenticateWebhook, async (req, res) => {
         res.status(500).send('Internal Error');
     }
 });
-</code></pre>
+</code>
 
 <p>Finally, a Google Cloud Function subscribes to this Pub/Sub topic and uses the Retail API's `patch` method to update only the availability field of the specific product. This ensures that Vertex AI stops recommending out-of-stock items within seconds of the inventory changing in SFCC, all without needing to re-import the entire catalog.</p>
 
@@ -716,7 +716,7 @@ router.post('/webhooks/inventory', authenticateWebhook, async (req, res) => {
 
 <p>For example, if you are looking at a product with the `beerStyle` attribute set to "IPA", we enforce a soft filter to boost recommendations that share the same `beerStyle` or belong to the "Hops" category. Here is what the modified prediction request looks like in our Node.js middleware:</p>
 
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // Modified Prediction Request with Filtering
 const request = {
     placement: placementPath,
@@ -725,7 +725,7 @@ const request = {
     filter: `filterOutOfStockItems AND categories: ANY("Hops", "Yeast")`, // Example rigid filter
     // Or we use dynamic boosting based on the context product
 };
-</code></pre>
+</code>
 
 <p>We rely on A/B testing via LaunchDarkly to validate these filter configurations. We run experiments continuously, measuring not just click-through rate on the carousels, but actual add-to-cart rate and final revenue per session.</p>
 
@@ -745,7 +745,7 @@ const request = {
 <h2>7. Real-Time Data Ingestion Pipelines</h2>
 <p>To feed Vertex AI accurately, we needed a robust data pipeline capable of capturing user interactions (views, add-to-carts, purchases) in real-time. We bypassed SFCC's native tracking and built a custom client-side event bus using Google Tag Manager (GTM) and Google Cloud Pub/Sub.</p>
 <p>When a user views a home brewing kit, a payload is fired directly to a Pub/Sub HTTP endpoint. This minimizes the load on the SFCC application servers and ensures data reaches Google Cloud instantly.</p>
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // Client-side tracking script
 function trackProductView(product) {
     const payload = {
@@ -772,12 +772,12 @@ function trackProductView(product) {
         })
     }).catch(console.error);
 }
-</code></pre>
+</code>
 
 <h2>8. BigQuery SQL: Preparing Data for Vertex AI</h2>
 <p>Vertex AI Recommendations requires specific schemas for its training data: Users, Items, and User-Events. We utilized BigQuery scheduled queries to transform the raw Pub/Sub event stream into the precise formats required by Vertex AI.</p>
 <p>Here is the critical SQL query we run daily to aggregate the user-event data, handling sessionization and deduplication for our brewing supplies catalog:</p>
-<pre><code class="language-sql">
+<code class="language-sql">
 -- BigQuery Transformation for Vertex AI User-Events
 WITH DedupedEvents AS (
     SELECT 
@@ -798,12 +798,12 @@ SELECT
 FROM DedupedEvents
 WHERE rn = 1
   AND product_id IS NOT NULL;
-</code></pre>
+</code>
 
 <h2>9. Context-Aware Routing and Caching Strategy</h2>
 <p>Hitting the Vertex AI API for every single page load on a high-traffic SFCC site will instantly obliterate your API budget and introduce severe latency. We implemented a multi-tiered caching strategy.</p>
 <p>For anonymous users, we serve pre-computed "trending" or "bestseller" recommendations cached at the CDN edge (Fastly). We only invoke the Vertex AI endpoint for authenticated users with a known history, and even then, we cache the response in Redis for 15 minutes.</p>
-<pre><code class="language-javascript">
+<code class="language-javascript">
 // SFCC Controller: Product.js (Simplified)
 var server = require('server');
 var cache = require('*/cartridge/scripts/helpers/cacheHelper');
@@ -833,7 +833,7 @@ server.get('Recommendations', function (req, res, next) {
     res.json(recommendations);
     next();
 });
-</code></pre>
+</code>
 
 <h2>10. Comprehensive Integration FAQ</h2>
 <dl>
@@ -869,7 +869,7 @@ server.get('Recommendations', function (req, res, next) {
 </dl>
 <h2>11. Implementing Client-Side Hydration Islands</h2>
 <p>Once the recommendations are fetched from the Vertex AI endpoint via the SFCC controller, we use a concept known as Hydration Islands to render the UI without blocking the main thread. We use Preact for this specific component to keep the payload under 4KB.</p>
-<pre><code class="language-javascript">
+<code class="language-javascript">
 import { h, render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 
@@ -908,11 +908,11 @@ const observer = new IntersectionObserver((entries) =&gt; {
     });
 });
 document.querySelectorAll('.recommendation-slot').forEach(el => observer.observe(el));
-</code></pre>
+</code>
 <h2>12. Unpacking the Telemetry Payload: Raw JSON Schemas</h2>
 <p>The success of the Vertex AI model is entirely dependent on the structural integrity of the telemetry data you feed it. Sending unstructured, generic payloads will result in a model that recommends randomly. We enforce a strict JSON Schema validation on the Pub/Sub edge workers before the data ever reaches BigQuery.</p>
 <p>Here is the exact, unvarnished JSON schema we mandate for a <code>add-to-cart</code> event within the home brewing catalog. Notice the explicit inclusion of the <code>visitor_id</code> which merges the anonymous <code>client_id</code> with the authenticated <code>user_id</code> upon login, ensuring the session stitching does not break when a user transitions from a guest to an authenticated state.</p>
-<pre><code class="language-json">
+<code class="language-json">
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Vertex_AI_UserEvent",
@@ -962,12 +962,12 @@ document.querySelectorAll('.recommendation-slot').forEach(el => observer.observe
   },
   "required": ["eventType", "visitorId", "eventTime", "productDetails"]
 }
-</code></pre>
+</code>
 
 <h2>13. Advanced BigQuery Tuning: Handling High-Volume Days</h2>
 <p>During promotions like "National Homebrew Day", our event volume spikes by 600%. If our BigQuery scheduled queries execute with brute-force `SELECT *` operations, our Google Cloud bill would eclipse the revenue generated by the recommendations.</p>
 <p>To optimize this, we utilize BigQuery table partitioning and clustering. We partition the raw event tables by the `timestamp` column (specifically `DAY`) and cluster them by `visitor_id` and `event_type`. This allows our deduplication query to scan only a fraction of the data.</p>
-<pre><code class="language-sql">
+<code class="language-sql">
 -- DDL for the optimized raw events table
 CREATE TABLE `my-gcp-project.raw_events.product_interactions_optimized`
 (
@@ -979,7 +979,7 @@ CREATE TABLE `my-gcp-project.raw_events.product_interactions_optimized`
 )
 PARTITION BY DATE(timestamp)
 CLUSTER BY visitor_id, event_type;
-</code></pre>
+</code>
 <p>By enforcing partition filters on the daily Vertex AI ingestion job (<code>WHERE DATE(timestamp) = CURRENT_DATE()</code>), we reduce the query bytes billed from 4 terabytes to roughly 12 gigabytes, keeping the operational cost of the recommendation engine essentially flat regardless of traffic spikes.</p>
 
 <h2>14. Additional FAQ: Expanding the Edge Cases</h2>
@@ -1004,16 +1004,20 @@ CLUSTER BY visitor_id, event_type;
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/custom-magento-module/">Custom Magento 2 Module Architecture Blueprint</a></strong>
-              <p>Dependency injection, plugins/interceptors, service contracts, and cache.</p>
+              <strong><a href="/blog/salesforce-commerce-cloud-integration/">Salesforce Commerce Cloud (SFCC) Integration Architecture</a></strong>
+              <p>SFCC integration in practice: SLAS session design, OCAPI vs SCAPI, quota limits, catalog imp...</p>
             </li>
             <li>
-              <strong><a href="/blog/magento-hyva-themes/">Magento 2 Hyvä Themes Performance Architecture</a></strong>
-              <p>Replacing RequireJS/Luma with Alpine.js, Tailwind CSS, and instant loads.</p>
+              <strong><a href="/blog/zoho-crm-magento-2-integration/">Zoho CRM Magento 2 Integration: Architectural Blueprint</a></strong>
+              <p>A developer guide to integrating Zoho CRM with Magento 2: synchronizing customer cohorts, ma...</p>
             </li>
             <li>
-              <strong><a href="/blog/shopify-app-development/">Shopify App Development with React, Node & GraphQL</a></strong>
-              <p>App Bridge 3.0, Webhook subscriptions, and Admin GraphQL queries.</p>
+              <strong><a href="/blog/ai-product-recommendations/">AI-Powered Product Recommendations for Magento &amp; Shopify</a></strong>
+              <p>Cold start, collaborative versus content-based recommendations, why offline evaluation lies,...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/sap-s4hana-commerce-integration/">SAP S/4HANA Commerce Integration: Enterprise Architecture Guide</a></strong>
+              <p>Architecture guide for SAP Commerce Cloud and S/4HANA ERP integration: OData services, SAP I...</p>
             </li>
           </ul>
         </div>

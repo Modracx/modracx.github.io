@@ -200,8 +200,8 @@
         <p class="lede">A customer existed four times in one HubSpot portal, and every workflow built on top of that quietly did the wrong thing. Identity, lifecycle stages and attribution at the commerce-CRM seam.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 28 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 35 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -280,7 +280,7 @@
 
         <p>The pattern I now build by default: create a unique-value property called something like <code>commerce_customer_id</code>, write your storefront's customer entity ID into it, and upsert against that rather than against email. Email is a thing people change. The customer ID is not.</p>
 
-        <pre><code class="language-http">POST /crm/v3/objects/contacts/batch/upsert
+        <code class="language-http">POST /crm/v3/objects/contacts/batch/upsert
 Authorization: Bearer pat-eu1-xxxxxxxx
 Content-Type: application/json
 
@@ -298,7 +298,7 @@ Content-Type: application/json
       }
     }
   ]
-}</code></pre>
+}</code>
 
         <p>Two things about that call are worth saying out loud. The <code>idProperty</code> must also appear inside <code>properties</code> on a create, or the created record will match nothing on the next run — the identifier in the envelope is used for lookup, not for writing. And batch upsert takes up to 100 inputs per request, which matters enormously for rate limits and which I come back to below.</p>
 
@@ -324,7 +324,7 @@ Content-Type: application/json
 
         <p>HubSpot enforces forward-only movement. Setting the property to an earlier stage than the current one is ignored — the write returns success and the value does not change. To move a contact backwards you must first set the property to an empty string, then set it to the target value, which is two API calls and a race condition if anything else is writing at the same time.</p>
 
-        <pre><code class="language-python"># Moving a lifecycle stage backwards requires clearing it first.
+        <code class="language-python"># Moving a lifecycle stage backwards requires clearing it first.
 # A single PATCH to an earlier stage returns 200 and does nothing,
 # which is the most confusing failure mode in the whole API.
 def set_lifecycle(client, contact_id, target):
@@ -337,7 +337,7 @@ def set_lifecycle(client, contact_id, target):
         client.patch(f"/crm/v3/objects/contacts/{contact_id}",
                      json={"properties": {"lifecyclestage": ""}})
     client.patch(f"/crm/v3/objects/contacts/{contact_id}",
-                 json={"properties": {"lifecyclestage": target}})</code></pre>
+                 json={"properties": {"lifecyclestage": target}})</code>
 
         <p>Now the design question. Where does commerce get to write lifecycle stage at all?</p>
 
@@ -363,7 +363,7 @@ def set_lifecycle(client, contact_id, target):
 
         <p>For B2B, deals earn their place, because a purchase order genuinely is a sales event with a rep attached and a forecast implication. There the pipeline is real and the association to a company matters.</p>
 
-        <pre><code class="language-json">// Custom object definition for orders — created once, then written by the integration.
+        <code class="language-json">// Custom object definition for orders — created once, then written by the integration.
 // requiredProperties keeps garbage out; the unique property is what makes upsert safe.
 {
   "name": "commerce_order",
@@ -383,7 +383,7 @@ def set_lifecycle(client, contact_id, target):
       "fieldType": "select" }
   ],
   "associatedObjects": ["CONTACT", "COMPANY"]
-}</code></pre>
+}</code>
 
         <p>One caveat on custom objects: they are Enterprise-only, and portals get a limited number of them. If a client is on Professional and will not upgrade, rolled-up properties on the contact are the honest answer, and you should say so rather than building a shadow object out of engagements.</p>
 
@@ -393,7 +393,7 @@ def set_lifecycle(client, contact_id, target):
 
         <p>The v4 association API is a real improvement over v3 because it exposes association labels, which let you distinguish <em>Billing contact</em> from <em>Ordering contact</em> from <em>Delivery recipient</em> on the same company. In B2B that distinction is the difference between a useful CRM and a list of names.</p>
 
-        <pre><code class="language-http">PUT /crm/v4/objects/commerce_order/{orderId}/associations/contact/{contactId}
+        <code class="language-http">PUT /crm/v4/objects/commerce_order/{orderId}/associations/contact/{contactId}
 Authorization: Bearer pat-eu1-xxxxxxxx
 Content-Type: application/json
 
@@ -402,7 +402,7 @@ Content-Type: application/json
     "associationCategory": "USER_DEFINED",
     "associationTypeId": 47
   }
-]</code></pre>
+]</code>
 
         <p>The <code>associationTypeId</code> is portal-specific for user-defined labels. Hard-coding the integer is how a working integration breaks after somebody edits the labels in the UI. Look it up once at start-up from <code>GET /crm/v4/associations/{fromType}/{toType}/labels</code>, cache it for the process lifetime, and fail loudly if the label you need has vanished.</p>
 
@@ -432,7 +432,7 @@ Content-Type: application/json
 
         <p>The first and better one: capture the <code>hubspotutk</code> cookie in the browser at checkout, carry it through to your order record, and submit the order through the Forms API rather than the CRM API, passing the token in the context.</p>
 
-        <pre><code class="language-javascript">// Storefront checkout: grab the tracking cookie and attach it to the order
+        <code class="language-javascript">// Storefront checkout: grab the tracking cookie and attach it to the order
 // payload so the server can pass it to HubSpot's Forms API. Without this,
 // the contact is created with no attribution history at all.
 function hubspotToken() {
@@ -443,9 +443,9 @@ function hubspotToken() {
 window.addEventListener('checkout:submit', (e) =&gt; {
   e.detail.order.hubspot_utk = hubspotToken();
   e.detail.order.page_uri = window.location.href;
-});</code></pre>
+});</code>
 
-        <pre><code class="language-http">POST /submissions/v3/integration/submit/{portalId}/{formGuid}
+        <code class="language-http">POST /submissions/v3/integration/submit/{portalId}/{formGuid}
 Content-Type: application/json
 
 {
@@ -468,16 +468,16 @@ Content-Type: application/json
       ]
     }
   }
-}</code></pre>
+}</code>
 
         <p>The second way, for when you cannot change checkout: call the JavaScript tracking API's <code>identify</code> before the confirmation page's tracked view.</p>
 
-        <pre><code class="language-javascript">// _hsq identify must be followed by a tracked event for HubSpot to
+        <code class="language-javascript">// _hsq identify must be followed by a tracked event for HubSpot to
 // associate the anonymous session with the email. identify alone does nothing.
 var _hsq = window._hsq = window._hsq || [];
 _hsq.push(['identify', { email: order.customerEmail, id: order.customerId }]);
 _hsq.push(['setPath', '/checkout/success']);
-_hsq.push(['trackPageView']);</code></pre>
+_hsq.push(['trackPageView']);</code>
 
         <p>That second approach is weaker — it only works for a browser session that actually loaded the confirmation page, so it misses phone orders, subscription renewals and anything asynchronous. But it recovers most of the volume and takes twenty minutes.</p>
 
@@ -491,7 +491,7 @@ _hsq.push(['trackPageView']);</code></pre>
 
         <p>The consequences for design are concrete. Do not search for a contact before upserting it; upsert on a unique property and let HubSpot resolve it. Do not fetch a contact to check whether a property changed; write it and let HubSpot ignore a no-op. Batch everything that has a batch endpoint, in hundreds.</p>
 
-        <pre><code class="language-python">import time, random, requests
+        <code class="language-python">import time, random, requests
 
 # HubSpot returns 429 with a Retry-After header. Honour it; do not
 # invent your own backoff on top, and do not retry 4xx other than 429.
@@ -506,7 +506,7 @@ def call(session, method, url, **kw):
             time.sleep(min(2 ** attempt, 30) + random.uniform(0, 1))
             continue
         return r
-    raise RuntimeError(f"gave up after 6 attempts: {method} {url}")</code></pre>
+    raise RuntimeError(f"gave up after 6 attempts: {method} {url}")</code>
 
         <p>For an initial backfill of any size, do not use the CRM API at all. Use the imports endpoint, <code>POST /crm/v3/imports</code>, which takes a CSV and a column mapping and runs asynchronously outside the normal rate limit. A 400,000-contact backfill through batch upsert is a day of babysitting a script; the same load through imports is one file and a polling loop.</p>
 
@@ -534,7 +534,7 @@ def call(session, method, url, **kw):
 
         <p>So merging is a repair, not a strategy. The API endpoint is <code>POST /crm/v3/objects/contacts/merge</code> with a primary and a secondary object ID, and it is tempting to write a job that finds fuzzy matches and merges them automatically. I would not, at least not without a human in the loop for anything below a very high confidence bar.</p>
 
-        <pre><code class="language-python"># Candidate detection is safe to automate. Merging is not.
+        <code class="language-python"># Candidate detection is safe to automate. Merging is not.
 # This writes candidates to a review queue; a human approves each batch.
 def merge_candidates(contacts):
     by_phone, by_name_addr = {}, {}
@@ -555,7 +555,7 @@ def merge_candidates(contacts):
         # those disagreements usually mean the records are genuinely different.
         owners = {c.get("hubspot_owner_id") for c in group if c.get("hubspot_owner_id")}
         out.append({"records": group, "confidence": "low" if len(owners) &gt; 1 else "high"})
-    return out</code></pre>
+    return out</code>
 
         <p>My rule of thumb: automate merges where the match is on a normalised phone number <em>and</em> a matching postcode <em>and</em> neither record has a sales owner. Everything else goes to a queue that somebody clears weekly. On the beekeeping supplies retailer, that queue held about 4,100 candidate pairs on the first run and roughly forty a week afterwards, which is a manageable habit rather than a project.</p>
 
@@ -585,7 +585,7 @@ def merge_candidates(contacts):
 
         <p>Magento 2 gives you a richer customer model with an entity ID that is genuinely stable, and a much worse event story. The observer and message queue infrastructure works but is per-installation, and consumer processes silently dying is a common enough production issue that any Magento integration needs a heartbeat check on the consumer, not just on the endpoint. Guest orders have no customer entity at all, only an email on the order, so guest-to-account linking is work you have to do yourself.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // Magento 2: link guest orders to a customer entity at registration time.
 // Run this on customer_register_success, not on a nightly cron —
 // the customer is standing there, and the CRM should be correct before
@@ -617,7 +617,7 @@ class LinkGuestOrders implements ObserverInterface
         // Recalculate the rolled-up totals and push once, not per order.
         $this->sync->pushCustomer((int) $customer->getId());
     }
-}</code></pre>
+}</code>
 
         <p>If you run both platforms against one portal — which is more common than you would think, usually a Magento B2B site and a Shopify D2C site — the identity problem doubles and you need a storefront discriminator in your key. That specific situation is the subject of the companion article on <a href="/blog/zoho-crm-magento-shopify-integration/">running one CRM across Magento and Shopify</a>, and the reasoning there transfers directly.</p>
 
@@ -697,11 +697,19 @@ class LinkGuestOrders implements ObserverInterface
           <ul>
             <li>
               <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
-              <p>Comparing Zoho CRM and HubSpot connectors.</p>
+              <p>Technical guide to syncing customers, orders, inventory, and deals between Magento 2 / Shopi...</p>
             </li>
             <li>
-              <strong><a href="/blog/designing-for-convert/">Designing for Conversion: UX &amp; UI Strategies</a></strong>
-              <p>Abandoned cart recovery strategies.</p>
+              <strong><a href="/blog/adp-hrms-payroll-integration-enterprise/">ADP HRMS &amp; Payroll Integration for Enterprise</a></strong>
+              <p>ADP Workforce Now integration for ecommerce operations: data minimisation, mutual TLS auth, ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/enterprise-erp-systems-ecommerce/">Enterprise ERP Systems Integration for High-Volume E-Commerce</a></strong>
+              <p>Choosing a commerce-to-ERP integration architecture: point-to-point versus middleware versus...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/zoho-crm-magento-2-integration/">Zoho CRM Magento 2 Integration: Architectural Blueprint</a></strong>
+              <p>A developer guide to integrating Zoho CRM with Magento 2: synchronizing customer cohorts, ma...</p>
             </li>
           </ul>
         </div>

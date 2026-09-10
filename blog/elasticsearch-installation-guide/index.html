@@ -99,7 +99,7 @@
         "url": "https://www.modracx.com/og-image.png"
       }
     },
-    "timeRequired": "PT45M"
+    "timeRequired": "PT25M"
   }
   </script>
   <script type="application/ld+json">
@@ -185,8 +185,8 @@
         <p class="lede">It was a frantic Friday evening when an enterprise client contacted me with a critical failure: their product catalogue search was returning wildly inconsistent results, and in some regions, failing entirely. A network partition had severed communication between their dual-datacentre Elasticsearch deployment, and because they had ignored the quorum requirements for master-eligible nodes, the cluster had entered a split-brain state, leading to diverging cluster states and irrecoverable data loss. This guide details the engineering principles required to avoid such catastrophic operational failures.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 45 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 25 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -306,7 +306,7 @@
         
         <p>Prior to executing the installation, the underlying OS must be tuned. Elasticsearch utilizes `mmapfs` for storing its indices, mapping segments directly into memory. The default Linux virtual memory limit is insufficient. You must explicitly override the `vm.max_map_count` kernel parameter. Add `vm.max_map_count=262144` to `/etc/sysctl.conf` and execute `sudo sysctl -p`. Failing to configure this correctly will prevent the JVM process from starting in production mode.</p>
 
-        <pre><code class="language-bash">#!/bin/bash
+        <code class="language-bash">#!/bin/bash
 # Install Elasticsearch on Ubuntu 22.04 and configure initial TLS
 set -e
 
@@ -335,7 +335,7 @@ echo "Setting permissions..."
 sudo chown root:elasticsearch /etc/elasticsearch/elastic-certificates.p12
 sudo chmod 640 /etc/elasticsearch/elastic-certificates.p12
 
-echo "Installation complete. Proceed to configure elasticsearch.yml and system limits."</code></pre>
+echo "Installation complete. Proceed to configure elasticsearch.yml and system limits."</code>
         <p>For nodes 2 and 3, you do not generate a new Certificate Authority. You securely transfer the `elastic-certificates.p12` file from node 1 to the other nodes, ensuring the cluster shares a unified cryptographic trust root.</p>
 
         <h2>6. Core Configuration: elasticsearch.yml Annotated</h2>
@@ -343,33 +343,33 @@ echo "Installation complete. Proceed to configure elasticsearch.yml and system l
 
         <h3>6.1 Cluster and Node Identity</h3>
         <p>You must define the cluster name explicitly. The default name is simply `elasticsearch`. If an engineer connects a new dev node to a corporate network without altering this setting, it may inadvertently attempt to join other default clusters via discovery protocols. The `node.roles` parameter dictates the node's function, as detailed in our topology section.</p>
-        <pre><code class="language-yaml"># Must be absolutely identical across all nodes in this specific cluster
+        <code class="language-yaml"># Must be absolutely identical across all nodes in this specific cluster
 cluster.name: modracx-prod-eu-west
 # Uniquely identifies this JVM process
 node.name: es-node-euw-01
 # Dedicated master role configuration
-node.roles: [ master ]</code></pre>
+node.roles: [ master ]</code>
 
         <h3>6.2 Network and Discovery</h3>
         <p>Nodes must be able to communicate with each other over the transport layer (default port 9300). Set the <code>network.host</code> to the private IP address of the server. Do not bind this to `0.0.0.0` if the server is exposed to a public network.</p>
-        <pre><code class="language-yaml"># Bind to the private internal network interface
+        <code class="language-yaml"># Bind to the private internal network interface
 network.host: 10.0.1.15
 # The list of master-eligible nodes to contact for cluster discovery
 # Note: These use the transport port (9300), not the HTTP REST port (9200)
 discovery.seed_hosts: ["10.0.1.15:9300", "10.0.1.16:9300", "10.0.1.17:9300"]
 # Only required when bootstrapping a completely new cluster for the first time
-cluster.initial_master_nodes: ["es-node-euw-01", "es-node-euw-02", "es-node-euw-03"]</code></pre>
+cluster.initial_master_nodes: ["es-node-euw-01", "es-node-euw-02", "es-node-euw-03"]</code>
 
         <h3>6.3 Memory Locking</h3>
         <p>Swapping memory to disk is catastrophic for Elasticsearch performance. If the JVM heap is swapped out by the operating system, a minor garbage collection cycle that typically takes milliseconds can stall the node for seconds, triggering timeouts and node disconnections. You must ensure <code>bootstrap.memory_lock: true</code> is explicitly set.</p>
-        <pre><code class="language-yaml"># Force the JVM to lock its heap memory in RAM
-bootstrap.memory_lock: true</code></pre>
+        <code class="language-yaml"># Force the JVM to lock its heap memory in RAM
+bootstrap.memory_lock: true</code>
         <p>However, setting this in YAML is insufficient. The operating system restricts the amount of memory a process can lock. On systemd-based distributions like Ubuntu, the Elasticsearch service unit will fail to start if the limit is exceeded. You must create an override configuration for systemd to specify <code>LimitMEMLOCK=infinity</code>. Use `systemctl edit elasticsearch` to inject this parameter into the service definition, ensuring it persists across package upgrades.</p>
 
         <h2>7. Security Configuration and X-Pack</h2>
         <p>By default in version 8.x, security is enabled out of the box. If upgrading or configuring a complex deployment manually, you must ensure TLS is strictly enforced for transport (node-to-node) communication. If transport TLS is disabled, node communication occurs in plain text, presenting a severe vulnerability where an attacker could intercept cluster state updates or inject malicious data.</p>
         <p>The configuration distinguishes between `transport.ssl` (internal node communication on port 9300) and `http.ssl` (client REST API communication on port 9200).</p>
-        <pre><code class="language-yaml"># Enable X-Pack Security
+        <code class="language-yaml"># Enable X-Pack Security
 xpack.security.enabled: true
 xpack.security.enrollment.enabled: true
 
@@ -381,7 +381,7 @@ xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
 
 # Enable TLS for client HTTP communication
 xpack.security.http.ssl.enabled: true
-xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
+xpack.security.http.ssl.keystore.path: http-certs.p12</code>
         <p>After bootstrapping the cluster, you must initialize the built-in system accounts. Run <code>/usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto</code> to generate high-entropy passwords for the <code>elastic</code> superuser, the <code>kibana_system</code> user, and other internal accounts. Store these credentials securely; recovering a lost `elastic` user password requires generating a new temporary bootstrap password via the CLI.</p>
 
         <h3>7.1 Role-Based Access Control (RBAC)</h3>
@@ -399,7 +399,7 @@ xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
         <p>ILM relies heavily on shard allocation awareness. You can assign attributes to nodes via the YAML config, such as `node.attr.data: hot`. The ILM policy will then transition index settings (`index.routing.allocation.require.data: warm`) when shifting an index from hot to warm storage. This transparent background movement maintains query latency SLAs while dramatically reducing infrastructure spend.</p>
 
         <p>Here is a complete JSON representation of an ILM policy designed for a logging workload. It instructs Elasticsearch to rollover the index when it reaches 50GB or 30 days of age. In the warm phase, the index is force-merged down to a single segment to optimize read performance. In the cold phase, the index is frozen, removing it from heap memory entirely, and finally deleted after 90 days.</p>
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "policy": {
     "phases": {
       "hot": {
@@ -447,7 +447,7 @@ xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
       }
     }
   }
-}</code></pre>
+}</code>
         <p>To implement this, you attach the policy to an index template. When a new index matching the template pattern is created, it automatically enters the ILM framework and begins its lifecycle progression without human intervention.</p>
 
         <h2>10. Aggregations and Performance Optimization</h2>
@@ -459,7 +459,7 @@ xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
         <p>When indexing data, it often requires normalization, parsing, or enrichment before it hits the disk. This is the exact domain of Elasticsearch Ingest Pipelines. A cluster configured with ingest nodes (`node.roles: [ingest]`) can execute a sequence of lightweight data manipulation steps immediately before a document is physically indexed.</p>
         <p>These pipelines are defined via the pipeline definition API (`PUT _ingest/pipeline/product-enrichment`). They construct a linear flow of common processors. For example, the `grok` processor extracts complex fields from raw string patterns using regular expressions; the `date` processor standardizes disparate timestamp formats; the `set` processor dynamically injects newly computed fields; and the `remove` processor aggressively drops redundant or PII attributes that should not be persisted.</p>
         <p>One of the most powerful processors is the `enrich` processor, which enables you to execute a join operation against a secondary lookup index at index time. By enriching product documents with category metadata on the fly, you denormalize the data efficiently. Below is a complete pipeline JSON demonstrating a sequence of three distinct processors: grokking a log line, adding an explicit category, and subsequently removing the raw message entirely.</p>
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "description": "Process incoming e-commerce logs and enrich",
   "processors": [
     {
@@ -480,7 +480,7 @@ xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
       }
     }
   ]
-}</code></pre>
+}</code>
         <p>Before ever deploying a pipeline to a production cluster, it is absolutely essential to validate its logic against a mock document. You accomplish this via the pipeline simulation endpoint (`POST _ingest/pipeline/product-enrichment/_simulate`). The simulation executes the entire processor chain in memory and outputs the exact JSON payload that would ultimately be persisted, enabling robust pre-deployment verification.</p>
 
         <h2>12. Cross-Cluster Search and Replication</h2>
@@ -490,9 +490,9 @@ xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
 
         <h2>13. Snapshot Strategy and SLM</h2>
         <p>Data loss is an inevitability in distributed systems if adequate backup strategies are absent. Snapshot Lifecycle Management (SLM) automates the backup process. Configure a snapshot repository referencing external object storage such as AWS S3, Google Cloud Storage (GCS), or Azure Blob Storage. Relying on local disk backups is fundamentally flawed.</p>
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "schedule": "0 30 2 * * ?", 
-  "name": "<nightly-snap-{now/d}>",
+  "name": "&lt;nightly-snap-{now/d}>",
   "repository": "s3_production_backups",
   "config": {
     "indices": ["*"],
@@ -504,7 +504,7 @@ xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
     "min_count": 5,
     "max_count": 50
   }
-}</code></pre>
+}</code>
         <p>This policy dictates that at 2:30 AM every day, a snapshot encompassing all indices and the global cluster state is dispatched to the configured S3 repository. Snapshots older than 30 days are purged automatically, ensuring object storage costs remain constrained while providing a robust disaster recovery mechanism. Note that snapshots in Elasticsearch are fully incremental. They copy only the new Lucene segments created since the previous snapshot, substantially minimizing bandwidth constraints.</p>
 
         <h2>14. Monitoring and Alerting</h2>
@@ -525,16 +525,20 @@ xpack.security.http.ssl.keystore.path: http-certs.p12</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/opensearch-installation-guide/">OpenSearch Architecture Guide</a></strong>
-              <p>Understanding the architectural differences and migration paths between Elasticsearch and OpenSearch.</p>
+              <strong><a href="/blog/bigcommerce-store-creation-guide/">BigCommerce Store Creation: Technical Setup, Stencil Themes &amp; API Architecture</a></strong>
+              <p>A comprehensive technical guide to building an enterprise-grade BigCommerce store, covering ...</p>
             </li>
             <li>
-              <strong><a href="/blog/containerization-docker-kubernetes/">Docker &amp; Kubernetes for Data Services</a></strong>
-              <p>Best practices for containerising stateful services like search engines.</p>
+              <strong><a href="/blog/opensearch-installation-guide/">OpenSearch Installation &amp; Cluster Architecture: A Production Deployment Guide</a></strong>
+              <p>A comprehensive technical guide to OpenSearch installation, cluster architecture, system siz...</p>
             </li>
             <li>
-              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 on AWS</a></strong>
-              <p>Designing high-availability cloud architectures integrating managed Elasticsearch and database layers.</p>
+              <strong><a href="/blog/odoo-store-creation-guide/">Odoo eCommerce Store Creation: Installation, Configuration &amp; Launch Guide</a></strong>
+              <p>A comprehensive technical guide to building an Odoo eCommerce store, covering Linux server s...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/sfcc-architecture-developer-guide/">SFCC Architecture Blueprint: The B2C Commerce Developer Playbook</a></strong>
+              <p>A deep dive into B2C Commerce Cloud architecture: cartridge loading mechanics, OCAPI vs SCAP...</p>
             </li>
           </ul>
         </div>

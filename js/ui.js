@@ -138,6 +138,12 @@
     var openGrimoire = function () {
       grimoire.classList.add("is-open");
       grimoire.setAttribute("aria-hidden", "false");
+      if (!window.GrimoireLoaded && !document.querySelector('script[src*="grimoire-rpg"]')) {
+        var s = document.createElement("script");
+        s.src = "/js/grimoire-rpg.js";
+        s.defer = true;
+        document.body.appendChild(s);
+      }
       setTimeout(function () {
         input.focus();
       }, 160);

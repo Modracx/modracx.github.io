@@ -63,10 +63,10 @@
   <!-- Theme: apply the stored chart before first paint so there is no flash. -->
   <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
   <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
-  <title>Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS & Azure | MODRACX</title>
-  <meta name="description" content="A working engineer&#x27;s cloud migration guide: cost modelling that survives the first bill, database cutover mechanics, a timed runbook, and honest limits on zero downtime." />
-  <meta property="og:title" content="Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS & Azure | MODRACX" />
-  <meta property="og:description" content="Step-by-step engineering roadmap for migrating legacy monolithic e-commerce platforms by Kenneth D'Silva." />
+  <title>Ecommerce AWS Cloud Migration Guide: Architecture, Aurora DB & Zero Downtime | MODRACX</title>
+  <meta name="description" content="Complete step-by-step guide for migrating monolithic ecommerce stores (Magento 2, custom platforms) to AWS and Azure. Aurora MySQL scaling, Redis clustering, and zero-downtime cutover." />
+  <meta property="og:title" content="Ecommerce AWS Cloud Migration Guide: Architecture, Aurora DB & Zero Downtime | MODRACX" />
+  <meta property="og:description" content="Complete step-by-step guide for migrating monolithic ecommerce stores (Magento 2, custom platforms) to AWS and Azure. Aurora MySQL scaling, Redis clustering, and zero-downtime cutover." />
   <meta property="og:type" content="article" />
   <link rel="canonical" href="https://www.modracx.com/blog/cloud-migration-guide/" />
   <link rel="alternate" hreflang="en" href="https://www.modracx.com/blog/cloud-migration-guide/" />
@@ -132,33 +132,25 @@
   }
   </script>
 
-  <script type="application/ld+json">
+    <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "FAQPage",
     "mainEntity": [
       {
         "@type": "Question",
-        "name": "How to implement ecommerce aws cloud migration effectively?",
+        "name": "How to execute an ecommerce AWS cloud migration without downtime?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Implementing ecommerce aws cloud migration requires aligning architectural best practices with robust caching, security safeguards, and continuous performance telemetry. In enterprise environments, ensuring zero-regression execution and strict standard compliance maximizes ROI and search engine crawlability."
+          "text": "Zero-downtime AWS ecommerce migration requires: (1) Replicating the database to AWS Aurora MySQL using AWS Database Migration Service (DMS) with continuous CDC sync; (2) Offloading media assets to Amazon S3 via CloudFront CDN; (3) Pre-warming ElastiCache Redis clusters; (4) Lowering DNS TTL to 60 seconds 48 hours prior to cutover."
         }
       },
       {
         "@type": "Question",
-        "name": "How to implement aws cloud migration for enterprise commerce effectively?",
+        "name": "What AWS architecture is recommended for enterprise ecommerce?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Implementing aws cloud migration for enterprise commerce requires aligning architectural best practices with robust caching, security safeguards, and continuous performance telemetry. In enterprise environments, ensuring zero-regression execution and strict standard compliance maximizes ROI and search engine crawlability."
-        }
-      },
-      {
-        "@type": "Question",
-        "name": "What are the primary performance and architectural benefits of Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS & Azure?",
-        "acceptedAnswer": {
-          "@type": "Answer",
-          "text": "Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS & Azure improves system reliability, reduces latency, and optimizes resource utilization across enterprise workloads. By eliminating structural bottlenecks and enforcing modern engineering patterns, teams achieve predictable scale and higher search visibility."
+          "text": "A modern AWS ecommerce architecture consists of: Amazon Route 53 with latency routing, CloudFront CDN with AWS WAF edge filtering, Application Load Balancers (ALB), Auto-Scaling EC2 / EKS worker nodes running PHP-FPM/Node.js, Amazon Aurora Multi-AZ database, and ElastiCache Redis for session and full-page caching."
         }
       }
     ]
@@ -208,8 +200,8 @@
         <p class="lede">The business case said £2,600 a month. The first bill was £6,940, and none of it came from the instances. What actually goes wrong when a monolithic storefront moves to AWS or Azure.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 28 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 40 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -294,7 +286,7 @@
 
         <p><strong>Every certificate, with expiry.</strong> Including client certificates for bank integrations, which are the ones that expire during a migration and cannot be reissued quickly.</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # Run on every host before planning anything. The output of this script
 # has found something unexpected on every migration I have worked on.
 set -euo pipefail
@@ -324,7 +316,7 @@ OUT="inventory-$(hostname)-$(date +%F).txt"
   find /etc /opt -name '*.pem' -o -name '*.crt' 2&gt;/dev/null | while read -r c; do
     printf '%s ' "$c"; openssl x509 -enddate -noout -in "$c" 2&gt;/dev/null || echo "unreadable"
   done
-} &gt; "$OUT"</code></pre>
+} &gt; "$OUT"</code>
 
         <p>The 60-second outbound capture is the line that earns its place. On the tools distributor, it caught a connection to a supplier's SFTP server that appeared in no documentation, no crontab visible to root, and no runbook. It was a job running under a service account, importing a price list nightly. Missing it would have meant stale supplier pricing discovered about a week after cutover.</p>
 
@@ -371,7 +363,7 @@ OUT="inventory-$(hostname)-$(date +%F).txt"
 
         <p><strong>NAT Gateway is the one that catches everyone.</strong> Anything in a private subnet talking to anything outside the VPC — including AWS's own services — goes through it and is charged per gigabyte on top of the hourly rate. An image processing pipeline pulling originals from S3, resizing, and writing back can push a terabyte a month through it without anyone noticing. VPC endpoints fix it, they cost very little, and almost nobody configures them on day one.</p>
 
-        <pre><code class="language-hcl"># Gateway endpoints for S3 and DynamoDB are free and remove the largest
+        <code class="language-hcl"># Gateway endpoints for S3 and DynamoDB are free and remove the largest
 # accidental NAT charge on a media-heavy storefront. Add them on day one.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
@@ -389,7 +381,7 @@ resource "aws_vpc_endpoint" "secretsmanager" {
   subnet_ids          = aws_subnet.private[*].id
   security_group_ids  = [aws_security_group.endpoints.id]
   private_dns_enabled = true
-}</code></pre>
+}</code>
 
         <p><strong>Cross-AZ transfer punishes chatty applications.</strong> Spreading application servers across availability zones is correct for resilience. It also means that on average a good fraction of your database queries cross an AZ boundary and are charged in both directions. A Magento page render issuing 300 queries makes this material. It is not a reason to abandon multi-AZ; it is a reason to fix the query count, which you wanted to do anyway.</p>
 
@@ -415,7 +407,7 @@ resource "aws_vpc_endpoint" "secretsmanager" {
 
         <p>Network layout that will not need renumbering. Pick a CIDR range that does not collide with your office network, your VPN, or any partner you might connect to. I have seen a migration stall for three weeks because the chosen VPC range overlapped with the range the ERP vendor used, and renumbering a live VPC is not a thing you can do.</p>
 
-        <pre><code class="language-hcl"># Deliberately large and deliberately unusual: 10.0.0.0/16 is what
+        <code class="language-hcl"># Deliberately large and deliberately unusual: 10.0.0.0/16 is what
 # everyone picks, which guarantees a collision the first time you peer
 # with a partner. Pick something nobody else picked.
 variable "vpc_cidr" { default = "10.183.0.0/16" }
@@ -446,7 +438,7 @@ resource "aws_subnet" "data" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index + 8)
   availability_zone = local.azs[count.index]
-}</code></pre>
+}</code>
 
         <p>Everything in code from the first commit. Not "we'll import it into Terraform later" — later never arrives, and a hand-built environment cannot be rebuilt, which means your disaster recovery plan is a wish. The discipline that makes this work is the same one behind a proper <a href="/blog/cicd-pipeline-ecommerce/">deployment pipeline</a>: if it is not reproducible from a repository, it is not infrastructure, it is a pet.</p>
 
@@ -468,7 +460,7 @@ resource "aws_subnet" "data" {
 
         <p>Set up the cloud database as a replica of the existing primary, let it catch up, then stop writes, wait for the replica to drain, promote it, and repoint. Downtime is measured in minutes rather than hours.</p>
 
-        <pre><code class="language-sql">-- On the source: a dedicated replication user, restricted to the
+        <code class="language-sql">-- On the source: a dedicated replication user, restricted to the
 -- cloud provider's egress addresses. Do not reuse the app's credentials.
 CREATE USER 'repl_cloud'@'%' IDENTIFIED BY '...';
 GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'repl_cloud'@'%';
@@ -479,11 +471,11 @@ SHOW VARIABLES WHERE Variable_name IN
   ('log_bin','binlog_format','binlog_row_image','gtid_mode',
    'enforce_gtid_consistency','binlog_expire_logs_seconds');
 -- Wanted: log_bin=ON, binlog_format=ROW, gtid_mode=ON,
--- and expiry long enough to cover the full seed-plus-catch-up period.</code></pre>
+-- and expiry long enough to cover the full seed-plus-catch-up period.</code>
 
         <p>That last point about binlog retention is the one that bites. If seeding the replica takes six hours and your binlogs expire after four, replication cannot start from the dump's position and you begin again. Set retention to comfortably longer than your worst-case seed time, and check the disk has room for it.</p>
 
-        <pre><code class="language-bash"># Consistent seed with GTID position recorded, without locking the whole
+        <code class="language-bash"># Consistent seed with GTID position recorded, without locking the whole
 # database for the duration. --single-transaction gives a consistent
 # snapshot on InnoDB; --master-data records where to resume.
 mysqldump \
@@ -498,11 +490,11 @@ mysqldump \
 # Restore into the managed instance with the session tuned for bulk load.
 # Turning these back on afterwards is not optional.
 zcat magento-seed.sql.gz | mysql -h "$RDS_HOST" -u admin -p magento \
-  --init-command="SET SESSION foreign_key_checks=0, unique_checks=0, sql_log_bin=0;"</code></pre>
+  --init-command="SET SESSION foreign_key_checks=0, unique_checks=0, sql_log_bin=0;"</code>
 
         <p>For PostgreSQL, logical replication is cleaner and lets you replicate a subset, which matters if the database contains large tables you would rather archive than migrate.</p>
 
-        <pre><code class="language-sql">-- Source
+        <code class="language-sql">-- Source
 CREATE PUBLICATION shop_pub FOR ALL TABLES;
 -- wal_level must be 'logical' and max_replication_slots high enough;
 -- both need a restart, so verify weeks ahead of the window.
@@ -517,7 +509,7 @@ CREATE SUBSCRIPTION shop_sub
 SELECT slot_name,
        pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn))
          AS lag_bytes
-  FROM pg_replication_slots;</code></pre>
+  FROM pg_replication_slots;</code>
 
         <p>One thing logical replication does not carry: sequences. After promoting, every sequence needs advancing past the maximum value in its table, and forgetting this produces primary key collisions on the first inserts after cutover. It is a well-known trap and people still hit it, because it works fine in testing where the tables are small and the sequence happens to be ahead.</p>
 
@@ -527,7 +519,7 @@ SELECT slot_name,
 
         <p>Whatever the approach, validate before cutting over. Not "the row counts match" — row counts match while the data is wrong.</p>
 
-        <pre><code class="language-bash"># Checksum comparison on the tables that carry money and stock.
+        <code class="language-bash"># Checksum comparison on the tables that carry money and stock.
 # Row counts agreeing proves almost nothing; a per-row checksum does.
 for t in sales_order sales_order_item quote quote_item \
          cataloginventory_stock_item customer_entity; do
@@ -538,7 +530,7 @@ for t in sales_order sales_order_item quote quote_item \
       FROM magento.$t t" 2&gt;/dev/null
   done
 done | awk 'NR%2{a=$0; next} {print (substr(a,index(a,$3))==substr($0,index($0,$3)) \
-     ? "OK  " : "DIFF") , a, $0}'</code></pre>
+     ? "OK  " : "DIFF") , a, $0}'</code>
 
         <h2>9. Media, and Why Local Disk Is the Real Blocker</h2>
 
@@ -548,7 +540,7 @@ done | awk 'NR%2{a=$0; next} {print (substr(a,index(a,$3))==substr($0,index($0,$
 
         <p>The transfer itself is the easy part, and it wants to be done in two passes.</p>
 
-        <pre><code class="language-bash"># Pass one, days before cutover: bulk copy while the site is live.
+        <code class="language-bash"># Pass one, days before cutover: bulk copy while the site is live.
 # Slow, and it does not matter, because nothing depends on it yet.
 aws s3 sync /var/www/media s3://shop-media-prod/media \
   --storage-class STANDARD \
@@ -571,7 +563,7 @@ find /var/www/media -type f -not -path '*/cache/*' | shuf -n 500 | while read -r
   # reporting false failures on large files.
   [[ "$remote_md5" == *-* ]] &amp;&amp; continue
   [[ "$local_md5" != "$remote_md5" ]] &amp;&amp; echo "MISMATCH $key"
-done</code></pre>
+done</code>
 
         <p>Excluding the image cache directory is worth calling out. On a mature Magento install the resized-image cache is frequently larger than the originals — I have seen 340GB of cache against 90GB of source images. It regenerates on demand. Copying it is paying transfer costs and hours of wall-clock time to move something the application will happily rebuild, and the only cost of not copying it is a slower first few hours after cutover, which you can mitigate by warming the important categories.</p>
 
@@ -585,7 +577,7 @@ done</code></pre>
 
         <p><strong>Cron running on every server.</strong> The moment there are two application servers, every scheduled job runs twice. Order exports duplicate, emails send twice, and a stock adjustment job applies its adjustment two times. Either designate one node, or move scheduled work to a dedicated worker with locking.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // Distributed lock so a job runs once across the fleet. The TTL must
 // exceed the job's worst-case runtime, or a second worker starts while
 // the first is still going -- which is the exact bug you were preventing.
@@ -604,7 +596,7 @@ function withLock(Redis $redis, string $key, int $ttlSeconds, callable $fn) {
              . "then return redis.call('del', KEYS[1]) else return 0 end";
         $redis-&gt;eval($lua, ["lock:$key", $token], 1);
     }
-}</code></pre>
+}</code>
 
         <p><strong>Hardcoded paths and hostnames.</strong> Grep for the old server's hostname and IP across the entire codebase and configuration. There will be some. On the tools distributor there were eleven, including one in a database row that generated PDF invoice URLs.</p>
 
@@ -624,7 +616,7 @@ function withLock(Redis $redis, string $key, int $ttlSeconds, callable $fn) {
 
         <p><strong>T-0.</strong> The window itself:</p>
 
-        <pre><code class="language-bash"># 1. Enter maintenance: reject writes, keep serving cached reads.
+        <code class="language-bash"># 1. Enter maintenance: reject writes, keep serving cached reads.
 #    A read-only storefront is much better than a 503 page for anyone
 #    who lands mid-window, and it keeps organic traffic from bouncing.
 ssh old-web "php bin/magento maintenance:enable --ip=$OFFICE_IP"
@@ -654,7 +646,7 @@ aws route53 change-resource-record-sets --hosted-zone-id "$ZONE" \
   --change-batch file://cutover-dns.json
 
 # 7. Leave the old environment running and reachable by IP for 72 hours.
-#    It is the rollback, and it costs a few pounds a day to keep.</code></pre>
+#    It is the rollback, and it costs a few pounds a day to keep.</code>
 
         <p>The health endpoint in step five deserves to be real. Not a 200 from the web server — an endpoint that actually queries the database, writes and reads a Redis key, performs a search, and fetches a media object. Ten minutes to write, and it is the difference between discovering a broken search index during the window with the rollback still available, and discovering it from customers an hour later.</p>
 
@@ -668,7 +660,7 @@ aws route53 change-resource-record-sets --hosted-zone-id "$ZONE" \
 
         <p><strong>A replayed-traffic load test.</strong> Take a day of real access logs from the old environment, filter to GET requests, and replay them against the new stack at the real rate and then at three times the real rate. Synthetic tests that hammer the homepage tell you about the homepage; replayed logs exercise the long tail of category filters and search queries that actually cost you database time.</p>
 
-        <pre><code class="language-bash"># Convert an access log into a replay file, preserving relative timing.
+        <code class="language-bash"># Convert an access log into a replay file, preserving relative timing.
 # Filtering to GET matters: replaying POSTs against a live-ish
 # environment will place orders, and somebody will have to explain that.
 awk '$6 ~ /"GET/ {print $4, $7}' /var/log/nginx/access.log \
@@ -682,7 +674,7 @@ vegeta attack \
   -rate=180/s -duration=15m \
   -connections=400 \
   -resolvers="$NEW_LB_IP" \
-  | vegeta report -type='hist[0,100ms,300ms,1s,3s]'</code></pre>
+  | vegeta report -type='hist[0,100ms,300ms,1s,3s]'</code>
 
         <p>What you are looking for is not the average. It is the shape of the histogram and, more importantly, what the database does. Watch connection counts, slow query log volume, and CPU credit balances if you are on a burstable instance class — burstable instances are a common and expensive mistake here, because they perform beautifully in a short test and then exhaust their credits forty minutes into real traffic.</p>
 
@@ -696,7 +688,7 @@ vegeta attack \
 
         <p>Configure before cutover, not after: centralised logs shipped off the instances, metrics with enough dimensions to attribute a problem to a component, and a health endpoint that means something. The dimension that matters most and gets forgotten is instance identity — when one instance out of six is misbehaving, an aggregate graph looks fine.</p>
 
-        <pre><code class="language-yaml"># Structured application logs, shipped rather than stored locally.
+        <code class="language-yaml"># Structured application logs, shipped rather than stored locally.
 # The instance id and deployment version on every line are what let you
 # answer "is this one host or all of them" in ten seconds.
 fields:
@@ -710,7 +702,7 @@ processors:
       when:
         or:
           - contains: { url.path: "/health" }     # otherwise health checks
-          - contains: { url.path: "/static/" }    # dominate the volume</code></pre>
+          - contains: { url.path: "/static/" }    # dominate the volume</code>
 
         <p>Keep one thing from the old world: a way to get a shell onto a running instance. Session Manager or the Azure equivalent, working and tested, before you need it. The first genuinely strange problem after a migration is always easier to diagnose with a terminal, and discovering that your access path does not work while the site is behaving oddly is a bad half hour.</p>
 
@@ -750,7 +742,7 @@ processors:
 
         <p><strong>Read the bill by service, then by usage type.</strong> Not the summary — the detailed usage types. This is where NAT processing, cross-AZ transfer and IOPS charges become visible, and they are invisible at the summary level.</p>
 
-        <pre><code class="language-sql">-- Against Cost and Usage Report data in Athena. Usage type is the
+        <code class="language-sql">-- Against Cost and Usage Report data in Athena. Usage type is the
 -- dimension that reveals the accidental charges; service alone hides them.
 SELECT line_item_product_code   AS service,
        line_item_usage_type     AS usage_type,
@@ -761,7 +753,7 @@ WHERE line_item_usage_start_date &gt;= DATE '2026-07-01'
 GROUP BY 1, 2
 HAVING SUM(line_item_unblended_cost) &gt; 25
 ORDER BY cost DESC
-LIMIT 40;</code></pre>
+LIMIT 40;</code>
 
         <p><strong>Fix the transfer charges first.</strong> VPC endpoints for object storage, and check whether your chattiest component genuinely needs to be in a different AZ from the database. These are usually the largest single wins and they require no capacity changes.</p>
 
@@ -801,7 +793,7 @@ LIMIT 40;</code></pre>
 
         <p>The improvements worth taking while you have the opportunity: secrets in a managed secret store rather than configuration files, encryption at rest enabled everywhere by default, all traffic on TLS including between the load balancer and the application, and audit logging turned on before rather than after you need it.</p>
 
-        <pre><code class="language-hcl"># Encryption and access defaults, set at creation because changing some
+        <code class="language-hcl"># Encryption and access defaults, set at creation because changing some
 # of these later requires recreating the instance -- which on a database
 # means another migration you did not plan.
 resource "aws_db_instance" "primary" {
@@ -826,7 +818,7 @@ resource "aws_db_instance" "primary" {
   parameter_group_name = aws_db_parameter_group.tls_required.name
 
   enabled_cloudwatch_logs_exports = ["error", "slowquery"]
-}</code></pre>
+}</code>
 
         <p>If you handle card data, involve your QSA before the design is finalised rather than after. Cloud does not remove PCI scope; it changes where the boundaries sit, and network segmentation that satisfied an assessor on dedicated hardware needs re-demonstrating in a VPC. Doing that conversation early costs a meeting. Doing it late costs a re-architecture.</p>
 
@@ -873,12 +865,20 @@ resource "aws_db_instance" "primary" {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
-              <p>AWS Lambda and API Gateway auto-scaling.</p>
+              <strong><a href="/blog/azure-cloud-architecture-magento/">Enterprise Azure Cloud Architecture for Magento 2</a></strong>
+              <p>Running Magento 2 on Azure: AKS node pool design, MySQL Flexible Server tuning, the shared m...</p>
             </li>
             <li>
-              <strong><a href="/blog/zero-trust-security/">Zero-Trust Security Architecture for E-Commerce Enterprise Infrastructure</a></strong>
-              <p>mTLS and IAM access control.</p>
+              <strong><a href="/blog/azure-devops-magento-shopify-cicd/">Azure DevOps CI/CD Pipelines for Enterprise E-Commerce</a></strong>
+              <p>Build-once-deploy-many Azure Pipelines for Magento 2 and Shopify themes: artefacts, static c...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/wix-to-shopify-magento-migration/">Wix to Shopify &amp; Magento 2 Migration Roadmap</a></strong>
+              <p>Replatforming from Wix to Shopify or Magento 2: building a complete URL inventory, 301 mappi...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/database-sharding-scaling/">Database Sharding &amp; Read-Replica Architecture for E-Commerce</a></strong>
+              <p>Read replicas, replication lag, when sharding is warranted, shard key mistakes you cannot un...</p>
             </li>
           </ul>
         </div>

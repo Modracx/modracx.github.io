@@ -38,7 +38,7 @@
   <link rel="alternate" hreflang="x-default" href="https://www.modracx.com/blog/critical-css-optimization/" />
   <title>Critical CSS Optimization & Above-The-Fold Rendering | MODRACX</title>
   <meta name="description" content="Critical CSS for ecommerce: headless extraction, state matrices, the 14KB budget, async loading patterns, why teams abandon it, and whether it still beats just shipping less CSS." />
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Critical CSS Optimization & Above-The-Fold Rendering","description":"Critical CSS for ecommerce: headless extraction, state matrices, the 14KB budget, async loading patterns, why teams abandon it, and whether it still beats just shipping less CSS.","timeRequired":"PT22M","url":"https://www.modracx.com/blog/critical-css-optimization/","author":{"@type":"Person","name":"Kenneth D'Silva"}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Critical CSS Optimization & Above-The-Fold Rendering","description":"Critical CSS for ecommerce: headless extraction, state matrices, the 14KB budget, async loading patterns, why teams abandon it, and whether it still beats just shipping less CSS.","timeRequired": "PT35M","url":"https://www.modracx.com/blog/critical-css-optimization/","author":{"@type":"Person","name":"Kenneth D'Silva"}}</script>
 
   <script type="application/ld+json">
   {
@@ -116,8 +116,8 @@
         <p class="lede">A critical CSS build extracted checkout in its empty-cart state, so the payment section had no styles for 900ms. Conversion dropped 18%. Here is how to extract it properly, and when not to bother.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 26 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
+          <span>Reading Time: 35 min read</span> •
+          <span>Category: <a href="/blog/archive/#performance-speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -204,7 +204,7 @@
 
         <p>Off-the-shelf tools are fine and I have shipped several. But writing a minimal one clarifies what the off-the-shelf tools are doing and, more importantly, gives you the hook for state setup that most of them handle poorly.</p>
 
-        <pre><code class="language-javascript">// extract-critical.mjs — headless extraction with explicit state setup.
+        <code class="language-javascript">// extract-critical.mjs — headless extraction with explicit state setup.
 // The setup callback is the part that matters; everything else is mechanical.
 import puppeteer from 'puppeteer';
 
@@ -276,13 +276,13 @@ export async function extract(url, { setup = async () =&gt; {} } = {}) {
 
   await browser.close();
   return [...rules].join('\n');
-}</code></pre>
+}</code>
 
         <p>Two decisions in there deserve defending. Stripping hover and focus states removes rules that cannot possibly affect first paint and typically cuts 15–20% off the output; the deferred stylesheet arrives long before anyone has hovered anything. And keeping <code>@font-face</code> unconditionally matters because a missing font declaration in the critical CSS means the text paints in a fallback and then reflows, which is exactly the layout shift you were trying to avoid.</p>
 
         <p>The <code>setup</code> callback is where you fix the checkout bug from the opening. Every state that changes above-the-fold layout needs an entry.</p>
 
-        <pre><code class="language-javascript">// The state matrix. Each entry is a page you extract separately and union.
+        <code class="language-javascript">// The state matrix. Each entry is a page you extract separately and union.
 // This list is the actual deliverable; the extractor is boilerplate.
 export const STATES = [
   { name: 'home',            url: '/',                       setup: dismissConsent },
@@ -296,7 +296,7 @@ export const STATES = [
   { name: 'checkout-error',  url: '/checkout',               setup: async (p) =&gt; { await seedCart(p); await submitEmpty(p); } },
   { name: 'consent-shown',   url: '/',                       setup: async () =&gt; {} },   // banner visible
   { name: 'account',         url: '/account',                setup: logIn },
-];</code></pre>
+];</code>
 
         <p>That list is not exhaustive for any real site and it is not meant to be. The point is that it exists, is version-controlled, and gets a new row every time someone reports a flash of unstyled content. That review discipline is the difference between critical CSS that survives and critical CSS that gets ripped out in eighteen months.</p>
 
@@ -310,7 +310,7 @@ export const STATES = [
 
         <p>In practice I aim for under 14KB of critical CSS <em>compressed</em>, which is typically 50–60KB raw, and I treat anything over 20KB compressed as a signal that the extraction is wrong rather than that the site is complicated. When I hit that, the cause has almost always been one of: a rule matching a huge number of elements pulling in a whole framework grid; a below-the-fold component that happens to have a 1px sliver in the viewport; or an extractor keeping every <code>@keyframes</code> block in the stylesheet.</p>
 
-        <pre><code class="language-javascript">// Fail the build if critical CSS outgrows the initial congestion window.
+        <code class="language-javascript">// Fail the build if critical CSS outgrows the initial congestion window.
 // A silent 45KB inline is worse than no critical CSS at all.
 import { brotliCompressSync } from 'node:zlib';
 
@@ -323,38 +323,38 @@ if (compressed &gt; LIMIT) {
     `Check for below-fold components with slivers in the viewport, ` +
     `and for @keyframes being retained wholesale.`
   );
-}</code></pre>
+}</code>
 
         <h2>7. Loading the Rest Without Blocking</h2>
 
         <p>Once the critical CSS is inline, the full stylesheet must load without blocking paint. There is one pattern that works everywhere and several that mostly work.</p>
 
-        <pre><code class="language-html">&lt;!-- The full stylesheet, non-blocking. media="print" means the browser
+        <code class="language-html">&lt;!-- The full stylesheet, non-blocking. media="print" means the browser
      downloads it at low priority and does not block render on it; the onload
      handler flips it to "all" once it has arrived. The noscript copy covers
      the small population with JS disabled. --&gt;
 &lt;link rel="stylesheet" href="/assets/main.css"
       media="print" onload="this.media='all';this.onload=null" /&gt;
-&lt;noscript&gt;&lt;link rel="stylesheet" href="/assets/main.css" /&gt;&lt;/noscript&gt;</code></pre>
+&lt;noscript&gt;&lt;link rel="stylesheet" href="/assets/main.css" /&gt;&lt;/noscript&gt;</code>
 
         <p>The alternative that reads better and works less well:</p>
 
-        <pre><code class="language-html">&lt;!-- rel="preload" as="style" fetches at HIGH priority and does not apply the
+        <code class="language-html">&lt;!-- rel="preload" as="style" fetches at HIGH priority and does not apply the
      styles until onload swaps the rel. Higher priority is usually the wrong
      trade here: it competes with your LCP image for bandwidth. --&gt;
 &lt;link rel="preload" href="/assets/main.css" as="style"
-      onload="this.rel='stylesheet'" /&gt;</code></pre>
+      onload="this.rel='stylesheet'" /&gt;</code>
 
         <p>I use the <code>media="print"</code> form by default. The preload form pulls the stylesheet at high priority, which means it competes with the hero image and the fonts for the same bandwidth, and the whole premise of critical CSS is that the full stylesheet is <em>not</em> urgent. If it were urgent you would not be deferring it.</p>
 
         <p>Both patterns have the same latent bug: if the JavaScript inline handler is stripped by a Content Security Policy that forbids inline event handlers, the stylesheet never applies. This is not hypothetical — I have seen a CSP rollout silently break a site's non-critical styles for every browser, discovered a week later. If you run a strict CSP, either allow these specific handlers via a hash, or use the JavaScript-free variant:</p>
 
-        <pre><code class="language-html">&lt;!-- No inline handler, so it survives a strict CSP. The stylesheet is
+        <code class="language-html">&lt;!-- No inline handler, so it survives a strict CSP. The stylesheet is
      discovered by the preload scanner, downloaded, and applied when the
      parser reaches the real link at the end of body. --&gt;
 &lt;link rel="preload" href="/assets/main.css" as="style" /&gt;
 &lt;!-- ...page content... --&gt;
-&lt;link rel="stylesheet" href="/assets/main.css" /&gt;</code></pre>
+&lt;link rel="stylesheet" href="/assets/main.css" /&gt;</code>
 
         <p>That works because a stylesheet link at the end of the body still blocks paint of content <em>after</em> it, of which there is none, while the preload has already warmed the cache. It is slightly less clean and considerably more robust.</p>
 
@@ -372,7 +372,7 @@ if (compressed &gt; LIMIT) {
 
         <p>The measurement that catches all three is a CLS observer scoped to the period before the deferred stylesheet lands.</p>
 
-        <pre><code class="language-javascript">// Attribute layout shifts to the critical-CSS window specifically.
+        <code class="language-javascript">// Attribute layout shifts to the critical-CSS window specifically.
 // A shift at t=850ms that stops the moment the deferred sheet applies is
 // diagnostic: your extraction missed something that element needed.
 let deferredAppliedAt = null;
@@ -392,7 +392,7 @@ new PerformanceObserver((list) =&gt; {
       value: entry.value, at: Math.round(entry.startTime), sources,
     }));
   }
-}).observe({ type: 'layout-shift', buffered: true });</code></pre>
+}).observe({ type: 'layout-shift', buffered: true });</code>
 
         <p>Run that in production for a week and you will get a list of the exact elements your extraction missed, ranked by how much damage they do. It is far more useful than any amount of manual QA, because it samples every state real users are actually in — including the ones nobody put in the state matrix.</p>
 
@@ -428,7 +428,7 @@ new PerformanceObserver((list) =&gt; {
 
         <p><strong>Assert on content, not just on success.</strong> A smoke test that the generated CSS contains selectors you know must be there — the header, the primary button, the product title — catches an extraction that ran successfully against a 500 page.</p>
 
-        <pre><code class="language-javascript">// Post-extraction assertions. An extraction that "succeeded" against an
+        <code class="language-javascript">// Post-extraction assertions. An extraction that "succeeded" against an
 // error page produces valid, tiny, useless CSS. These catch it.
 const REQUIRED = [
   '.site-header', '.btn--primary', '.product-title',
@@ -442,7 +442,7 @@ if (missing.length) {
 if (criticalCss.length &lt; 4000) {
   throw new Error(`critical CSS suspiciously small (${criticalCss.length}B) — ` +
                   `extraction probably hit an error page or a redirect`);
-}</code></pre>
+}</code>
 
         <p><strong>Assign an owner.</strong> Not a team, a person, and put the review of the state matrix into whatever quarterly process you already have. Unowned build steps rot.</p>
 
@@ -466,7 +466,7 @@ if (criticalCss.length &lt; 4000) {
 
         <p>On <strong>Shopify</strong>, you inline in <code>theme.liquid</code> and branch on <code>template.name</code>. The awkwardness is that app-injected CSS arrives through script tags you do not control, and those apps' styles are not in your stylesheet and therefore not in your critical CSS. An app that renders a badge above the fold will flash regardless of what you do. The only real mitigation is to reserve space for it with your own CSS so at least it does not shift.</p>
 
-        <pre><code class="language-liquid">{%- comment -%}
+        <code class="language-liquid">{%- comment -%}
   Per-template critical CSS, with a single fallback. The `capture` avoids a
   second file read when the template-specific snippet does not exist.
 {%- endcomment -%}
@@ -478,7 +478,7 @@ if (criticalCss.length &lt; 4000) {
 &lt;/style&gt;
 &lt;link rel="stylesheet" href="{{ 'theme.css' | asset_url }}"
       media="print" onload="this.media='all';this.onload=null"&gt;
-&lt;noscript&gt;&lt;link rel="stylesheet" href="{{ 'theme.css' | asset_url }}"&gt;&lt;/noscript&gt;</code></pre>
+&lt;noscript&gt;&lt;link rel="stylesheet" href="{{ 'theme.css' | asset_url }}"&gt;&lt;/noscript&gt;</code>
 
         <h2>12. Is It Still Worth Doing?</h2>
 
@@ -508,7 +508,7 @@ if (criticalCss.length &lt; 4000) {
 
         <p>The coverage audit is the tool.</p>
 
-        <pre><code class="language-javascript">// How much of the stylesheet does this page actually use? Run across your
+        <code class="language-javascript">// How much of the stylesheet does this page actually use? Run across your
 // top ten templates and union the results; anything used by none is dead.
 import puppeteer from 'puppeteer';
 
@@ -524,7 +524,7 @@ for (const entry of coverage) {
   const used = entry.ranges.reduce((n, r) =&gt; n + r.end - r.start, 0);
   console.log(`${(used / entry.text.length * 100).toFixed(1)}% used  ${entry.url}`);
 }
-await browser.close();</code></pre>
+await browser.close();</code>
 
         <p>Be careful with the conclusion. Coverage across ten templates is not coverage across your whole site, and deleting a rule because it was unused on the pages you sampled is how you break the returns form nobody visits. Union across a wide sample, exclude anything matched by a selector present in any template source, and delete conservatively. But delete. A 90KB stylesheet reduced to 35KB is a permanent, maintenance-free improvement that also makes every future critical CSS decision easier.</p>
 
@@ -558,7 +558,7 @@ await browser.close();</code></pre>
 
         <p><strong>Lab FCP on a throttled profile.</strong> Useful for a before-and-after on a single change and useless as an absolute. Run it in CI on your top templates so a regression is caught at the PR rather than in a monthly report.</p>
 
-        <pre><code class="language-javascript">// CI gate: FCP on a throttled profile must not regress. Absolute thresholds
+        <code class="language-javascript">// CI gate: FCP on a throttled profile must not regress. Absolute thresholds
 // are noisy; comparing against the baseline branch is what catches regressions.
 import lighthouse from 'lighthouse';
 import * as chromeLauncher from 'chrome-launcher';
@@ -577,7 +577,7 @@ const baseline = Number(process.env.BASELINE_FCP_MS);
 if (fcp &gt; baseline * 1.1) {
   throw new Error(`FCP regressed: ${Math.round(fcp)}ms vs baseline ${baseline}ms`);
 }
-await chrome.kill();</code></pre>
+await chrome.kill();</code>
 
         <h2>16. Questions People Ask</h2>
 
@@ -614,14 +614,27 @@ await chrome.kill();</code></pre>
         <p>And be honest with yourself about the last part. The technique is not hard; keeping it correct for three years across staff turnover, template changes, and a CSP rollout is hard. If the answer to "who owns this in a year" is a shrug, you are choosing between no critical CSS and eventually-stale critical CSS, and no critical CSS is the better of those two. The checkout that lost 18% had a working extraction pipeline. It was just extracting the wrong page.</p>
 
         <div class="blog-suggested-reads">
-      <h3>Suggested &amp; Related Reading</h3>
-      <ul>
-        <li><a href="/blog/performance-optimization/">Full-Stack Performance Optimization Strategies</a></li>
-        <li><a href="/blog/core-web-vitals/">Mastering Core Web Vitals in E-commerce</a></li>
-        <li><a href="/blog/why-seo-matters/">Technical SEO and Performance Architectures</a></li>
-        <li><a href="/blog/reduce-render-blocking/">Eliminating Render-Blocking CSS and JavaScript</a></li>
-      </ul>
-    </div>
+          <h3>Suggested &amp; Related Reading</h3>
+          <p>Explore related engineering guides from Kenneth D'Silva:</p>
+          <ul>
+            <li>
+              <strong><a href="/blog/reduce-render-blocking/">Eliminating Render-Blocking CSS and JavaScript</a></strong>
+              <p>How the parser, CSSOM and preload scanner really interact, and how to remove every render-bl...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/responsive-webp-images/">Optimizing Image Delivery with Responsive Images</a></strong>
+              <p>Building a responsive image pipeline that works: srcset and sizes arithmetic, Accept negotia...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/preconnect-dns-prefetch/">Preconnect &amp; DNS Prefetch Strategies</a></strong>
+              <p>Preconnect and dns-prefetch for ecommerce: the real cost of DNS, TCP and TLS setup, the cros...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/graphql-rest-api-performance/">GraphQL vs. REST API Performance Optimization for E-Commerce</a></strong>
+              <p>N+1 fan-out, DataLoader batching done properly, query cost limits, persisted queries over GE...</p>
+            </li>
+          </ul>
+        </div>
       </article>
     </section>
   </main>

@@ -200,8 +200,8 @@
         <p class="lede">A category query that read as eleven lines of GraphQL issued 3,100 database queries. Here is how the fan-out happens, how batching really works, and why caching GraphQL is the hard part.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 23 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
+          <span>Reading Time: 34 min read</span> •
+          <span>Category: <a href="/blog/archive/#performance-speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -287,7 +287,7 @@
 
         <p>The mechanism: GraphQL execution walks the query tree, calling one resolver per field per object. If a query returns 50 products and each product has an <code>brand</code> field whose resolver does a lookup by <code>brand_id</code>, that resolver runs 50 times, independently, with no knowledge of the other 49.</p>
 
-        <pre><code class="language-javascript">// This looks completely fine and is a performance catastrophe at scale.
+        <code class="language-javascript">// This looks completely fine and is a performance catastrophe at scale.
 const resolvers = {
   Query: {
     products: (_, { first }) =&gt; db.products.findMany({ take: first }), // 1 query
@@ -303,7 +303,7 @@ const resolvers = {
     inventory: (v) =&gt; db.inventory.findMany({ where: { variantId: v.id } }),
   },
 };
-// Total: 1 + 50 + 50 + 200 = 301 queries for one HTTP request.</code></pre>
+// Total: 1 + 50 + 50 + 200 = 301 queries for one HTTP request.</code>
 
         <p>Three things about this that are worth saying out loud.</p>
 
@@ -317,7 +317,7 @@ const resolvers = {
 
         <p>The standard fix is batching: collect all the individual lookups fired during one tick of the event loop, issue them as one query, distribute the results back. DataLoader is the reference implementation and every language has an equivalent.</p>
 
-        <pre><code class="language-javascript">import DataLoader from 'dataloader';
+        <code class="language-javascript">import DataLoader from 'dataloader';
 
 // The batch function receives ALL the keys requested in one tick.
 // It must return an array of the same length, in the same order.
@@ -342,11 +342,11 @@ function createVariantsLoader(db) {
     for (const r of rows) grouped.get(r.productId)?.push(r);
     return productIds.map(id =&gt; grouped.get(id));
   });
-}</code></pre>
+}</code>
 
         <p>Wire the loaders into the per-request context, never into module scope:</p>
 
-        <pre><code class="language-javascript">// Fresh loaders per request. This is not optional.
+        <code class="language-javascript">// Fresh loaders per request. This is not optional.
 // A module-scope DataLoader caches across requests and across users, which
 // means customer A's negotiated price can be served to customer B.
 const server = new ApolloServer({ schema });
@@ -368,7 +368,7 @@ const resolvers = {
     variants: (p, _a, ctx) =&gt; ctx.loaders.variants.load(p.id),
   },
 };
-// 301 queries becomes 4: products, brands, variants, inventory.</code></pre>
+// 301 queries becomes 4: products, brands, variants, inventory.</code>
 
         <p>Now the parts people get wrong.</p>
 
@@ -378,10 +378,10 @@ const resolvers = {
 
         <p><strong>A batch of 3,000 keys is its own problem.</strong> <code>WHERE id IN (…)</code> with 3,000 values will get you a query planner that gives up and sequential-scans, or a parameter limit error, or a 40KB query string in your slow log. Set <code>maxBatchSize</code> to something your database is happy with — I use 100 to 500 depending on the table — and let DataLoader issue several batches.</p>
 
-        <pre><code class="language-javascript">new DataLoader(batchFn, {
+        <code class="language-javascript">new DataLoader(batchFn, {
   maxBatchSize: 200,          // several IN queries beat one enormous one
   cacheKeyFn: (k) =&gt; String(k), // object keys need normalising or they never hit
-});</code></pre>
+});</code>
 
         <h2>6. Batching at the Wrong Layer</h2>
 
@@ -399,7 +399,7 @@ const resolvers = {
 
         <p>Fail open with a timeout. Whatever else you do, put a per-resolver timeout around the third-party call and return null on expiry. A reviews vendor having a bad afternoon must not take your product pages down. I learned this one at 11pm on a Friday.</p>
 
-        <pre><code class="language-javascript">// A third party gets 400ms and no more. Null renders as "no reviews yet".
+        <code class="language-javascript">// A third party gets 400ms and no more. Null renders as "no reviews yet".
 async function withTimeout(promise, ms, fallback = null) {
   const ac = new AbortController();
   const timer = setTimeout(() =&gt; ac.abort(), ms);
@@ -422,7 +422,7 @@ const resolvers = {
         { count: 0, average: null },
       ),
   },
-};</code></pre>
+};</code>
 
         <h2>7. Query Cost: Taking Control Back From the Client</h2>
 
@@ -438,7 +438,7 @@ const resolvers = {
 
         <p>Assign a cost to each field, multiply by the connection sizes above it, reject queries over a budget. This is what Shopify's Storefront API does — every field has a documented point value, you get a bucket that refills at a fixed rate, and a query that's too expensive is rejected before execution rather than after.</p>
 
-        <pre><code class="language-javascript">import { createComplexityLimitRule } from 'graphql-validation-complexity';
+        <code class="language-javascript">import { createComplexityLimitRule } from 'graphql-validation-complexity';
 import depthLimit from 'graphql-depth-limit';
 
 const server = new ApolloServer({
@@ -453,7 +453,7 @@ const server = new ApolloServer({
       onCost: (cost) =&gt; { metrics.histogram('gql.cost', cost); },
     }),
   ],
-});</code></pre>
+});</code>
 
         <p>The practical difficulty with cost analysis is calibration. Set the budget too low and you break legitimate clients on deploy day; too high and it's decoration. What worked for me: run it in report-only mode for two weeks, chart the cost distribution of real production queries, and set the limit at roughly the 99.5th percentile. Then look at the queries above the line individually — usually two or three of them are genuine and need their own allowance, and the rest are things nobody meant to run.</p>
 
@@ -469,7 +469,7 @@ const server = new ApolloServer({
 
         <p>What I build into any client that talks to a metered GraphQL API:</p>
 
-        <pre><code class="language-javascript">// Read the cost extension the API returns and pace yourself off it, rather
+        <code class="language-javascript">// Read the cost extension the API returns and pace yourself off it, rather
 // than guessing at a request-per-second number that has no relationship
 // to what you are actually spending.
 let bucket = { available: 1000, restoreRate: 50, lastSeen: Date.now() };
@@ -501,7 +501,7 @@ export async function metered(query, variables, estimatedCost = 100) {
     return metered(query, variables, (res.extensions?.cost?.requestedQueryCost ?? estimatedCost) * 1.2);
   }
   return res.data;
-}</code></pre>
+}</code>
 
         <p>Two details that matter more than they look. The estimate passed in should be updated from <code>requestedQueryCost</code> on the first successful call, because guessing is how you end up either sleeping needlessly or hammering a drained bucket. And the retry must not be unbounded — I cap at three attempts and then fail the operation, because an infinite retry against a throttle during a traffic spike is how a slow page becomes an outage.</p>
 
@@ -527,7 +527,7 @@ export async function metered(query, variables, estimatedCost = 100) {
 
         <p>Persisted queries plus GET. Register the query document ahead of time, reference it by hash, send it as a GET with the variables in the query string. Now it's a cacheable URL and your CDN works again. This is the single highest-leverage change available and it's underused.</p>
 
-        <pre><code class="language-javascript">// Client side: automatic persisted queries. Try the hash, fall back once.
+        <code class="language-javascript">// Client side: automatic persisted queries. Try the hash, fall back once.
 import { ApolloClient, InMemoryCache, HttpLink } from '@apollo/client';
 import { createPersistedQueryLink } from '@apollo/client/link/persisted-queries';
 import { sha256 } from 'crypto-hash';
@@ -537,9 +537,9 @@ const link = createPersistedQueryLink({
   useGETForHashedQueries: true, // the part that makes it cacheable
 }).concat(new HttpLink({ uri: '/graphql' }));
 
-export const client = new ApolloClient({ link, cache: new InMemoryCache() });</code></pre>
+export const client = new ApolloClient({ link, cache: new InMemoryCache() });</code>
 
-        <pre><code class="language-javascript">// Server side: only accept known hashes in production. Allowing arbitrary
+        <code class="language-javascript">// Server side: only accept known hashes in production. Allowing arbitrary
 // documents to be registered at runtime hands an attacker a cache-key
 // generator and a cost-analysis bypass in one.
 const REGISTERED = new Map(loadManifestFromBuild()); // hash -&gt; document
@@ -554,13 +554,13 @@ app.get('/graphql', async (req, res) =&gt; {
   // Per-operation cache policy, decided by the operation name, not the response.
   res.set('Cache-Control', CACHE_POLICY[document.operationName] ?? 'no-store');
   res.json(result);
-});</code></pre>
+});</code>
 
         <p>Separate the cacheable from the uncacheable at the query level. Don't put the cart in the same operation as the product. Two operations, two cache policies, and the fast one gets to be fast. This costs you a round trip and buys you a CDN hit rate, and on anything except a very high-latency mobile client that's a good trade.</p>
 
         <p>Cache below the resolvers instead of above them. If you can't cache the response, cache the entities. A shared Redis layer keyed on <code>product:{id}:v{schemaVersion}</code>, invalidated by webhook, gets you most of the benefit and has an invalidation story you can explain to a colleague. It doesn't save you the GraphQL execution cost, but on a well-batched server that's 10–20ms.</p>
 
-        <pre><code class="language-javascript">// Entity cache under the loader. Two tiers: process memory for the hot set,
+        <code class="language-javascript">// Entity cache under the loader. Two tiers: process memory for the hot set,
 // Redis for the shared set, database as the floor.
 const local = new LRUCache({ max: 5000, ttl: 30_000 });
 
@@ -607,7 +607,7 @@ function createProductLoader(db, redis) {
     await pipe.exec();
     return out;
   });
-}</code></pre>
+}</code>
 
         <p>The <code>v{schemaVersion}</code> in the key is worth dwelling on. When you add a field to the cached entity shape, every existing cache entry is now missing it, and you get either a crash or a silently absent field. Version the key and old entries expire naturally instead of poisoning the deploy. I've been bitten by this exactly once, which was enough.</p>
 
@@ -621,7 +621,7 @@ function createProductLoader(db, redis) {
 
         <p><strong>Paginated lists.</strong> Fetching page 2 of a connection replaces page 1 in the cache by default, because Apollo treats <code>products(first: 24, after: "x")</code> as a different field value than <code>products(first: 24)</code>. You need an explicit merge policy, and the default without one is a list that flickers.</p>
 
-        <pre><code class="language-javascript">new InMemoryCache({
+        <code class="language-javascript">new InMemoryCache({
   typePolicies: {
     Query: {
       fields: {
@@ -638,7 +638,7 @@ function createProductLoader(db, redis) {
     Money: { keyFields: false },
     ProductVariant: { keyFields: ['id'] },
   },
-});</code></pre>
+});</code>
 
         <p>And a caution about server-side rendering with a normalised client cache: the cache you built on the server gets serialised into the HTML and rehydrated in the browser. If it contains anything customer-specific and the page is cached at the CDN, you have shipped one customer's data to everyone. Check what's in your <code>__APOLLO_STATE__</code> before you cache the document. Cart, customer, addresses, order history — none of those belong in a shared HTML payload.</p>
 
@@ -648,7 +648,7 @@ function createProductLoader(db, redis) {
 
         <p>Cursor pagination fixes the mechanics — you carry a sort key and ask for rows after it, which is an index seek regardless of depth — and it also fixes the correctness problem, where inserting a row shifts everything and page 3 shows you an item you already saw on page 2.</p>
 
-        <pre><code class="language-sql">-- Offset: the planner reads 4,824 rows to return 24.
+        <code class="language-sql">-- Offset: the planner reads 4,824 rows to return 24.
 SELECT id, title, price FROM products
 WHERE category_id = 42
 ORDER BY created_at DESC, id DESC
@@ -664,7 +664,7 @@ LIMIT 24;
 
 -- Requires a matching composite index or none of the above helps.
 CREATE INDEX products_cat_created_id_idx
-  ON products (category_id, created_at DESC, id DESC);</code></pre>
+  ON products (category_id, created_at DESC, id DESC);</code>
 
         <p>The trade-off is that you lose "jump to page 7", which some merchandising teams care about a great deal and some don't care about at all. Ask before you decide. On a catalogue where SEO depends on crawlable numbered pagination, offsets on the server-rendered pages plus cursors on the "load more" path is an ugly but pragmatic hybrid, and it's what I usually end up shipping.</p>
 
@@ -678,7 +678,7 @@ CREATE INDEX products_cat_created_id_idx
 
         <p>What to do about it:</p>
 
-        <pre><code class="language-javascript">// Apollo Server plugin: make GraphQL errors visible to the systems that
+        <code class="language-javascript">// Apollo Server plugin: make GraphQL errors visible to the systems that
 // only understand HTTP and to the metrics that only count counters.
 const errorVisibility = {
   async requestDidStart() {
@@ -702,7 +702,7 @@ const errorVisibility = {
       },
     };
   },
-};</code></pre>
+};</code>
 
         <p>Then alert on <code>gql.error</code> by path. Per-path is the useful dimension — an error rate of 0.4% overall means nothing, but 100% of errors landing on <code>products.nodes.priceRange</code> tells you exactly which service is down.</p>
 
@@ -720,7 +720,7 @@ const errorVisibility = {
 
         <p>Operation name on every request, enforced. Anonymous queries are unattributable and I reject them in production — it's a one-line validation rule and it makes every other piece of telemetry usable.</p>
 
-        <pre><code class="language-javascript">// A tracing plugin that gives you the fan-out counts, which is the number
+        <code class="language-javascript">// A tracing plugin that gives you the fan-out counts, which is the number
 // that actually diagnoses N+1. Sample it — this is not free at full volume.
 const tracing = {
   async requestDidStart({ request }) {
@@ -750,7 +750,7 @@ const tracing = {
       },
     };
   },
-};</code></pre>
+};</code>
 
         <p>Sampling at 2% is deliberate. Field-level tracing on every request adds meaningful overhead — I've measured 6–9% on a resolver-heavy schema — and you don't need every request to spot a fan-out. What you do need is for the sample to be request-scoped rather than field-scoped, so a sampled request has complete data. Half a trace is worse than none.</p>
 
@@ -783,12 +783,12 @@ const tracing = {
 
         <p>The lesson I actually took from it: every cache key should be derived by a single function that takes the full set of inputs the value depends on, and that function should live next to the resolver rather than being assembled inline. Inline key construction is where the missing dimension hides.</p>
 
-        <pre><code class="language-javascript">// One place to reason about what a cached value depends on.
+        <code class="language-javascript">// One place to reason about what a cached value depends on.
 // Adding a dimension to the resolver forces you to add it here.
 export function inventoryKey({ variantId, locationGroupId, channel }) {
   if (!locationGroupId) throw new Error('locationGroupId required for inventory key');
   return `inv:v3:${channel}:${locationGroupId}:${variantId}`;
-}</code></pre>
+}</code>
 
         <p><strong>What I'd do differently.</strong> Ship the tracing before the fixes. We reversed it, and the day and a half spent on the wrong resolvers was entirely avoidable. Field-level call counts took about three hours to add and would have pointed straight at the answer.</p>
 
@@ -857,12 +857,20 @@ export function inventoryKey({ variantId, locationGroupId, channel }) {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
-              <p>GraphQL integration with Next.js storefronts.</p>
+              <strong><a href="/blog/cdn-speed-seo/">CDN Speed Optimization &amp; Edge Caching for Global Stores</a></strong>
+              <p>Single-CDN fundamentals for ecommerce: what edge caching does to TTFB, cache key normalisati...</p>
             </li>
             <li>
-              <strong><a href="/blog/shopify-app-development/">Custom Shopify App Development</a></strong>
-              <p>Shopify GraphQL Admin API queries.</p>
+              <strong><a href="/blog/performance-monitoring/">Real-Time Performance Monitoring for Enterprise Ecommerce</a></strong>
+              <p>RUM versus synthetic, metrics that actually predict revenue, why you cannot average percenti...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify: The Engineering Blueprint</a></strong>
+              <p>Platform performance for Magento and Shopify: Varnish hit ratio and what breaks it, Redis se...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/browser-network-stack-load-testing-cors/">CORS, Connection Pools, and HTTP/2 Multiplexing in Web-Based Stress Testing</a></strong>
+              <p>Deep dive into browser network internals: navigating CORS preflight overhead, HTTP/1.1 socke...</p>
             </li>
           </ul>
         </div>
