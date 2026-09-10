@@ -200,8 +200,8 @@
         <p class="lede">A furniture retailer added loading=lazy to every image on the site and pushed LCP from 2.4s to 4.1s. The attribute was right; the hero image was not.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 25 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
+          <span>Reading Time: 35 min read</span> •
+          <span>Category: <a href="/blog/archive/#performance-speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -266,12 +266,12 @@
 
         <p>The attribute has been in Chrome since version 77 in September 2019, Firefox 75 in April 2020, and Safari 15.4 in March 2022. Support is effectively universal now, and there is no meaningful reason to ship a JavaScript polyfill for images.</p>
 
-        <pre><code class="language-html">&lt;!-- Below the fold. Width and height are not optional; see below. --&gt;
+        <code class="language-html">&lt;!-- Below the fold. Width and height are not optional; see below. --&gt;
 &lt;img src="/media/product/4471.webp"
      width="600" height="600"
      loading="lazy"
      decoding="async"
-     alt="Oak dining chair, natural finish"&gt;</code></pre>
+     alt="Oak dining chair, natural finish"&gt;</code>
 
         <p>What happens under the hood is more interesting than the attribute suggests, and knowing it explains most of the surprises.</p>
 
@@ -295,7 +295,7 @@
 
         <p>The corollary is that you must know which element is your LCP, per template, and that is not always the one you would guess. Use the attribution API rather than assuming.</p>
 
-        <pre><code class="language-javascript">// Log the actual LCP element and why it was slow. Run this on real pages,
+        <code class="language-javascript">// Log the actual LCP element and why it was slow. Run this on real pages,
 // not just the homepage — templates differ and so do their LCP elements.
 new PerformanceObserver((list) =&gt; {
   const entry = list.getEntries().at(-1);   // last entry wins; LCP can change
@@ -309,7 +309,7 @@ new PerformanceObserver((list) =&gt; {
     // If this is far above renderTime, the delay is network, not rendering.
     loadTimeMs: Math.round(entry.loadTime || 0)
   });
-}).observe({ type: 'largest-contentful-paint', buffered: true });</code></pre>
+}).observe({ type: 'largest-contentful-paint', buffered: true });</code>
 
         <p>If that ever logs <code>loading: "lazy"</code>, you have found a bug worth several hundred milliseconds. I run a variant of this as a synthetic check in CI on six representative URLs, and it fails the build if the LCP element carries a lazy attribute. It is a five-line assertion that has caught the regression three times across two clients.</p>
 
@@ -325,7 +325,7 @@ new PerformanceObserver((list) =&gt; {
 
         <p>Browsers assign images a low priority by default until layout tells them the image is in the viewport, at which point the priority is raised. That reassessment costs time. <code>fetchpriority="high"</code> tells the browser to treat the image as important from the moment the preload scanner sees it, without waiting for layout.</p>
 
-        <pre><code class="language-html">&lt;!-- The LCP image: fetched by the preload scanner, at high priority,
+        <code class="language-html">&lt;!-- The LCP image: fetched by the preload scanner, at high priority,
      and decoded synchronously so it paints in the same frame. --&gt;
 &lt;img src="/media/hero-1600.webp"
      srcset="/media/hero-800.webp 800w, /media/hero-1600.webp 1600w"
@@ -333,7 +333,7 @@ new PerformanceObserver((list) =&gt; {
      width="1600" height="900"
      fetchpriority="high"
      decoding="sync"
-     alt="Autumn living room collection"&gt;</code></pre>
+     alt="Autumn living room collection"&gt;</code>
 
         <p>On the furniture homepage this was worth another 210ms of LCP on a throttled 4G profile, on top of removing the lazy attribute. It shipped in Chrome 101 in April 2022 and is now supported across the board; where it is not understood, it is ignored harmlessly.</p>
 
@@ -349,7 +349,7 @@ new PerformanceObserver((list) =&gt; {
 
         <p>The fix is old and simple: put <code>width</code> and <code>height</code> attributes on every image. Since 2019 browsers use those two numbers to compute an aspect ratio and reserve a correctly proportioned box before any bytes arrive, even when CSS overrides the actual rendered size.</p>
 
-        <pre><code class="language-css">/* This pairing is what makes the width/height attributes work with a
+        <code class="language-css">/* This pairing is what makes the width/height attributes work with a
    fluid layout. Without it, the CSS width overrides the attribute and the
    aspect ratio is lost. */
 img {
@@ -365,7 +365,7 @@ img {
   object-fit: cover;
   width: 100%;
   height: auto;
-}</code></pre>
+}</code>
 
         <p>The <code>height: auto</code> line is the one people miss. A reset stylesheet that sets <code>img { width: 100%; }</code> without it silently discards the aspect ratio the attributes provided, and you get the shift back. I have found this in three separate codebases, always inherited from a normalise file nobody had read.</p>
 
@@ -373,7 +373,7 @@ img {
 
         <h3>Measuring the shift lazy loading caused</h3>
 
-        <pre><code class="language-javascript">// Attribute layout shifts to the element that moved. Run it on a real
+        <code class="language-javascript">// Attribute layout shifts to the element that moved. Run it on a real
 // scroll-through of a category page, not a synthetic load.
 new PerformanceObserver((list) =&gt; {
   for (const entry of list.getEntries()) {
@@ -387,7 +387,7 @@ new PerformanceObserver((list) =&gt; {
       });
     }
   }
-}).observe({ type: 'layout-shift', buffered: true });</code></pre>
+}).observe({ type: 'layout-shift', buffered: true });</code>
 
         <p>The <code>collapsed</code> flag is the tell. Any shift where the previous rectangle had zero height is almost certainly a media element that arrived into a space nobody reserved for it. On the retailer's category page that single check found eleven of them, all in a "recently viewed" strip rendered by a third-party recommendation widget that emitted images with no dimensions at all. Fixing widget markup you do not own is unpleasant, but the CSS <code>aspect-ratio</code> escape hatch works on other people's elements too.</p>
 
@@ -399,7 +399,7 @@ new PerformanceObserver((list) =&gt; {
 
         <p>In practice most <code>sizes</code> attributes are wrong. The commonest error is <code>sizes="100vw"</code> on an image that renders at 300px inside a grid, which makes the browser download a 1600px file to display at 300. On a 3x device that is a 4800px selection. I have seen a 2.1MB hero-sized JPEG delivered into a 280px product tile because of one copied attribute.</p>
 
-        <pre><code class="language-html">&lt;!-- Honest sizes for a grid that is 1 column on mobile, 2 on tablet,
+        <code class="language-html">&lt;!-- Honest sizes for a grid that is 1 column on mobile, 2 on tablet,
      4 on desktop with a 1280px max container and 24px gutters. Work the
      numbers out once and put them in the component, not in each template. --&gt;
 &lt;img src="/media/p/4471-600.webp"
@@ -412,7 +412,7 @@ new PerformanceObserver((list) =&gt; {
             92vw"
      width="600" height="600"
      loading="lazy" decoding="async"
-     alt="Oak dining chair, natural finish"&gt;</code></pre>
+     alt="Oak dining chair, natural finish"&gt;</code>
 
         <p>Chrome 133 shipped <code>sizes="auto"</code> in early 2025, which lets the browser use the real laid-out width for lazy images and removes the whole class of mistake. It only works with <code>loading="lazy"</code>, because only then is layout guaranteed to have happened. It is a genuine improvement and I use it, with a handwritten fallback in the same attribute list for browsers that do not understand it yet.</p>
 
@@ -428,7 +428,7 @@ new PerformanceObserver((list) =&gt; {
 
         <p>My rule: <code>async</code> on lazy images, leave it off or use <code>sync</code> on the LCP image, and do not spend an afternoon on it either way. If you want the effect reliably in JavaScript, <code>img.decode()</code> gives you a promise that resolves when the bitmap is ready, which is the right tool for swapping a placeholder without a flash.</p>
 
-        <pre><code class="language-javascript">// Swap a low-quality placeholder for the real image without a visible flash:
+        <code class="language-javascript">// Swap a low-quality placeholder for the real image without a visible flash:
 // decode first, then attach. This is the one case where the timing is
 // genuinely under your control.
 async function swap(placeholderEl, fullSrc) {
@@ -440,7 +440,7 @@ async function swap(placeholderEl, fullSrc) {
     return;                      // decode failed: leave the placeholder up
   }
   placeholderEl.replaceWith(img);
-}</code></pre>
+}</code>
 
         <h2>9. IntersectionObserver, and When Native Is Not Enough</h2>
 
@@ -456,7 +456,7 @@ async function swap(placeholderEl, fullSrc) {
 
         <p><strong>Progressive placeholder swaps</strong>, where you want a blur-up transition rather than a hard appear.</p>
 
-        <pre><code class="language-javascript">// One observer for the whole page, not one per element. Creating an observer
+        <code class="language-javascript">// One observer for the whole page, not one per element. Creating an observer
 // per element is the commonest performance mistake in lazy-load code and it
 // costs more than the lazy loading saves on a page with 60 tiles.
 const io = new IntersectionObserver((entries, observer) =&gt; {
@@ -479,7 +479,7 @@ const io = new IntersectionObserver((entries, observer) =&gt; {
   threshold: 0
 });
 
-document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code></pre>
+document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code>
 
         <p>Two details that separate working code from code that mostly works. <code>rootMargin</code> on an observer whose root is the document is relative to the viewport, so a bottom margin of 300px is what you want for downward scrolling; people frequently write it as 300px on all sides and wonder why upward scrolling behaves oddly. And if you use <code>threshold</code> values other than 0 on elements taller than the viewport, the callback never fires, because an element 2000px tall can never be 50% visible in a 800px viewport. That bug is subtle, only appears on long-form content, and I have shipped it.</p>
 
@@ -495,18 +495,18 @@ document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code><
 
         <p><code>loading="lazy"</code> works on iframes and has since Chrome 77; Safari added it in 16.4 and Firefox in 121, so it is now everywhere.</p>
 
-        <pre><code class="language-html">&lt;!-- The minimum viable improvement: one attribute, and the whole player
+        <code class="language-html">&lt;!-- The minimum viable improvement: one attribute, and the whole player
      stack is deferred until the user scrolls near it. --&gt;
 &lt;iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"
         width="560" height="315"
         loading="lazy"
         title="Assembly guide: oak dining chair"
         frameborder="0"
-        allowfullscreen&gt;&lt;/iframe&gt;</code></pre>
+        allowfullscreen&gt;&lt;/iframe&gt;</code>
 
         <p>The better answer is a facade: render a static thumbnail and a play button, and only create the iframe on click. Now the cost is paid by people who actually want the video, which on the retailer's assembly-guide pages was 6% of visitors.</p>
 
-        <pre><code class="language-html">&lt;div class="video-facade"
+        <code class="language-html">&lt;div class="video-facade"
      data-video-id="dQw4w9WgXcQ"
      style="aspect-ratio: 16 / 9"&gt;
   &lt;img src="/media/video/dQw4w9WgXcQ-720.webp"
@@ -515,9 +515,9 @@ document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code><
   &lt;button type="button" class="video-facade__play"&gt;
     Play video (opens YouTube player)
   &lt;/button&gt;
-&lt;/div&gt;</code></pre>
+&lt;/div&gt;</code>
 
-        <pre><code class="language-javascript">document.addEventListener('click', (e) =&gt; {
+        <code class="language-javascript">document.addEventListener('click', (e) =&gt; {
   const btn = e.target.closest('.video-facade__play');
   if (!btn) return;
 
@@ -535,7 +535,7 @@ document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code><
   frame.style.cssText = 'width:100%;height:100%;border:0';
 
   box.replaceChildren(frame);
-}, { passive: true });</code></pre>
+}, { passive: true });</code>
 
         <p>Three things to get right. Use <code>youtube-nocookie.com</code>, which avoids setting tracking cookies until playback and simplifies your consent story considerably. Host the thumbnail yourself rather than hotlinking YouTube's — their image CDN is another origin and another handshake, and their thumbnails are unpredictably sized. And make the play control a real <code>&lt;button&gt;</code>: a div with a click handler is not focusable, not announced, and not operable by keyboard, and this is exactly the kind of component where that gets noticed in an accessibility audit.</p>
 
@@ -558,7 +558,7 @@ document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code><
 
         <p>The mistake I see most is <code>preload="metadata"</code> everywhere, chosen because it sounds modest. It is not free — it opens a connection, issues a range request, and on some servers pulls a surprising amount of the file before it has enough to report duration. On a page with eight product videos that is eight connections and often a megabyte or two, for information you can put in the HTML as text.</p>
 
-        <pre><code class="language-html">&lt;!-- Below-the-fold product video. poster is what the user sees; the video
+        <code class="language-html">&lt;!-- Below-the-fold product video. poster is what the user sees; the video
      itself costs nothing until they press play. --&gt;
 &lt;video controls
        preload="none"
@@ -567,13 +567,13 @@ document.querySelectorAll('[data-bg]').forEach(el =&gt; io.observe(el));</code><
        playsinline&gt;
   &lt;source src="/media/video/4471.webm" type="video/webm"&gt;
   &lt;source src="/media/video/4471.mp4"  type="video/mp4"&gt;
-&lt;/video&gt;</code></pre>
+&lt;/video&gt;</code>
 
         <p>The <code>poster</code> attribute is doing the real work there. It is an ordinary image request, it paints immediately, and it means the element is not an empty black rectangle. Give it the same treatment as any other image: correct dimensions, a modern format, and a size appropriate to its display box.</p>
 
         <p>For an autoplaying background hero video — which I would usually argue against, but sometimes lose — the rules are different and worth stating. It must be <code>muted</code> or it will not autoplay at all. It must be <code>playsinline</code> or iOS will open it fullscreen. It should be short and heavily compressed, because it is competing with your LCP. And it should be swapped for a static image below a certain viewport width, because nobody on a phone on a train wants three megabytes of decorative video.</p>
 
-        <pre><code class="language-javascript">// Do not autoplay decorative video for people who asked not to have motion,
+        <code class="language-javascript">// Do not autoplay decorative video for people who asked not to have motion,
 // and do not do it on a metered or slow connection.
 const video = document.querySelector('.hero-video');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -583,7 +583,7 @@ const cheap = !conn.saveData &amp;&amp; !/2g/.test(conn.effectiveType || '');
 if (video &amp;&amp; !reduced &amp;&amp; cheap &amp;&amp; matchMedia('(min-width: 900px)').matches) {
   video.preload = 'auto';
   video.play().catch(() =&gt; { /* autoplay refused; poster stays */ });
-}</code></pre>
+}</code>
 
         <p>Note the empty catch. <code>play()</code> returns a promise that rejects when the browser declines, and an unhandled rejection there produces console noise on every iOS visit that will bury real errors.</p>
 
@@ -601,13 +601,13 @@ if (video &amp;&amp; !reduced &amp;&amp; cheap &amp;&amp; matchMedia('(min-width
 
         <p>A real blur-up placeholder for one or two hero images per template, where the visual quality of the loading state is worth the bytes. Not for a grid.</p>
 
-        <pre><code class="language-html">&lt;!-- Dominant colour as the reserved box's background. Seven bytes, no
+        <code class="language-html">&lt;!-- Dominant colour as the reserved box's background. Seven bytes, no
      request, and it disappears the moment the image paints over it. --&gt;
 &lt;img src="/media/p/4471-600.webp"
      width="600" height="600"
      loading="lazy" decoding="async"
      style="background-color:#c8b49a"
-     alt="Oak dining chair, natural finish"&gt;</code></pre>
+     alt="Oak dining chair, natural finish"&gt;</code>
 
         <p>BlurHash and its relatives encode a placeholder into a short string and render it on the client. Clever, and I have used it, but it needs a decoder script and a canvas per image, and on the cheap Android devices where it would matter most that decode work is not free. If you are already running a JavaScript-heavy front end it is defensible. If you are not, it is a lot of machinery for a grey box.</p>
 
@@ -623,14 +623,14 @@ if (video &amp;&amp; !reduced &amp;&amp; cheap &amp;&amp; matchMedia('(min-width
 
         <p><strong>Use <code>content-visibility</code> on off-screen sections.</strong> This lets the browser skip layout and paint for content it knows is out of view, which is a much bigger lever than the image loading itself on a page with hundreds of tiles.</p>
 
-        <pre><code class="language-css">/* Skip rendering work for offscreen rows entirely. contain-intrinsic-size
+        <code class="language-css">/* Skip rendering work for offscreen rows entirely. contain-intrinsic-size
    is the estimated height, and it is what stops the scrollbar jumping —
    without it the browser assumes zero height and the page resizes as you
    scroll. Get it approximately right; exact is not required. */
 .product-row {
   content-visibility: auto;
   contain-intrinsic-size: auto 420px;
-}</code></pre>
+}</code>
 
         <p><strong>Cap concurrent decodes.</strong> Rarely necessary, but if you are swapping images in from JavaScript you can serialise the <code>decode()</code> calls rather than firing them all at once. I have needed this exactly once, on a gallery that loaded forty 3000px images.</p>
 
@@ -644,13 +644,13 @@ if (video &amp;&amp; !reduced &amp;&amp; cheap &amp;&amp; matchMedia('(min-width
 
         <p>Printing is the other overlooked case. A page printed before the user scrolled will print blank boxes where lazy images should be, because they were never fetched. Browsers have improved here — Chrome now loads lazy images when a print is requested — but coverage is inconsistent enough that if printing matters to your business, which it does for order confirmations and picking lists, test it explicitly.</p>
 
-        <pre><code class="language-javascript">// Force everything in before a print dialog. Cheap insurance on templates
+        <code class="language-javascript">// Force everything in before a print dialog. Cheap insurance on templates
 // people actually print.
 window.addEventListener('beforeprint', () =&gt; {
   document.querySelectorAll('img[loading="lazy"]').forEach(img =&gt; {
     img.loading = 'eager';
   });
-});</code></pre>
+});</code>
 
         <p>The third case is in-page search. Hitting Ctrl+F and jumping to a match deep in the page can scroll past a lot of unloaded content quickly, which produces the same burst of requests as a fast flick. It is not usually a problem, but it is the reason I test long pages by jumping to the bottom rather than by scrolling smoothly.</p>
 
@@ -686,7 +686,7 @@ window.addEventListener('beforeprint', () =&gt; {
 
         <p>Most of this article compresses into a check you can run in the console on any page and get an immediate list of problems.</p>
 
-        <pre><code class="language-javascript">// Paste into the console on a real page. Everything it reports is a bug.
+        <code class="language-javascript">// Paste into the console on a real page. Everything it reports is a bug.
 (() =&gt; {
   const vh = innerHeight, vw = innerWidth;
   const problems = [];
@@ -717,7 +717,7 @@ window.addEventListener('beforeprint', () =&gt; {
   eagerFrames.forEach(f =&gt; problems.push(['EAGER IFRAME', f.src]));
 
   console.table(problems);
-})();</code></pre>
+})();</code>
 
         <p>I run this on every site I am handed, before reading any code. It takes fifteen seconds and it usually finds the two changes worth most of the available improvement. The oversized-image check in particular tends to produce an uncomfortably long list; the 1.6x multiplier is deliberately forgiving, because responsive breakpoints mean some overshoot is unavoidable and only the egregious cases are worth acting on.</p>
 
@@ -760,12 +760,20 @@ window.addEventListener('beforeprint', () =&gt; {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/advanced-image-optimization/">Advanced Image Optimization for SEO &amp; Performance</a></strong>
-              <p>WebP/AVIF responsive picture elements.</p>
+              <strong><a href="/blog/core-web-vitals/">Optimizing Core Web Vitals for Ecommerce Success</a></strong>
+              <p>Hands-on Core Web Vitals remediation for storefronts: identifying the LCP element, splitting...</p>
             </li>
             <li>
-              <strong><a href="/blog/core-web-vitals/">Optimizing Core Web Vitals for Ecommerce Success</a></strong>
-              <p>LCP preloading and layout shift prevention.</p>
+              <strong><a href="/blog/reduce-render-blocking/">Eliminating Render-Blocking CSS and JavaScript</a></strong>
+              <p>How the parser, CSSOM and preload scanner really interact, and how to remove every render-bl...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/resource-hints-optimization/">Resource Hints Optimization: Preconnect &amp; Preload</a></strong>
+              <p>The browser priority model behind preload, modulepreload, prefetch, fetchpriority and Specul...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/brotli-compression/">Brotli vs Gzip Compression for E-Commerce</a></strong>
+              <p>In-depth Brotli vs Gzip compression comparison: dynamic vs static pre-compression levels, CP...</p>
             </li>
           </ul>
         </div>

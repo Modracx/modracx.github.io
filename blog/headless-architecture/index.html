@@ -103,7 +103,7 @@
             "url": "https://www.modracx.com/og-image.png"
           }
         },
-        "timeRequired": "PT22M"
+        "timeRequired": "PT36M"
       },
       {
         "@type": "BreadcrumbList",
@@ -198,8 +198,8 @@
         <p class="lede">A retailer spent £180,000 going headless and ended up with category pages slower than the theme they replaced. This is the decision, not the build — what decoupling buys, what it costs, and when the monolith wins.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 36 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -337,7 +337,7 @@
 
         <p>Redirects are the one that bites hardest and earliest. In Magento, changing a product's URL key writes a rewrite row and the old URL 301s forever. Decoupled, the front end never sees that table. Unless you explicitly consume it, every URL change in six years of catalogue history becomes a 404 the day you launch, and you find out from Search Console three weeks later when the rankings have already gone.</p>
 
-        <pre><code class="language-typescript">// middleware.ts — consume the platform's own rewrite table rather than
+        <code class="language-typescript">// middleware.ts — consume the platform's own rewrite table rather than
 // maintaining a second list of redirects that will drift from it.
 import { NextRequest, NextResponse } from 'next/server';
 import { redirectFor } from '@/lib/redirects';
@@ -362,7 +362,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url, target.permanent ? 301 : 302);
   }
   return NextResponse.next();
-}</code></pre>
+}</code>
 
         <p>The table behind <code>redirectFor</code> gets populated by a nightly export of Magento's <code>url_rewrite</code> table plus a webhook on product save. Neither is difficult. Both have to be somebody's explicit decision, and on three of the five headless launches I have reviewed after the fact, neither existed.</p>
 
@@ -382,7 +382,7 @@ export async function middleware(req: NextRequest) {
 
         <p>The mistake in the opening story was treating personalisation as a page-level property. One customer-specific price on a category page had made the entire route dynamic. The right decomposition is to keep the page static and let the personal bit arrive separately.</p>
 
-        <pre><code class="language-typescript">// app/[category]/page.tsx
+        <code class="language-typescript">// app/[category]/page.tsx
 // The page itself is public and cacheable. Nothing customer-specific renders
 // here, so it can be shared by every visitor and every bot.
 export const revalidate = 300; // seconds
@@ -406,7 +406,7 @@ export default async function CategoryPage({ params }: { params: { category: str
       &lt;/ul&gt;
     &lt;/div&gt;
   );
-}</code></pre>
+}</code>
 
         <p>That single change took their category TTFB from a median of 780ms to 34ms. It also meant a logged-in customer sees the list price for roughly 200ms before their contract price replaces it, which the client's commercial team had to agree to. They agreed instantly once they saw the traffic numbers, but they had to be asked, and this is the kind of trade that architecture decisions are actually made of.</p>
 
@@ -416,7 +416,7 @@ export default async function CategoryPage({ params }: { params: { category: str
 
         <p>So: long windows plus event-driven purging. Set revalidation to an hour, and purge the specific tag when the platform tells you something changed.</p>
 
-        <pre><code class="language-typescript">// app/api/webhooks/product/route.ts
+        <code class="language-typescript">// app/api/webhooks/product/route.ts
 import { revalidateTag } from 'next/cache';
 import { verifyHmac } from '@/lib/hmac';
 
@@ -435,7 +435,7 @@ export async function POST(req: Request) {
   for (const c of categories) revalidateTag(`category:${c}`);
 
   return Response.json({ ok: true });
-}</code></pre>
+}</code>
 
         <p>The line people forget is the second purge. Purging the product detail page and leaving the category grid stale produces the specific bug where a customer clicks a £24 tile and lands on a £29 page, which generates support tickets and, if you are unlucky, a trading standards complaint.</p>
 
@@ -451,7 +451,7 @@ export async function POST(req: Request) {
 
         <p><strong>The browser cache.</strong> Mostly assets, and mostly free if your build hashes filenames.</p>
 
-        <pre><code class="language-nginx"># The cache key is the whole game. Strip cookies that do not change the
+        <code class="language-nginx"># The cache key is the whole game. Strip cookies that do not change the
 # response, or the hit rate goes to zero and the CDN is decoration.
 map $http_cookie $cache_bypass {
     default                    0;
@@ -468,7 +468,7 @@ proxy_no_cache    $cache_bypass;
 # experience instead of a 502 page.
 proxy_cache_use_stale updating error timeout http_500 http_502 http_503;
 proxy_cache_background_update on;
-proxy_cache_lock on;   # one request repopulates; the rest wait for it</code></pre>
+proxy_cache_lock on;   # one request repopulates; the rest wait for it</code>
 
         <p>That <code>proxy_cache_lock</code> line is worth more than it looks. Without it, a popular page expiring during a traffic spike sends every concurrent request to the origin at once. I have seen a Magento instance fall over from a cache stampede on a single category page during a Black Friday email send — 4,000 concurrent requests for one URL that had expired eleven seconds earlier.</p>
 
@@ -482,7 +482,7 @@ proxy_cache_lock on;   # one request repopulates; the rest wait for it</code></p
 
         <p>A backend-for-frontend is a thin server-side layer that speaks screens. One call per screen, composed server-side, with secrets held server-side.</p>
 
-        <pre><code class="language-typescript">// lib/commerce/category.ts — one function per screen, not per resource.
+        <code class="language-typescript">// lib/commerce/category.ts — one function per screen, not per resource.
 // The two upstream calls run concurrently; sequential awaits here were the
 // single biggest cause of slow SSR on the project in the opening story.
 export async function getCategory(handle: string) {
@@ -501,7 +501,7 @@ export async function getCategory(handle: string) {
     facets: cat.aggregations.filter(usable),  // not in the component
     banner: content ?? null,
   };
-}</code></pre>
+}</code>
 
         <p>The <code>toCard</code> mapping matters more than it looks. Magento's GraphQL product node, requested naively, comes back at 4–6KB per product. Forty-eight of those is 250KB of JSON that then gets serialised into the HTML payload for hydration. Narrowing to the eleven fields a card actually renders takes it to about 400 bytes each. On one project that change alone removed 190KB from the document and took Interaction to Next Paint from 340ms to 180ms on mid-range Android, because the browser was spending real time parsing JSON it never used.</p>
 
@@ -517,7 +517,7 @@ export async function getCategory(handle: string) {
 
         <p>The pattern that works: the commerce backend owns the cart and issues an opaque token; the front end stores the token and nothing else. Never model the cart in front-end state as the source of truth. I have seen a build that kept the cart in a client-side store and synced it to the backend on a debounce, and it produced a class of bug — items reappearing after removal, quantities doubling on a flaky connection — that took months to fully kill.</p>
 
-        <pre><code class="language-typescript">// The token is httpOnly so no client script can read it, SameSite=Lax so it
+        <code class="language-typescript">// The token is httpOnly so no client script can read it, SameSite=Lax so it
 // survives the return trip from a hosted payment page, and scoped to the
 // apex domain so the checkout subdomain sees the same cart.
 import { cookies } from 'next/headers';
@@ -543,7 +543,7 @@ export async function ensureCart() {
     maxAge: 60 * 60 * 24 * 30,
   });
   return cart;
-}</code></pre>
+}</code>
 
         <p>The merge-on-login case needs an explicit decision from the business, not from engineering. A customer with three items as a guest logs in and has two items saved from last week. Do you union them, replace, or ask? Every platform has a default and it is usually union, which produces the "why is this in my basket" support ticket. Ask the merchandising team. Write it down. Test it, because it is the single most commonly broken flow on headless builds and it is invisible in every demo.</p>
 
@@ -565,7 +565,7 @@ export async function ensureCart() {
 
         <p><strong>Facet URLs multiply without supervision.</strong> A monolith usually ships sensible defaults for what is indexable. A custom front end will happily generate <code>/pans?colour=red&amp;size=24cm&amp;sort=price&amp;page=3</code> as a crawlable, linked, canonical-free URL, and Googlebot will find several hundred thousand of them.</p>
 
-        <pre><code class="language-typescript">// app/[category]/page.tsx — the robots decision belongs in code, on every
+        <code class="language-typescript">// app/[category]/page.tsx — the robots decision belongs in code, on every
 // route, because there is no admin checkbox for it any more.
 export async function generateMetadata({ params, searchParams }) {
   const filtered = Object.keys(searchParams).some(
@@ -580,7 +580,7 @@ export async function generateMetadata({ params, searchParams }) {
       ? { index: false, follow: true }   // crawl through, do not index
       : { index: true, follow: true },
   };
-}</code></pre>
+}</code>
 
         <p><strong>Structured data becomes handwritten.</strong> Which is fine, and also means it can be wrong for months without anyone noticing. Put a schema validation step in CI against a sample of real URLs; it takes an afternoon and catches the day somebody refactors the price formatter and starts emitting <code>"29.99 GBP"</code> where a number was expected.</p>
 
@@ -592,7 +592,7 @@ export async function generateMetadata({ params, searchParams }) {
 
         <p>The fix is boring and works: one trace identifier that crosses every boundary, and real-user monitoring on the front end that can be joined to it.</p>
 
-        <pre><code class="language-typescript">// Propagate a single id from edge to origin. Without it, correlating a slow
+        <code class="language-typescript">// Propagate a single id from edge to origin. Without it, correlating a slow
 // page view with the upstream call that caused it means matching timestamps
 // across three vendors and hoping.
 export async function commerceFetch(query: string, vars: object, traceId: string) {
@@ -615,7 +615,7 @@ export async function commerceFetch(query: string, vars: object, traceId: string
     status: String(res.status),
   });
   return res.json();
-}</code></pre>
+}</code>
 
         <p>Two alerts earn their keep more than any dashboard. First, edge cache hit rate on HTML dropping below its baseline — that is almost always somebody accidentally making a route dynamic, and it will be a deploy from the last hour. Second, p95 upstream latency by operation, because a commerce API that degrades from 200ms to 900ms turns a fast site slow without producing a single error.</p>
 
@@ -720,23 +720,27 @@ export async function commerceFetch(query: string, vars: object, traceId: string
         <p>The retailer from the opening reverted to a Hyvä theme eighteen months after their headless launch. It cost them another £45,000 and their category pages are now faster than either previous version. Nobody wrote a case study about it. The engineering lesson is not that headless is wrong — for the distributor in the worked example it was clearly right and is still running well. The lesson is that this is a decision with a real bill attached, and the bill is mostly people, and it should be made by counting rather than by knowing what serious brands do.</p>
 
         <div class="blog-suggested-reads">
-  <h3>Suggested &amp; Related Reading</h3>
-  <p>Explore related engineering guides from Kenneth D'Silva:</p>
-  <ul>
-    <li>
-      <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Ecommerce: The Architectural &amp; Business Guide</a></strong>
-      <p>Crawler architecture, semantic HTML, and advanced Next.js ISR rendering patterns.</p>
-    </li>
-    <li>
-      <strong><a href="/blog/pwa-for-ecommerce/">Progressive Web Apps (PWA) for Ecommerce</a></strong>
-      <p>Offline functionality, service workers, and app-like performance strategies.</p>
-    </li>
-    <li>
-      <strong><a href="/blog/performance-optimization/">Performance Optimization Strategies</a></strong>
-      <p>Mastering Core Web Vitals, asset minification, and global edge delivery mechanisms.</p>
-    </li>
-  </ul>
-</div>
+          <h3>Suggested &amp; Related Reading</h3>
+          <p>Explore related engineering guides from Kenneth D'Silva:</p>
+          <ul>
+            <li>
+              <strong><a href="/blog/jamstack-ecommerce/">JAMstack E-Commerce: Static Generation &amp; Dynamic Hydration</a></strong>
+              <p>Static generation for ecommerce catalogues: build times at scale, incremental and on-demand ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
+              <p>How headless commerce backends actually perform: Storefront API budgets, persisted queries, ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
+              <p>The content layer for headless commerce: modelling in Sanity, Strapi and Contentful, preview...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/android-studio-pwa-mobile-apps/">Packaging PWAs as Native Android Apps with TWA</a></strong>
+              <p>How to package an existing PWA as a Trusted Web Activity for Google Play: Bubblewrap, Digita...</p>
+            </li>
+          </ul>
+        </div>
       </article>
     </section>
   </main>

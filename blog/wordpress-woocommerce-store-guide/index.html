@@ -99,7 +99,7 @@
         "url": "https://www.modracx.com/og-image.png"
       }
     },
-    "timeRequired": "PT22M"
+    "timeRequired": "PT24M"
   }
   </script>
   <script type="application/ld+json">
@@ -185,8 +185,8 @@
         <p class="lede">A WooCommerce store I audited recently had 47 active plugins, PHP memory exhausted on every checkout page (Fatal error: Allowed memory size of 268435456 bytes exhausted), and their hosting provider was on PHP 7.4 — three years out of support — because nobody had dared upgrade it after the last migration broke three poorly maintained plugins.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture%20%26%20Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 24 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture & Cloud</a></span>
         </div>
       </div>
 
@@ -232,7 +232,7 @@
         <p>PHP-FPM is the engine that executes the WordPress PHP codebase. Out of the box, default PHP-FPM configurations are conservative and often lead to 502 Bad Gateway errors under load because all worker processes are occupied. A dedicated WooCommerce server requires a meticulously tuned PHP-FPM pool configuration. In a standard Ubuntu environment, this configuration resides at <code>/etc/php/8.2/fpm/pool.d/wordpress.conf</code>.</p>
         <p>Here is an example of a production-ready PHP-FPM pool configuration specifically designed for a server with 16GB of RAM dedicated to a WooCommerce workload:</p>
         
-        <pre><code>[wordpress]
+        <code>[wordpress]
 user = www-data
 group = www-data
 listen = /run/php/php8.2-fpm-wordpress.sock
@@ -251,7 +251,7 @@ php_admin_value[memory_limit] = 512M
 php_admin_value[max_execution_time] = 300
 php_admin_value[upload_max_filesize] = 64M
 php_admin_value[post_max_size] = 64M
-php_admin_value[max_input_vars] = 5000</code></pre>
+php_admin_value[max_input_vars] = 5000</code>
 
         <p>Let's break down why these specific values are critical:</p>
         <ul>
@@ -267,7 +267,7 @@ php_admin_value[max_input_vars] = 5000</code></pre>
 
         <h3>Critical Configuration Constants</h3>
         <p>Here are the constants I enforce on every production build:</p>
-        <pre><code>// Database charset and collation
+        <code>// Database charset and collation
 define( 'DB_CHARSET', 'utf8mb4' );
 define( 'DB_COLLATE', 'utf8mb4_unicode_520_ci' );
 
@@ -284,7 +284,7 @@ define( 'DISALLOW_FILE_MODS', true );
 define( 'WP_DEBUG', false );
 define( 'WP_DEBUG_LOG', false );
 define( 'WP_DEBUG_DISPLAY', false );
-@ini_set( 'display_errors', 0 );</code></pre>
+@ini_set( 'display_errors', 0 );</code>
 
         <p>Let me explain the rationale behind each setting:</p>
         <ul>
@@ -302,7 +302,7 @@ define( 'WP_DEBUG_DISPLAY', false );
         <h3>Tuning woocommerce.cnf</h3>
         <p>To optimise the database, we bypass the default MySQL configuration and create a dedicated override file at <code>/etc/mysql/conf.d/woocommerce.cnf</code>. This file tailors the InnoDB storage engine specifically for WordPress's schema architecture.</p>
         
-        <pre><code>[mysqld]
+        <code>[mysqld]
 # InnoDB memory allocation
 innodb_buffer_pool_size = 12G
 innodb_buffer_pool_instances = 12
@@ -322,7 +322,7 @@ query_cache_size = 0
 # Diagnostics
 slow_query_log = 1
 slow_query_log_file = /var/log/mysql/mysql-slow.log
-long_query_time = 1</code></pre>
+long_query_time = 1</code>
 
         <p>The reasoning behind these specific variables is critical for stability:</p>
         <ul>
@@ -341,16 +341,16 @@ long_query_time = 1</code></pre>
         
         <p>To implement this, you require the Redis server daemon and the PHP Redis extension. I recommend using the excellent Redis Object Cache plugin by Till Krüss as the drop-in <code>object-cache.php</code> handler. Your Redis configuration file at <code>/etc/redis/redis-object-cache.conf</code> should be tuned for an LRU (Least Recently Used) eviction policy:</p>
         
-        <pre><code>maxmemory 512mb
-maxmemory-policy allkeys-lru</code></pre>
+        <code>maxmemory 512mb
+maxmemory-policy allkeys-lru</code>
         
         <p>This ensures that if Redis reaches its 512MB limit, it will automatically evict the oldest, least accessed cache keys to make room for new ones, preventing the service from crashing. In your <code>wp-config.php</code>, you bind WordPress to the Redis instance:</p>
         
-        <pre><code>define('WP_CACHE', true);
+        <code>define('WP_CACHE', true);
 define('WP_REDIS_HOST', '127.0.0.1');
 define('WP_REDIS_PORT', 6379);
 define('WP_REDIS_DATABASE', 0);
-define('WP_REDIS_PREFIX', 'my_store_'); // Critical for multi-site servers</code></pre>
+define('WP_REDIS_PREFIX', 'my_store_'); // Critical for multi-site servers</code>
         
         <p>With Redis active, you will see TTFB (Time to First Byte) drop from over a second to roughly 200-300ms on heavy catalogue pages.</p>
 
@@ -361,12 +361,12 @@ define('WP_REDIS_PREFIX', 'my_store_'); // Critical for multi-site servers</code
         <p>Using Nginx's native FastCGI caching module is significantly faster than using PHP-based caching plugins like WP Rocket or W3 Total Cache, because the request never even spawns a PHP process. However, the configuration requires precise bypass rules.</p>
         
         <p>In your main <code>nginx.conf</code>, define the cache zone:</p>
-        <pre><code>fastcgi_cache_path /var/run/nginx-cache levels=1:2 keys_zone=WORDPRESS:100m inactive=60m use_temp_path=off;
-fastcgi_cache_key "$scheme$request_method$host$request_uri";</code></pre>
+        <code>fastcgi_cache_path /var/run/nginx-cache levels=1:2 keys_zone=WORDPRESS:100m inactive=60m use_temp_path=off;
+fastcgi_cache_key "$scheme$request_method$host$request_uri";</code>
         
         <p>In your server block configuration for the WooCommerce site, implement the bypass logic:</p>
         
-        <pre><code># Initialize bypass variable
+        <code># Initialize bypass variable
 set $skip_cache 0;
 
 # POST requests and queries should always bypass cache
@@ -398,7 +398,7 @@ location ~ \.php$ {
     
     # Add header for debugging
     add_header X-FastCGI-Cache $upstream_cache_status;
-}</code></pre>
+}</code>
         
         <p>This configuration dynamically detects if a user has items in their cart via the <code>$cookie_woocommerce_items_in_cart</code> variable. If they do, Nginx immediately bypasses the cache and routes the request to PHP. Furthermore, we inject the <code>X-FastCGI-Cache $upstream_cache_status</code> header, allowing developers to inspect network responses in the browser and see a <code>HIT</code>, <code>MISS</code>, or <code>BYPASS</code> status, confirming the caching layer is functioning securely.</p>
 
@@ -440,7 +440,7 @@ location ~ \.php$ {
         <p>Unlike modular frameworks where dependencies are autoloaded only when explicitly called, WordPress loads the primary class files of every single active plugin on every single request. If you have 40 active plugins, you are compiling and executing 40 sets of code on the homepage, the checkout page, and the REST API endpoints, regardless of whether that plugin’s functionality is needed on that specific route.</p>
         
         <p>This is why plugin count directly impacts memory usage. To audit your stack via CLI, run:</p>
-        <pre><code>wp plugin list --status=active --format=table</code></pre>
+        <code>wp plugin list --status=active --format=table</code>
         
         <h3>Performance Profiling with Query Monitor</h3>
         <p>To identify the specific plugins destroying your TTFB, install the <strong>Query Monitor</strong> plugin by John Blackbourn. This tool acts as an advanced developer console, injecting an interface into the WordPress admin bar. It exposes the raw MySQL queries executed on the page, the time taken by each query, the component (core, theme, or specific plugin) that triggered it, and the memory footprint consumed.</p>
@@ -455,8 +455,8 @@ location ~ \.php$ {
         
         <p>For example, to securely fetch a paginated list of all orders currently marked as "processing", an external system would execute a standard HTTP GET request. Here is how that looks via curl:</p>
         
-        <pre><code>curl -u 'ck_your_consumer_key:cs_your_consumer_secret' \
-'https://example.com/wp-json/wc/v3/orders?per_page=100&status=processing'</code></pre>
+        <code>curl -u 'ck_your_consumer_key:cs_your_consumer_secret' \
+'https://example.com/wp-json/wc/v3/orders?per_page=100&status=processing'</code>
         
         <h3>Webhooks and Rate Limiting</h3>
         <p>For real-time data sync, rather than polling the API continuously, WooCommerce supports Webhook registration. You can configure the system to send an automated POST payload to a designated external endpoint the moment an event occurs, such as <code>order.created</code> or <code>product.updated</code>. Note that intensive API usage is subject to the host server's resources. While WordPress has a rudimentary built-in throttle, high-frequency API polling should be mitigated by robust server-level rate limiting in Nginx to prevent DDoS-style resource exhaustion.</p>
@@ -476,9 +476,9 @@ location ~ \.php$ {
         <h3>Database Migration and URL Replacement</h3>
         <p>Moving a WordPress site between environments is complicated because WordPress stores absolute URLs directly in the database. A standard SQL dump will fail because the staging database will redirect back to the production URL. WP-CLI provides the necessary tools. To sync production data to staging:</p>
         
-        <pre><code>wp db export production.sql
+        <code>wp db export production.sql
 # Import on staging, then run:
-wp search-replace 'https://example.com' 'https://staging.example.com' --all-tables</code></pre>
+wp search-replace 'https://example.com' 'https://staging.example.com' --all-tables</code>
         
         <p>For managed workflows, premium tools like WP Migrate DB Pro automate this process, handling the complex serialised data replacements flawlessly.</p>
         
@@ -545,12 +545,20 @@ wp search-replace 'https://example.com' 'https://staging.example.com' --all-tabl
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization</a></strong>
-              <p>Advanced techniques for reducing Time to First Byte (TTFB) and optimising full-stack asset delivery.</p>
+              <strong><a href="/blog/wix-store-creation-guide/">Wix eCommerce Store Creation: Setup, Configuration &amp; Honest Limitations</a></strong>
+              <p>A highly technical guide to setting up a Wix eCommerce store, configuring payments, shipping...</p>
             </li>
             <li>
-              <strong><a href="/blog/secure-ecommerce-checklist/">Secure Ecommerce Checklist</a></strong>
-              <p>A comprehensive security audit framework for production ecommerce environments.</p>
+              <strong><a href="/blog/odoo-store-creation-guide/">Odoo eCommerce Store Creation: Installation, Configuration &amp; Launch Guide</a></strong>
+              <p>A comprehensive technical guide to building an Odoo eCommerce store, covering Linux server s...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/prestashop-installation-guide/">PrestaShop Installation &amp; Store Creation: Technical Setup on Linux</a></strong>
+              <p>A comprehensive technical guide to installing and configuring PrestaShop 8 on a Linux stack,...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/opensearch-installation-guide/">OpenSearch Installation &amp; Cluster Architecture: A Production Deployment Guide</a></strong>
+              <p>A comprehensive technical guide to OpenSearch installation, cluster architecture, system siz...</p>
             </li>
           </ul>
         </div>

@@ -194,8 +194,8 @@
         <p class="lede">At 2:00 PM on a Thursday, a premium supplier of exotic wood turning blanks launched a new category of stabilized burls. They had spent thousands on technical SEO consulting, optimized their meta tags, and built a comprehensive backlink profile.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 42 min read</span> •
-          <span>Category: <a href="/blog/?category=SEO+%26+Marketing">SEO &amp; Marketing</a></span>
+          <span>Reading Time: 32 min read</span> •
+          <span>Category: <a href="/blog/archive/#seo-marketing">SEO &amp; Marketing</a></span>
         </div>
       </div>
 
@@ -227,13 +227,13 @@
         <h2>1. The TTFB Catastrophe: When 1.4 Seconds Ruins Your Year</h2>
         <p>At 2:00 PM on a Thursday, a premium supplier of exotic wood turning blanks launched a new category of stabilized burls. They had spent thousands on technical SEO consulting, optimized their meta tags, and built a comprehensive backlink profile. They had hired content writers to produce five-thousand-word guides on the stabilization process. They did everything the SEO playbook dictated. Yet, they were bleeding rankings to a competitor with a site that looked like it was built in 1998 on Microsoft FrontPage. The reason was entirely infrastructural. Googlebot was experiencing a Time to First Byte (TTFB) of 1.4 seconds. The origin server, a heavily modified monolithic Magento instance, was buckling under the load of dynamic image resizing, complex category filters, and convoluted database joins required to render the pricing for different customer tiers. It was forcing the crawler to abandon its requests before the HTML even arrived.</p>
         <p>This is the harsh reality of modern ecommerce SEO. The quality of your content is irrelevant if your infrastructure cannot deliver it within the strict latency budgets dictated by Core Web Vitals. Google's crawler (Googlebot) is incredibly sensitive to TTFB and render-blocking resources. If your origin server spends two seconds querying a database to construct a product page, you are actively sabotaging your search visibility. You are telling the search engine that your site provides a poor user experience, regardless of how insightful your content might be.</p>
-        <p>Fixing this requires a paradigm shift. You must stop relying on your origin server to serve public HTML. You must shift the entire computation burden to the edge. You must implement a sophisticated Content Delivery Network (CDN) architecture using edge compute platforms like Cloudflare Workers or Fastly VCL. This document details the exact strategies for offloading dynamic request routing, executing image transformation pipelines at the edge, and manipulating SEO tags in flight to achieve near-instantaneous page loads. We will cover the specific configurations, the exact Worker scripts, and the theoretical underpinnings required to build an SEO-optimized edge architecture.</p>
+        <p>Fixing this requires a structural change. You must stop relying on your origin server to serve public HTML. You must shift the entire computation burden to the edge. You must implement a sophisticated Content Delivery Network (CDN) architecture using edge compute platforms like Cloudflare Workers or Fastly VCL. This document details the exact strategies for offloading dynamic request routing, executing image transformation pipelines at the edge, and manipulating SEO tags in flight to achieve near-instantaneous page loads. We will cover the specific configurations, the exact Worker scripts, and the theoretical underpinnings required to build an SEO-optimized edge architecture.</p>
 
         <h2>2. Cloudflare Workers and Edge Request Routing</h2>
         <p>The traditional model of ecommerce hosting involves pointing DNS directly at a load balancer, which forwards every single HTTP request to the origin server. This guarantees latency. The origin must parse the URL, instantiate the application framework (PHP, Ruby, Node), query the database, construct the HTML, compress it, and return the response. For a catalog of ten thousand unique wood blanks, each with multiple high-resolution images and dynamic inventory statuses, this process is computationally expensive and highly redundant. The vast majority of traffic is requesting data that hasn't changed in days.</p>
         <p>We replaced this monolithic bottleneck with Cloudflare Workers acting as a programmable, intelligent proxy layer. When a request hits the edge (one of Cloudflare's 300+ global data centers), the Worker intercepts it before it ever reaches the origin. The Worker is a lightweight JavaScript execution environment (running on V8 isolates) that can execute routing logic in under 5 milliseconds.</p>
         
-        <pre><code class="language-javascript">
+        <code class="language-javascript">
 // Example Cloudflare Worker: Intelligent Request Routing
 export default {
   async fetch(request, env, ctx) {
@@ -273,7 +273,7 @@ export default {
     return response;
   }
 };
-        </code></pre>
+        </code>
 
         <p>The Worker first checks a globally distributed KV (Key-Value) store to determine if the requested URL is a static asset, a cached category page, or a fully dynamic checkout route. If the URL is a category page, the Worker checks the edge cache. If the cache is warm, the Worker returns the HTML instantly, completely bypassing the origin. This drops TTFB from 1.4 seconds to 30 milliseconds.</p>
         <p>Crucially, if the cache is cold, the Worker initiates a request to the origin, but it does so intelligently. It strips tracking parameters (like `utm_source` or `gclid`) that would otherwise fragment the cache and force a new render. If ten different affiliates link to the same page with ten different `utm_source` tags, a naive cache will store ten identical copies of the HTML and force the origin to render it ten times. Our Worker normalizes the URL before checking the cache, ensuring that a single origin render serves all subsequent requests, regardless of the marketing parameters appended to the URL. The tracking parameters are still visible to client-side analytics scripts (like Google Analytics), but they are hidden from the caching layer.</p>
@@ -282,7 +282,7 @@ export default {
         <p>The wood blank supplier had thousands of legacy URLs from a previous migration off an ancient osCommerce platform. Handling these redirects at the origin level required parsing a massive CSV file on every request, or relying on complex `.htaccess` rules that bloated the Apache configuration and slowed down the web server parsing process.</p>
         <p>We moved this logic entirely to the edge. We loaded the redirect map into Cloudflare KV. When a request arrives, the Worker checks the requested path against the KV store. If a match is found, the edge executes a 301 redirect instantly, without ever contacting the origin.</p>
 
-        <pre><code class="language-javascript">
+        <code class="language-javascript">
 // Cloudflare Worker snippet for KV-based Redirects
 const REDIRECT_KV = env.REDIRECT_MAP; // Bound KV Namespace
 
@@ -290,7 +290,7 @@ const targetUrl = await REDIRECT_KV.get(url.pathname);
 if (targetUrl) {
   return Response.redirect(targetUrl, 301);
 }
-        </code></pre>
+        </code>
 
         <p>This edge-based redirection is a massive SEO advantage. Googlebot allocates a specific "crawl budget" to your domain. If a significant portion of that budget is wasted waiting for your origin server to process 301 redirects, fewer of your actual product pages will be crawled and indexed. By executing redirects in 5 milliseconds at the edge, you preserve your crawl budget for the content that matters.</p>
 
@@ -298,7 +298,7 @@ if (targetUrl) {
         <p>Ecommerce sites are fundamentally image-heavy. A premium supplier of exotic woods must showcase the exact grain and figuring of every single unique piece. Serving a 4MB unoptimized JPEG of a snakewood blank will destroy your Largest Contentful Paint (LCP) metric. Relying on the origin server to generate web-optimized images on the fly introduces severe latency and CPU overhead, often requiring complex background queues (like Sidekiq or RabbitMQ) just to process image uploads.</p>
         <p>The solution is edge-based image optimization. We utilized Cloudflare Image Resizing (an equivalent pattern exists in Fastly's image optimization pipeline). The origin server or a dedicated S3 bucket stores only the original, high-resolution master image. When the browser requests a specific size for a product grid, the edge node intercepts the request.</p>
 
-        <pre><code class="language-html">
+        <code class="language-html">
 &lt;!-- Frontend HTML utilizing Edge Image Resizing --&gt;
 &lt;img 
   src="/cdn-cgi/image/width=800,quality=85,format=auto/images/burl-001-master.jpg" 
@@ -309,7 +309,7 @@ if (targetUrl) {
   alt="Stabilized Snakewood Burl Turning Blank"
   loading="lazy"
 &gt;
-        </code></pre>
+        </code>
 
         <p>The edge instantly resizes the image, converts it to a modern format like WebP or AVIF (based on the `Accept` header sent by the browser), and caches the result. This entirely eliminates the need for complex image processing logic on the origin. The LCP metric plummets because the images are delivered in the optimal format, at the exact required dimensions, from a physical location milliseconds away from the user.</p>
 
@@ -320,7 +320,7 @@ if (targetUrl) {
         <p>Using Fastly VCL (Varnish Configuration Language) or Cloudflare Workers (using the `HTMLRewriter` API), you can intercept the HTML response from the origin and inject or modify SEO tags in flight. For the wood blank supplier, we identified a critical issue where the origin was generating incorrect pagination links on category pages. The canonical tags were pointing to the first page of the pagination sequence, essentially telling Google to ignore pages 2 through 50.</p>
         <p>Instead of rewriting the core application logic—a process that would require significant backend engineering—we deployed an edge rule. The edge intercepts the HTML, parses the `<head>` section in a streaming fashion (without buffering the entire document in memory), and dynamically injects the correct canonical tags based on the URL structure.</p>
 
-        <pre><code class="language-javascript">
+        <code class="language-javascript">
 // Cloudflare Worker HTMLRewriter for Dynamic Canonical Tags
 class CanonicalTagInjector {
   constructor(url) {
@@ -347,7 +347,7 @@ export default {
     return response;
   }
 };
-        </code></pre>
+        </code>
 
         <p>We also used this technique to dynamically inject highly specific JSON-LD structured data for limited-edition items. We pulled the real-time inventory status directly from edge KV storage and injected it into the JSON-LD payload, overriding the potentially stale data provided by the origin's HTML generation process. This ensures that Google Shopping feeds and rich snippets accurately reflect the true availability of the item.</p>
 
@@ -355,23 +355,23 @@ export default {
         <p>Aggressive edge caching introduces a critical challenge: staleness. If a specific burl blank sells out, the edge will continue serving the cached HTML showing it as "In Stock" until the cache expires. If a user tries to add the item to their cart, the cart API (which bypasses the cache) will reject it, leading to customer frustration. Furthermore, if Googlebot crawls the stale page, it will index the item as available, causing friction when users click through from search results.</p>
         <p>The architecture demands a highly sophisticated invalidation strategy. You cannot rely on time-to-live (TTL) expiration. Setting a short TTL (like 5 minutes) defeats the purpose of the CDN, as the origin will constantly be hit with cache regeneration requests. The origin must proactively notify the CDN the instant a state change occurs. This is achieved using Cache Tags (Surrogate Keys).</p>
 
-        <pre><code class="language-http">
+        <code class="language-http">
 # HTTP Response from Origin to CDN
 HTTP/1.1 200 OK
 Content-Type: text/html; charset=utf-8
 Cache-Control: public, max-age=31536000
 Cache-Tag: product-9876, category-burls, template-product-v2
-        </code></pre>
+        </code>
 
         <p>When the origin generates a product page, it includes a specific header (e.g., `Cache-Tag: product-9876, category-burls`). The edge caches the page and internally associates it with these tags. When the inventory level for product 9876 changes (e.g., a user completes a checkout), the origin executes a targeted Purge API request to the CDN, specifying the tag `product-9876`.</p>
 
-        <pre><code class="language-bash">
+        <code class="language-bash">
 # Example cURL request to Cloudflare API to purge by tag
 curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" \
      -H "Authorization: Bearer {API_TOKEN}" \
      -H "Content-Type: application/json" \
      --data '{"tags":["product-9876"]}'
-        </code></pre>
+        </code>
 
         <p>The CDN instantly invalidates all cached HTML fragments associated with that specific product, across all global edge nodes. It does not purge the entire cache. It does not purge other products. It surgically removes only the affected data. The next request for that specific product page will hit the origin, generate fresh HTML, and cache it again.</p>
 
@@ -380,7 +380,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" 
         <p>Traditional caching strategies usually surrender at this point and declare the entire page uncacheable. This is disastrous for performance. The solution is Edge-Side Includes (ESI) or edge-based hydration.</p>
         <p>Using ESI (supported natively by Fastly and Varnish), the origin generates a "skeleton" HTML document. The personalized sections are replaced with special XML-like tags.</p>
 
-        <pre><code class="language-html">
+        <code class="language-html">
 &lt;!-- Origin HTML Skeleton --&gt;
 &lt;header&gt;
   &lt;div class="logo"&gt;Modracx Blanks&lt;/div&gt;
@@ -392,7 +392,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" 
   &lt;h1&gt;Snakewood Burl&lt;/h1&gt;
   &lt;!-- Product details... --&gt;
 &lt;/main&gt;
-        </code></pre>
+        </code>
 
         <p>The edge caches the skeleton document aggressively. When a request arrives, the edge parses the ESI tags. It sees the `esi:include` tag and makes a separate, highly localized request to the origin specifically for `/api/v1/user/header-fragment`, passing the user's session cookies. It then stitches the personalized fragment into the cached skeleton and delivers the fully assembled document to the browser.</p>
         <p>Alternatively, in a Cloudflare Worker architecture, we achieve this via client-side hydration or edge-side DOM manipulation. The edge serves the fully cached, anonymized HTML. The browser immediately executes a lightweight JavaScript fetch request to an edge-proxied API endpoint to retrieve the user's cart state and updates the DOM dynamically. Because the initial HTML delivery is instantaneous, the LCP metric remains perfect, and the personalized data fills in asynchronously a few milliseconds later.</p>
@@ -406,7 +406,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" 
         <p>Operating a complex edge architecture blindly is a recipe for disaster. When you offload routing, caching, and redirection to the CDN, you lose visibility in your origin server's access logs (like Apache or Nginx). A request that is served from the edge cache never hits the origin, meaning it never appears in the origin logs. This makes debugging SEO crawl issues impossible.</p>
         <p>To regain observability, we implement real-time log streaming from the edge directly into a centralized logging platform (like Datadog, Splunk, or AWS CloudWatch). Both Cloudflare (via Logpush) and Fastly (via Real-Time Log Streaming) provide the capability to stream every single HTTP request processed by the edge, including cache status (HIT, MISS, BYPASS), execution time, and client IP.</p>
         
-        <pre><code class="language-json">
+        <code class="language-json">
 // Example Cloudflare Logpush Payload
 {
   "ClientIP": "66.249.66.1", // Googlebot IP
@@ -419,7 +419,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" 
   "EdgeEndTimestamp": 1691400000015, // 15ms total processing time
   "ClientRequestUserAgent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 }
-        </code></pre>
+        </code>
 
         <p>By analyzing these logs, the SEO team can monitor the exact crawl rate of Googlebot, verify that the edge cache is actually functioning (looking for a high HIT ratio), and instantly identify any 5xx errors generated by the origin or the edge logic. We build specific dashboards that isolate requests where the `User-Agent` contains "Googlebot", allowing us to see the site exactly as the crawler sees it, complete with exact TTFB metrics.</p>
 
@@ -434,7 +434,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" 
           <p>It can if implemented poorly. The solution is the "hybrid rendering" pattern. The edge aggressively caches the structural HTML and static product data. Dynamic elements (like live inventory counts or user-specific B2B pricing) are fetched asynchronously by the browser via lightweight API calls after the initial HTML is painted. This satisfies Googlebot's need for fast initial renders while maintaining data accuracy for real users.</p>
 
           <h3>How do we handle A/B testing if the page is cached at the CDN?</h3>
-          <p>Traditional client-side A/B testing (like Google Optimize) causes terrible CLS because the browser downloads the original page, then executes JavaScript to manipulate the DOM. Edge-based A/B testing is vastly superior. A Cloudflare Worker can intercept the request, assign the user to a test bucket based on a cookie, fetch the corresponding variant from the origin, and serve it seamlessly. The user experiences zero layout shift, and the TTFB remains pristine.</p>
+          <p>Traditional client-side A/B testing (like Google Optimize) causes terrible CLS because the browser downloads the original page, then executes JavaScript to manipulate the DOM. Edge-based A/B testing is vastly superior. A Cloudflare Worker can intercept the request, assign the user to a test bucket based on a cookie, fetch the corresponding variant from the origin, and serve it smoothly. The user experiences zero layout shift, and the TTFB remains pristine.</p>
 
           <h3>Can we cache the checkout process?</h3>
           <p>Absolutely not. Checkout routes, cart manipulation APIs, and user account pages must strictly bypass the edge cache. We configure explicit bypass rules in the CDN based on URL paths (e.g., `^/checkout/.*`) and the presence of specific session cookies. The edge acts purely as a pass-through proxy for these requests.</p>
@@ -455,7 +455,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" 
           <p>While edge compute services incur costs per request or per compute-duration, they almost always result in a net cost reduction. By offloading 80% of your traffic to the edge cache, you drastically reduce the compute and database requirements of your origin server (e.g., reducing the number of expensive AWS EC2 instances or RDS read replicas). The edge is significantly cheaper than origin compute.</p>
 
           <h3>How do we handle internationalization (i18n) at the edge?</h3>
-          <p>The edge is perfect for i18n routing. A Worker can inspect the `Accept-Language` header sent by the browser or the geo-IP location of the request. Based on this, it can seamlessly rewrite the URL to fetch the correct localized version from the origin (e.g., rewriting `/category` to `/fr/category` internally) or serve a cached localized variant, ensuring the user gets the right language without a slow 302 redirect.</p>
+          <p>The edge is perfect for i18n routing. A Worker can inspect the `Accept-Language` header sent by the browser or the geo-IP location of the request. Based on this, it can smoothly rewrite the URL to fetch the correct localized version from the origin (e.g., rewriting `/category` to `/fr/category` internally) or serve a cached localized variant, ensuring the user gets the right language without a slow 302 redirect.</p>
 
           <h3>Does Googlebot penalize sites that use Cloudflare Workers?</h3>
           <p>No. Googlebot does not care how the HTML is generated, only how fast it is delivered and what it contains. In fact, Google explicitly recommends utilizing CDNs and edge caching to improve Core Web Vitals. The only risk is if your Worker logic inadvertently blocks Googlebot based on an aggressive firewall rule, which is why meticulous log monitoring is essential.</p>
@@ -466,7 +466,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/{ZONE_ID}/purge_cache" 
         <p>The initial architecture was naive. When Googlebot requested a category page, the initial HTML response was virtually empty—just a `&lt;div id="root"&gt;&lt;/div&gt;` and a bundle of JavaScript. The browser (or the headless Chromium instance used by Googlebot) had to download the HTML, parse the JavaScript, execute it, and then make a series of API calls back to the origin to fetch the product data before finally painting the DOM. The TTFB for the actual content (not the empty HTML shell) was hovering around 2.8 seconds. Google's crawler simply abandoned the render process halfway through, resulting in massive indexation failures.</p>
         <p>Our mandate was absolute: reduce TTFB to under 200 milliseconds without abandoning the headless React architecture. The solution was Server-Side Rendering (SSR) executed directly at the edge, utilizing Cloudflare Workers and a customized Next.js implementation.</p>
 
-        <pre><code class="language-javascript">
+        <code class="language-javascript">
 // Simplified Edge SSR Concept using React Server Components
 import { renderToReadableStream } from 'react-dom/server';
 import App from './App';
@@ -497,7 +497,7 @@ export default {
     return response;
   }
 };
-        </code></pre>
+        </code>
 
         <p>We deployed a Cloudflare Worker that intercepted all incoming HTML requests. The Worker first checked the edge cache. If the page was cached, it was served instantly. If it was a cache miss, the Worker itself—running within a V8 isolate mere milliseconds from the user—executed the React SSR process. It fetched the raw JSON data from the Adobe Commerce API, hydrated the React components in memory, generated the fully formed HTML document, and streamed it back to the client while simultaneously caching the result.</p>
         <p>The results were staggering. The TTFB for cold cache requests dropped from 2.8 seconds to 450 milliseconds. For warm cache requests (which constituted 95% of traffic), the TTFB dropped to an astonishing 25 milliseconds. Googlebot immediately recognized the fully rendered HTML payload. Within four weeks, crawl rates quadrupled. Within eight weeks, BurlWood regained all lost organic traffic and exceeded their previous baseline by 15%, directly attributable to the improved Core Web Vitals metrics.</p>
@@ -506,11 +506,11 @@ export default {
         <p>The standard `Cache-Control` header is often too blunt an instrument for ecommerce. If you set `s-maxage=3600` (cache for one hour), what happens at minute 61? The next user who requests that page suffers the full latency of an origin render. This is known as the "cache stampede" or "thundering herd" problem, and it destroys performance predictability.</p>
         <p>The solution is the `stale-while-revalidate` caching directive, supported by modern edge platforms. This directive instructs the CDN to serve stale content to the user instantly, while simultaneously triggering a background asynchronous request to the origin to fetch fresh content.</p>
 
-        <pre><code class="language-http">
+        <code class="language-http">
 # HTTP Response Headers from Origin
 HTTP/1.1 200 OK
 Cache-Control: s-maxage=600, stale-while-revalidate=86400
-        </code></pre>
+        </code>
 
         <p>In this configuration, the CDN caches the page for 10 minutes (`s-maxage=600`). If a user requests the page at minute 15, the CDN sees that the cache is technically stale. However, because of the `stale-while-revalidate` directive, it instantly serves the 15-minute-old HTML to the user (ensuring a 20ms TTFB). In the background, the CDN initiates a fetch to the origin. Once the origin returns the fresh HTML, the CDN updates its internal cache. The user experiences zero latency, and the origin is protected from sudden traffic spikes. This pattern is essential for high-traffic category pages where absolute real-time accuracy is less critical than absolute performance.</p>
 
@@ -518,7 +518,7 @@ Cache-Control: s-maxage=600, stale-while-revalidate=86400
         <p>Modern headless architectures often rely on GraphQL instead of REST. This introduces a significant caching challenge. GraphQL requests are typically sent as HTTP POST requests (because the query payload can be large), and CDNs, by default, do not cache POST requests. If you route all your GraphQL traffic directly to the origin, you entirely bypass the CDN, nullifying your performance gains.</p>
         <p>We solve this by utilizing Edge GraphQL caching. We deploy a Cloudflare Worker that intercepts incoming GraphQL POST requests. The Worker inspects the payload, extracts the query and the variables, and generates a deterministic hash (e.g., SHA-256) of the request. It then uses this hash as the cache key.</p>
 
-        <pre><code class="language-javascript">
+        <code class="language-javascript">
 // Edge Worker snippet for caching GraphQL POST requests
 async function handleGraphQL(request) {
   const clonedReq = request.clone();
@@ -547,7 +547,7 @@ async function handleGraphQL(request) {
   }
   return response;
 }
-        </code></pre>
+        </code>
 
         <p>This approach allows us to aggressively cache complex product queries, faceted search results, and category navigations directly at the edge, drastically reducing the load on the origin GraphQL server and ensuring sub-50ms response times for frontend data hydration.</p>
 
@@ -588,7 +588,7 @@ async function handleGraphQL(request) {
         <p>Why does this matter for an ecommerce site? Consider the complexity of parsing a 5MB JSON payload containing complex B2B pricing matrices, or executing a heavy cryptographic hashing algorithm for secure API authentication on every single request. JavaScript, being a garbage-collected, interpreted language, will occasionally experience latency spikes (garbage collection pauses) during these operations. Wasm bypasses this entirely.</p>
         <p>We are currently migrating complex XML parsing routines (required for integrating legacy supplier feeds into the edge caching layer) from JavaScript to Rust compiled to Wasm. The rust binary executes the XML-to-JSON transformation in a fraction of a millisecond, utilizing predictable memory allocation. This ensures that even the most computationally expensive routing or transformation tasks do not add measurable TTFB delay.</p>
 
-        <pre><code class="language-rust">
+        <code class="language-rust">
 // Conceptual Rust (Wasm) snippet for fast edge parsing
 use wasm_bindgen::prelude::*;
 use serde_json::{Value};
@@ -602,7 +602,7 @@ pub fn fast_parse_and_transform(raw_json: &str) -> String {
     
     serde_json::to_string(&parsed).unwrap()
 }
-        </code></pre>
+        </code>
 
         <p>This allows the CDN to act as a high-performance data translation layer, not just a cache. A supplier can upload a massive, unoptimized XML file, and the edge can instantly transform it into a lightweight JSON payload before delivering it to the browser, all without the origin server ever seeing the request.</p>
 
@@ -616,7 +616,7 @@ pub fn fast_parse_and_transform(raw_json: &str) -> String {
         <p>Historically, web servers had to buffer an entire HTML document in memory before sending it to the client. This delayed the TTFB until the database queries finished and the template engine completed rendering. The modern approach, heavily favored by Googlebot, is streaming HTML.</p>
         <p>With edge compute, we can stream responses directly from the origin through the edge node to the browser. As the origin generates the `<head>` of the document, the edge immediately forwards it to the client. The browser can begin downloading critical CSS and executing tracking scripts while the origin is still querying the database to generate the `<footer>`.</p>
         
-        <pre><code class="language-javascript">
+        <code class="language-javascript">
 // Edge Worker demonstrating HTML streaming
 export default {
   async fetch(request) {
@@ -629,7 +629,7 @@ export default {
     return new Response(readable, originResponse);
   }
 }
-        </code></pre>
+        </code>
 
         <p>This fundamentally alters the perception of performance. The TTFB drops to the time it takes the origin to generate the first byte of the header (often under 50ms), even if the total document takes 500ms to generate. Googlebot registers a blazing fast TTFB and immediately begins parsing the document structure. When combined with edge-based `HTMLRewriter` (which operates on the stream in real-time), you achieve the ultimate SEO architecture: instantaneous TTFB, dynamically optimized SEO tags, and zero buffering delays.</p>
 
@@ -644,16 +644,20 @@ export default {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/cloud-migration-guide/">Cloud Migration Guide: Monoliths to AWS & Azure</a></strong>
-              <p>Phased database replatforming, zero-downtime cutover, and traffic routing.</p>
+              <strong><a href="/blog/magento-2-seo-performance/">Magento 2 SEO Deep Dive: Advanced Optimization &amp; Core Web Vitals</a></strong>
+              <p>Advanced Magento 2 SEO: indexer optimization, URL rewrite table management, catalog performa...</p>
             </li>
             <li>
-              <strong><a href="/blog/multi-cdn-strategies/">Multi-CDN Architecture & Global Traffic Steering</a></strong>
-              <p>Anycast DNS routing, origin protection, and failover survivability.</p>
+              <strong><a href="/blog/headless-cms-seo-impact/">Headless CMS SEO: The Technical Impact &amp; Architecture Guide</a></strong>
+              <p>Analyzing the real SEO impact of moving to a Headless CMS: Incremental Static Regeneration (...</p>
             </li>
             <li>
-              <strong><a href="/blog/multi-cdn-architectures/">Enterprise Multi-CDN Deployment Blueprint</a></strong>
-              <p>Real-time latency probing, CDN edge cache purging, and telemetry.</p>
+              <strong><a href="/blog/pwa-seo-google-rankings/">PWA SEO Guide: Crawler Indexation &amp; Rendering for Progressive Web Apps</a></strong>
+              <p>How search engine crawlers render progressive web apps: client-side routing, service worker ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/voice-search-optimization/">Voice Search Optimization for Magento &amp; Shopify</a></strong>
+              <p>An honest account of voice search for ecommerce: what the 50% statistic really was, why spea...</p>
             </li>
           </ul>
         </div>

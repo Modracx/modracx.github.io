@@ -87,7 +87,7 @@
         "dateModified": "2026-08-06",
         "mainEntityOfPage": "https://www.modracx.com/blog/cdn-speed-seo/",
         "image": "https://www.modracx.com/og-image.png",
-        "timeRequired": "PT22M",
+        "timeRequired": "PT41M",
         "author": {
           "@type": "Person",
           "name": "Kenneth D'Silva",
@@ -196,8 +196,8 @@
         <p class="lede">A homeware retailer had a CDN in front of their store for three years and a 0% hit rate on HTML. Here is what a CDN actually removes from TTFB, where cache keys go wrong, and how small the SEO effect really is.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 31 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
+          <span>Reading Time: 41 min read</span> •
+          <span>Category: <a href="/blog/archive/#performance-speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -313,13 +313,13 @@
 
         <p>A product page URL that has been shared on Facebook, run through an email campaign, and clicked from a Google Ad looks like this by the time it reaches your edge:</p>
 
-<pre><code class="language-text">/products/oak-dining-table?fbclid=IwAR2x9k...&amp;utm_source=newsletter&amp;utm_medium=email&amp;utm_campaign=spring&amp;gclid=Cj0KCQ...</code></pre>
+<code class="language-text">/products/oak-dining-table?fbclid=IwAR2x9k...&amp;utm_source=newsletter&amp;utm_medium=email&amp;utm_campaign=spring&amp;gclid=Cj0KCQ...</code>
 
         <p>Those four parameters change per click. If they are in the cache key, that URL is unique, forever, for every single visitor. Your product page has a 0% hit rate and you will not notice, because your <em>overall</em> hit rate is dominated by images.</p>
 
         <p>The fix is to normalise. Strip the parameters that do not change the response; keep the ones that do.</p>
 
-<pre><code class="language-javascript">// Cloudflare Worker: normalise the cache key before lookup.
+<code class="language-javascript">// Cloudflare Worker: normalise the cache key before lookup.
 // Anything not on the allowlist is discarded — analytics params, click IDs,
 // affiliate tags, and the endless supply of junk that appears in the wild.
 const KEEP = new Set([
@@ -346,13 +346,13 @@ export default {
     // campaign parameters.
     return fetch(request, { cf: { cacheKey: url.toString() } });
   },
-};</code></pre>
+};</code>
 
         <p>That last comment matters more than it looks. If you strip UTM parameters before the request reaches origin, and your analytics runs server-side, you have just deleted your campaign attribution to fix your hit rate. Marketing will find out in about nine days and they will be right to be annoyed. Strip from the key, not from the request.</p>
 
         <p>Most platforms have a version of this. Fastly calls it a VCL edit, Akamai a "cache ID modification" behaviour, Shopify does it for you and does not let you touch it. On Nginx it is a <code>map</code> block and a <code>proxy_cache_key</code>.</p>
 
-<pre><code class="language-nginx"># Nginx as an edge cache: build a key from path plus a whitelisted
+<code class="language-nginx"># Nginx as an edge cache: build a key from path plus a whitelisted
 # subset of arguments, plus the things that genuinely change the response.
 
 map $arg_page $key_page { default ""; ~. "p=$arg_page"; }
@@ -365,7 +365,7 @@ map $http_user_agent $device {
     "~*iphone|android" "m";
 }
 
-proxy_cache_key "$scheme$host$uri|$key_page|$key_sort|$device|$cookie_currency";</code></pre>
+proxy_cache_key "$scheme$host$uri|$key_page|$key_sort|$device|$cookie_currency";</code>
 
         <h3>The dimensions that legitimately belong in the key</h3>
 
@@ -385,7 +385,7 @@ proxy_cache_key "$scheme$host$uri|$key_page|$key_sort|$device|$cookie_currency";
 
         <p>Check for it directly. This is the first thing I run on any store where the hit rate looks wrong:</p>
 
-<pre><code class="language-bash"># What is the origin actually saying about cacheability?
+<code class="language-bash"># What is the origin actually saying about cacheability?
 # -s silent, -o discard the body, -D - dump headers to stdout.
 curl -s -o /dev/null -D - https://origin.example.com/products/oak-dining-table \
   | grep -iE 'cache-control|vary|set-cookie|age|expires|surrogate'
@@ -395,11 +395,11 @@ curl -s -o /dev/null -D - https://origin.example.com/products/oak-dining-table \
 for i in 1 2; do
   curl -s -o /dev/null -D - https://www.example.com/products/oak-dining-table \
     | grep -iE 'cf-cache-status|x-cache|age'
-done</code></pre>
+done</code>
 
         <p>The fix is to strip both at the edge for the paths where they are wrong, which means being explicit about which cookies genuinely affect the response.</p>
 
-<pre><code class="language-javascript">// Strip everything except the cookies that legitimately change the page.
+<code class="language-javascript">// Strip everything except the cookies that legitimately change the page.
 // Run this on the request before cache lookup; run the Set-Cookie removal
 // on the response before storing.
 const MEANINGFUL = ['currency', 'store_locale'];
@@ -425,7 +425,7 @@ function makeCacheable(response) {
   // And the framework's defensive Vary would defeat the whole exercise.
   headers.delete('Vary');
   return new Response(response.body, { ...response, headers });
-}</code></pre>
+}</code>
 
         <p>I want to be honest about the risk in that second function. Deleting <code>Vary</code> and <code>Set-Cookie</code> from a response you are about to store in a shared cache is exactly the operation that leaks one customer's data to another if you get the conditions wrong. Do it only for paths you have positively identified as anonymous — product pages, category pages, content pages — and never as a global rule. I gate it on the request having no session cookie at all, which means logged-in users bypass the cache entirely and get a slower but correct page. That trade is nearly always the right one on a storefront, because the logged-in population is a small fraction of traffic and a large fraction of your legal exposure.</p>
 
@@ -437,7 +437,7 @@ function makeCacheable(response) {
 
         <p>Segment it. At minimum, split by content type, and ideally by template.</p>
 
-<pre><code class="language-javascript">// Paste in the console on a real page. Groups resource timings by
+<code class="language-javascript">// Paste in the console on a real page. Groups resource timings by
 // extension and reports how many were served from a nearby cache
 // versus how long they actually took.
 const groups = {};
@@ -457,7 +457,7 @@ console.table(
       kb: Math.round(g.bytes / 1024),
     }))
     .sort((a, b) =&gt; b.avgMs - a.avgMs)
-);</code></pre>
+);</code>
 
         <p>The number I actually care about is the HTML hit rate for anonymous traffic on your top three templates. That is a single figure, it is usually embarrassing, and it predicts your field TTFB better than anything else on the dashboard.</p>
 
@@ -469,7 +469,7 @@ console.table(
 
         <p><strong>Fingerprinted static assets.</strong> Anything whose filename contains a content hash — <code>app.7f3c2a.js</code>, <code>main.9b21e4.css</code> — is immutable by construction. Cache it for a year and tell the browser to never revalidate. There is no risk, because a change produces a new filename.</p>
 
-<pre><code class="language-http">Cache-Control: public, max-age=31536000, immutable</code></pre>
+<code class="language-http">Cache-Control: public, max-age=31536000, immutable</code>
 
         <p>The <code>immutable</code> directive is the part people leave off, and it does real work: without it, a browser reload issues a conditional request for every asset, so a customer who hits F5 pays a round trip per file even though everything is cached. With it, the browser does not ask.</p>
 
@@ -491,7 +491,7 @@ console.table(
 
         <p>The correct posture is an explicit bypass rule, matched on path, evaluated before anything else, with an audit that runs in CI. Not a default that you hope holds.</p>
 
-<pre><code class="language-nginx"># Bypass is an allowlist inverted: named paths never cache, full stop.
+<code class="language-nginx"># Bypass is an allowlist inverted: named paths never cache, full stop.
 # Evaluated first, before any of the caching logic below it.
 location ~ ^/(checkout|cart|customer|account|admin|api/session) {
     proxy_pass          http://origin;
@@ -500,11 +500,11 @@ location ~ ^/(checkout|cart|customer|account|admin|api/session) {
     # Belt and braces: if a downstream shared cache ignores Cache-Control,
     # this at least tells CDNs that honour it.
     add_header          CDN-Cache-Control "no-store" always;
-}</code></pre>
+}</code>
 
         <p>And then test it, because a rule that exists in one config file and not in the one that is actually deployed is worth nothing:</p>
 
-<pre><code class="language-bash">#!/usr/bin/env bash
+<code class="language-bash">#!/usr/bin/env bash
 # Run in CI after every deploy. Any of these being cacheable is a
 # stop-the-line failure, not a warning.
 set -e
@@ -516,7 +516,7 @@ for path in /checkout /cart /customer/account /admin; do
     *no-store*) echo "ok    $path" ;;
     *)          echo "FAIL  $path -&gt; $cc"; exit 1 ;;
   esac
-done</code></pre>
+done</code>
 
         <h2>9. Caching HTML: The Argument Both Ways</h2>
 
@@ -532,7 +532,7 @@ done</code></pre>
 
         <p>Serve a fully cached HTML document with placeholder markup for the personal parts, then fill them in with a small uncached request after load. The cart badge, the customer name, the "you viewed this" strip.</p>
 
-<pre><code class="language-html">&lt;!-- Cached HTML. The placeholder reserves layout so filling it in
+<code class="language-html">&lt;!-- Cached HTML. The placeholder reserves layout so filling it in
      later does not cause a shift. --&gt;
 &lt;div id="account-strip" data-personal style="min-height:1.5rem"&gt;
   &lt;a href="/customer/account/login/"&gt;Sign in&lt;/a&gt;
@@ -549,7 +549,7 @@ done</code></pre>
         'Hello, ' + data.name + ' — ' + data.cartCount + ' items';
     })
     .catch(() =&gt; { /* leave the cached default in place */ });
-&lt;/script&gt;</code></pre>
+&lt;/script&gt;</code>
 
         <p>This is the pattern Magento's full page cache uses, and it works. The cost is a flash of the anonymous state before the personal state arrives, which on a slow connection can be a second or more, and a layout shift if you have not reserved the space. Reserve the space.</p>
 
@@ -557,12 +557,12 @@ done</code></pre>
 
         <p>ESI lets the edge assemble a page from cached fragments with different TTLs. The page shell caches for an hour, the price block for a minute, the stock indicator for ten seconds.</p>
 
-<pre><code class="language-html">&lt;div class="price-block"&gt;
+<code class="language-html">&lt;div class="price-block"&gt;
   &lt;esi:include src="/fragments/price/SKU-4471" /&gt;
 &lt;/div&gt;
 &lt;div class="stock"&gt;
   &lt;esi:include src="/fragments/stock/SKU-4471" /&gt;
-&lt;/div&gt;</code></pre>
+&lt;/div&gt;</code>
 
         <p>I have a complicated relationship with ESI. It works, it is supported by Varnish, Fastly and Akamai, and it is genuinely the right answer for a page with several independently-changing regions. It is also a distributed templating system with no local development story, poor debuggability, and error semantics that will ruin an afternoon — a fragment that 500s can blank a section of the page with no obvious signal. I reach for it on large catalogues where the alternative is a 15-second TTL on everything, and I avoid it otherwise.</p>
 
@@ -582,7 +582,7 @@ done</code></pre>
 
         <p><strong><code>s-maxage</code>.</strong> Overrides <code>max-age</code> for shared caches only. This is the directive that makes HTML caching survivable, because it lets you say "edge, hold this for an hour; browser, hold it for sixty seconds". The edge you can purge. The browser you cannot.</p>
 
-<pre><code class="language-http">Cache-Control: public, max-age=60, s-maxage=3600, stale-while-revalidate=86400</code></pre>
+<code class="language-http">Cache-Control: public, max-age=60, s-maxage=3600, stale-while-revalidate=86400</code>
 
         <p>That single line is the workhorse for storefront HTML and it is worth reading slowly. Browser holds it for a minute. Edge holds it for an hour. For a day after the edge copy expires, the edge may serve it stale while fetching a fresh one in the background. The worst-case user-visible staleness is a minute; the worst-case origin load is one request per URL per hour.</p>
 
@@ -590,10 +590,10 @@ done</code></pre>
 
         <p><strong>Provider-specific headers.</strong> <code>Surrogate-Control</code> (Fastly, Varnish) and <code>CDN-Cache-Control</code> (Cloudflare, Akamai, and now standardised) let you instruct the CDN without the browser ever seeing it. This is cleaner than the <code>s-maxage</code> trick when your CDN supports it, because the browser-facing header stays honest and readable.</p>
 
-<pre><code class="language-http">Cache-Control: public, max-age=60
+<code class="language-http">Cache-Control: public, max-age=60
 CDN-Cache-Control: max-age=86400
 Surrogate-Control: max-age=86400, stale-while-revalidate=604800
-Surrogate-Key: product-4471 category-dining collection-oak</code></pre>
+Surrogate-Key: product-4471 category-dining collection-oak</code>
 
         <h2>11. Stale-While-Revalidate, And The Header That Saves Your Weekend</h2>
 
@@ -603,7 +603,7 @@ Surrogate-Key: product-4471 category-dining collection-oak</code></pre>
 
         <p><code>stale-if-error</code> is the one I actually evangelise. It says: if the origin returns a 5xx or times out, serve the stale copy rather than the error.</p>
 
-<pre><code class="language-http">Cache-Control: public, s-maxage=600, stale-while-revalidate=3600, stale-if-error=86400</code></pre>
+<code class="language-http">Cache-Control: public, s-maxage=600, stale-while-revalidate=3600, stale-if-error=86400</code>
 
         <p>A homeware client's origin database fell over on a Saturday afternoon during a sale. The origin was returning 500s for eleven minutes. Because <code>stale-if-error=86400</code> was set on category and product HTML, anonymous browsing continued working the entire time from stale edge copies. Checkout was down, which is not nothing, but customers could browse, and the ones already mid-session did not see an error page. We got a handful of "the site's a bit slow" emails instead of a public incident.</p>
 
@@ -629,7 +629,7 @@ Surrogate-Key: product-4471 category-dining collection-oak</code></pre>
 
         <p>The origin declares, on every response, which entities the page depends on. Later, when an entity changes, you purge the tag and every page that declared it disappears from cache, wherever it was.</p>
 
-<pre><code class="language-php">&lt;?php
+<code class="language-php">&lt;?php
 // Emitted by the application on every cacheable response.
 // Every entity the page reads from becomes a tag; changing any of
 // them invalidates exactly the pages that depend on it.
@@ -648,11 +648,11 @@ if ($product-&gt;getBrandId()) {
 // Fastly and Varnish read Surrogate-Key; Cloudflare reads Cache-Tag.
 // Emitting both is harmless and makes a provider change less painful.
 header('Surrogate-Key: ' . implode(' ', array_unique($tags)));
-header('Cache-Tag: '     . implode(',', array_unique($tags)));</code></pre>
+header('Cache-Tag: '     . implode(',', array_unique($tags)));</code>
 
         <p>Then the invalidation, fired from wherever your product save hook lives:</p>
 
-<pre><code class="language-bash"># Purge every cached object that declared a dependency on product 4471.
+<code class="language-bash"># Purge every cached object that declared a dependency on product 4471.
 # One call, regardless of how many category and collection pages
 # happened to include it.
 curl -X POST "https://api.fastly.com/service/$FASTLY_SERVICE/purge/product-4471" \
@@ -664,7 +664,7 @@ curl -X POST "https://api.fastly.com/service/$FASTLY_SERVICE/purge/product-4471"
 curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE/purge_cache" \
   -H "Authorization: Bearer $CF_TOKEN" \
   -H "Content-Type: application/json" \
-  --data '{"tags":["product-4471","category-12","brand-9"]}'</code></pre>
+  --data '{"tags":["product-4471","category-12","brand-9"]}'</code>
 
         <p>The mistake I made the first time I built this was tagging too finely. A tag per attribute — colour, material, dimensions — on the theory that granularity was free. It is not: providers cap tags per response, and I blew past Fastly's header size limit on category pages listing sixty products. Those responses silently lost their keys and became unpurgeable. Tag at the entity level: product, category, brand, plus a global tag for the layout.</p>
 
@@ -690,7 +690,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE/purge_cache" \
 
         <p>Second, compression and caching share a failure mode: <code>Vary: Accept-Encoding</code>. It is correct and necessary, and it means the edge stores a separate object per encoding. That is fine — two or three variants, and every modern client sends the same thing. It becomes a problem when a middlebox or an old client sends a mangled <code>Accept-Encoding</code> and you end up with dozens of variants. Normalise the header at the edge into two buckets, br and gzip, and cache against those.</p>
 
-<pre><code class="language-javascript">// Normalise Accept-Encoding to at most two values before cache lookup.
+<code class="language-javascript">// Normalise Accept-Encoding to at most two values before cache lookup.
 // Without this, "gzip;q=1.0, deflate, br" and "br, gzip" are different
 // cache entries containing identical bytes.
 function normaliseEncoding(request) {
@@ -700,7 +700,7 @@ function normaliseEncoding(request) {
   if (value) headers.set('Accept-Encoding', value);
   else headers.delete('Accept-Encoding');
   return new Request(request, { headers });
-}</code></pre>
+}</code>
 
         <h2>15. The Honest Section About SEO</h2>
 
@@ -726,7 +726,7 @@ function normaliseEncoding(request) {
 
         <p>Measure from the field. The Navigation Timing API gives you TTFB directly, and reporting it alongside the cache status the edge told you about is what turns a number into a diagnosis.</p>
 
-<pre><code class="language-javascript">// Real-user TTFB, tagged with the edge's own cache verdict.
+<code class="language-javascript">// Real-user TTFB, tagged with the edge's own cache verdict.
 // The Server-Timing header is how you get the CDN to tell you, in a
 // form the browser exposes to JavaScript.
 addEventListener('load', () =&gt; {
@@ -747,7 +747,7 @@ addEventListener('load', () =&gt; {
     cache: timings['cdn-cache'] || 'unknown',
     country: document.documentElement.dataset.geo || '',
   }));
-});</code></pre>
+});</code>
 
         <p>Then look at the distribution, not the mean. TTFB is bimodal on a site with a partial hit rate: a tight cluster around 50ms for hits, a long smear from 400ms upwards for misses. The mean sits between the two humps and describes nobody. Report the 75th percentile, split by cache status, split by country. That table is the one that tells you what to do next.</p>
 
@@ -839,19 +839,23 @@ addEventListener('load', () =&gt; {
 
         <div class="blog-suggested-reads">
           <h3>Suggested &amp; Related Reading</h3>
-          <p>Explore related deep engineering and architectural guides from Kenneth D'Silva:</p>
+          <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
+              <strong><a href="/blog/serverless-seo-performance/">Serverless Architecture &amp; SEO Performance</a></strong>
+              <p>Serverless ecommerce performance and SEO: cold starts quantified, why crawlers hit cold path...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/pwa-seo-performance/">Progressive Web Apps (PWA) for SEO &amp; Performance</a></strong>
+              <p>Master PWA SEO for ecommerce: how Googlebot renders Single Page Apps, server-side rendering ...</p>
+            </li>
+            <li>
               <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify: The Engineering Blueprint</a></strong>
-              <p>In-depth architectural analysis of Varnish VCL proxy layers and high-throughput Redis session offloading.</p>
+              <p>Platform performance for Magento and Shopify: Varnish hit ratio and what breaks it, Redis se...</p>
             </li>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Technical SEO Audits &amp; Aggressive Crawl Budget Allocation</a></strong>
-              <p>Advanced engineering techniques to maximize critical search indexing efficiency for extensive product catalogs.</p>
-            </li>
-            <li>
-              <strong><a href="/blog/core-web-vitals/">Mastering Google Core Web Vitals (LCP, INP, CLS)</a></strong>
-              <p>Learn to accurately measure, deeply diagnose, and surgically repair failing field data metrics using distributed computing.</p>
+              <strong><a href="/blog/advanced-image-optimization/">Advanced Image Optimization for SEO &amp; Performance</a></strong>
+              <p>Image pipelines for ecommerce: CDN transformation, AVIF vs WebP with real byte counts, quali...</p>
             </li>
           </ul>
         </div>

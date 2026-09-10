@@ -200,8 +200,8 @@
         <p class="lede">They moved product rendering into a Worker to get closer to customers, and time to first byte went from 340ms to 610ms. The compute moved one hop nearer the shopper and four hops further from the data.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 26 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 34 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -278,7 +278,7 @@
 
         <p>What you do not get, and what breaks packages:</p>
 
-        <pre><code class="language-javascript">// All of these fail in an edge runtime.
+        <code class="language-javascript">// All of these fail in an edge runtime.
 import fs from 'node:fs';              // no filesystem
 import net from 'node:net';            // no raw sockets
 import crypto from 'node:crypto';      // partially shimmed at best
@@ -290,18 +290,18 @@ import mongoose from 'mongoose';       // needs a TCP driver
 const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sku));
 const res  = await fetch('https://api.example.com/products/' + sku, {
   headers: { authorization: 'Bearer ' + env.API_TOKEN }
-});</code></pre>
+});</code>
 
         <p>Some platforms have added partial Node compatibility layers. Cloudflare's <code>nodejs_compat</code> flag shims a growing subset — <code>node:buffer</code>, <code>node:crypto</code>, <code>node:util</code>, and since 2024 a genuine TCP socket API via <code>node:net</code> on Workers specifically. Vercel's edge runtime does not offer that socket escape hatch. Treat compatibility flags as a way to get a specific library working, not as a promise that arbitrary npm packages will run.</p>
 
         <p>The practical test I use before committing anything to the edge: take the dependency tree of the code you want to move and check whether anything in it touches the filesystem, opens a socket, or ships a binary. If yes, either replace it with an HTTP-based equivalent or the work does not belong at the edge. This is a five-minute check and it has saved me several weeks.</p>
 
-        <pre><code class="language-bash"># Rough triage: what in the tree is native or filesystem-bound?
+        <code class="language-bash"># Rough triage: what in the tree is native or filesystem-bound?
 npm ls --all --parseable 2&gt;/dev/null | xargs -I{} sh -c \
   'ls {}/*.node 2&gt;/dev/null; ls {}/build/Release/*.node 2&gt;/dev/null' | sort -u
 
 # And what imports node builtins that edge runtimes lack
-grep -rEl "require\('(fs|net|tls|child_process|dns)'\)|from '(node:)?(fs|net|tls)'" node_modules --include=*.js | head</code></pre>
+grep -rEl "require\('(fs|net|tls|child_process|dns)'\)|from '(node:)?(fs|net|tls)'" node_modules --include=*.js | head</code>
 
         <h2>5. No TCP Sockets, and Why That Is the Whole Story</h2>
 
@@ -311,7 +311,7 @@ grep -rEl "require\('(fs|net|tls|child_process|dns)'\)|from '(node:)?(fs|net|tls
 
         <p><strong>An HTTP proxy in front of the database.</strong> Neon's serverless driver, PlanetScale's HTTP driver, Supabase's PostgREST, Upstash's REST API for Redis. Your query goes out as an HTTP request to a service that holds real TCP connections to the database and relays the result. This works and is the standard answer. It also means every query costs an HTTPS round trip from the PoP to wherever the proxy lives, which brings us straight back to the geography problem.</p>
 
-        <pre><code class="language-javascript">// Upstash Redis over HTTP — works from an isolate, because it is just fetch.
+        <code class="language-javascript">// Upstash Redis over HTTP — works from an isolate, because it is just fetch.
 async function getSegment(env, customerId) {
   const res = await fetch(`${env.UPSTASH_URL}/get/seg:${customerId}`, {
     headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
@@ -322,7 +322,7 @@ async function getSegment(env, customerId) {
   if (!res.ok) return null;                 // fail open, never block the page
   const { result } = await res.json();
   return result;
-}</code></pre>
+}</code>
 
         <p><strong>A platform-native store.</strong> Cloudflare KV, Durable Objects, D1, R2; Vercel KV and Edge Config; Deno KV. These are designed for the runtime and reachable without a proxy. They have very different consistency and latency characteristics, covered below where I go through state.</p>
 
@@ -361,7 +361,7 @@ async function getSegment(env, customerId) {
 
         <p>If you do end up fetching from the edge, the discipline is different from origin code:</p>
 
-        <pre><code class="language-javascript">// Origin habits: sequential, readable, each call is 4ms. Fine there.
+        <code class="language-javascript">// Origin habits: sequential, readable, each call is 4ms. Fine there.
 const product = await api.get(`/products/${sku}`);
 const stock   = await api.get(`/inventory/${product.id}`);
 const related = await api.get(`/related/${product.id}`);
@@ -374,7 +374,7 @@ const page = await fetch(`${env.API}/pdp-bundle/${sku}`);
 const [stock, related] = await Promise.all([
   fetch(`${env.API}/inventory/${sku}`),
   fetch(`${env.API}/related/${sku}`)
-]);</code></pre>
+]);</code>
 
         <p>The composed-endpoint pattern — sometimes called a backend-for-frontend, though the term has been diluted — is usually the right answer when edge rendering genuinely makes sense. You accept one round trip to a distant origin and let the origin do its own cheap local fan-out. The tax is paid once.</p>
 
@@ -386,7 +386,7 @@ const [stock, related] = await Promise.all([
 
         <p>This changes what "expensive" means. At the origin, a 40KB JSON parse is free — you have a whole core. In an isolate sharing a process with several hundred other tenants, it is a meaningful fraction of your budget. I have watched a Worker that did nothing but decode a large catalogue response and pick four fields blow its CPU limit under load and start returning 1102 errors, which surface to the customer as a blank page.</p>
 
-        <pre><code class="language-javascript">// Expensive at the edge: decode 400KB to read three fields.
+        <code class="language-javascript">// Expensive at the edge: decode 400KB to read three fields.
 const all = await (await fetch(catalogueUrl)).json();
 const item = all.products.find(p =&gt; p.sku === sku);
 
@@ -399,7 +399,7 @@ return new HTMLRewriter()
   .on('meta[property="og:title"]', {
     element(el) { el.setAttribute('content', title); }
   })
-  .transform(originResponse);</code></pre>
+  .transform(originResponse);</code>
 
         <p>The general rule I hold to: an edge handler should be a router and a decision-maker, not a renderer. If it is building more than a few kilobytes of string, ask why the origin is not doing that once and caching the result.</p>
 
@@ -409,7 +409,7 @@ return new HTMLRewriter()
 
         <p>Cloudflare's <code>HTMLRewriter</code> is the best-known implementation — a streaming parser with a CSS-selector API implemented in Rust, so the parsing itself does not burn your JavaScript CPU budget. Fastly's Compute has similar patterns via its streaming body API. The effect on time to first byte is significant: the first bytes of the origin response reach the customer while the tail is still being transformed, so the transformation is nearly free in wall-clock terms.</p>
 
-        <pre><code class="language-javascript">export default {
+        <code class="language-javascript">export default {
   async fetch(request, env) {
     const origin = await fetch(request);
 
@@ -430,7 +430,7 @@ return new HTMLRewriter()
       })
       .transform(origin);
   }
-};</code></pre>
+};</code>
 
         <p>What I would not do is use a rewriter to inject substantial personalised content into a page. It works, and it is the demo everyone writes, and it quietly makes the response uncacheable downstream unless you are very careful about how the cache key is constructed. That trade-off is the entire subject of the <a href="/blog/edge-personalization/">personalisation article</a>, so I will leave it there.</p>
 
@@ -446,7 +446,7 @@ return new HTMLRewriter()
 
         <p>The rule I apply: data that is read constantly, written rarely, and tolerant of being a minute stale belongs at the edge. Everything else does not. A currency table qualifies. A redirect map from a legacy URL scheme qualifies beautifully. Stock levels do not, and a "low stock" badge rendered from a KV read that is forty seconds behind is worse than no badge.</p>
 
-        <pre><code class="language-javascript">// A redirect map in KV: the canonical good use of edge state.
+        <code class="language-javascript">// A redirect map in KV: the canonical good use of edge state.
 // 40,000 legacy URLs, read on every 404-eligible request, changed monthly.
 export default {
   async fetch(request, env) {
@@ -460,7 +460,7 @@ export default {
     }
     return fetch(request);
   }
-};</code></pre>
+};</code>
 
         <p>That Worker replaced 40,000 lines of nginx rewrite rules for a client mid-migration, cut their config reload time from ninety seconds to nothing, and let the marketing team edit redirects without a deploy. It never touches a database. It is the shape of edge work that actually pays.</p>
 
@@ -490,7 +490,7 @@ export default {
 
         <p><strong>Serving from cache with a computed key.</strong> By far the most valuable, and it is not really compute at all.</p>
 
-        <pre><code class="language-javascript">// JWT signature check at the edge. Reject before the origin is touched.
+        <code class="language-javascript">// JWT signature check at the edge. Reject before the origin is touched.
 async function verify(token, secretKey) {
   const [h, p, s] = token.split('.');
   if (!h || !p || !s) return false;
@@ -502,7 +502,7 @@ async function verify(token, secretKey) {
   // Expiry is a claim check, not a crypto check, and people forget it.
   const claims = JSON.parse(atob(p));
   return claims.exp &gt; Math.floor(Date.now() / 1000);
-}</code></pre>
+}</code>
 
         <h2>13. What Does Not Belong There</h2>
 
@@ -528,7 +528,7 @@ async function verify(token, secretKey) {
 
         <p><strong>Emit the PoP identity into a response header on every request.</strong> Cloudflare gives you the colo in <code>request.cf.colo</code>; other platforms have equivalents. Put it in a header and ask the customer for a HAR file or a screenshot of their network tab. Without this you are guessing which of 300 locations misbehaved.</p>
 
-        <pre><code class="language-javascript">export default {
+        <code class="language-javascript">export default {
   async fetch(request, env, ctx) {
     const started = Date.now();
     const res = await handle(request, env);
@@ -549,7 +549,7 @@ async function verify(token, secretKey) {
     }));
     return out;
   }
-};</code></pre>
+};</code>
 
         <p><strong>Use <code>waitUntil</code> for every side effect.</strong> Logging, analytics, cache warming. If you <code>await</code> them, the customer waits for them, and the whole point was to be fast.</p>
 
@@ -557,7 +557,7 @@ async function verify(token, secretKey) {
 
         <p><strong>Fail open, always.</strong> Wrap the whole handler. A Worker that throws returns an error page for the entire site, and that is a far worse outcome than a page without personalisation.</p>
 
-        <pre><code class="language-javascript">export default {
+        <code class="language-javascript">export default {
   async fetch(request, env, ctx) {
     if (await env.CONFIG.get('edge_bypass') === '1') return fetch(request);
     try {
@@ -567,7 +567,7 @@ async function verify(token, secretKey) {
       return fetch(request);   // origin still works; degrade, do not break
     }
   }
-};</code></pre>
+};</code>
 
         <h2>15. Testing, and Why Local Development Lies</h2>
 
@@ -577,7 +577,7 @@ async function verify(token, secretKey) {
 
         <p><strong>Measure from at least four continents.</strong> Not from your laptop and not from a monitoring node in the same city as your origin. The whole premise of edge compute is geographic, so a single-location measurement cannot validate it.</p>
 
-        <pre><code class="language-bash"># Crude but revealing: TTFB from a handful of regions, ten samples each.
+        <code class="language-bash"># Crude but revealing: TTFB from a handful of regions, ten samples each.
 for host in lhr fra iad sin syd; do
   total=0
   for i in $(seq 1 10); do
@@ -587,7 +587,7 @@ for host in lhr fra iad sin syd; do
     total=$(echo "$total + $t" | bc -l)
   done
   echo "$host $(echo "$total / 10 * 1000" | bc -l | cut -c1-6) ms"
-done</code></pre>
+done</code>
 
         <p><strong>Test with a cold PoP.</strong> Request from a location nobody in your team uses. The second request from a PoP is always faster than the first, and your monitoring hits the same handful of PoPs constantly, so it never sees the cold case that a real customer in a small market gets every time.</p>
 
@@ -601,11 +601,11 @@ done</code></pre>
 
         <p>The mitigation is routing. Do not run the Worker on paths that cannot benefit.</p>
 
-        <pre><code class="language-javascript">// Next.js middleware matcher. The negative lookahead is doing real work:
+        <code class="language-javascript">// Next.js middleware matcher. The negative lookahead is doing real work:
 // static assets, images and the API never invoke the edge function at all.
 export const config = {
   matcher: ['/((?!_next/static|_next/image|api|favicon.ico|.*\\..*).*)']
-};</code></pre>
+};</code>
 
         <p>On Cloudflare the equivalent is route patterns rather than a catch-all <code>*/*</code>, and I have cut a client's Worker invocations by 71% simply by excluding <code>/assets/*</code> and <code>/media/*</code>, which had never needed to run any code.</p>
 
@@ -649,14 +649,14 @@ export const config = {
 
         <p><strong>Watch what your Worker does to caching headers.</strong> Constructing a <code>new Response()</code> from an origin response and forgetting to carry the headers over is a very easy way to accidentally make every page uncacheable downstream. I have done it.</p>
 
-        <pre><code class="language-javascript">// Wrong: silently drops Cache-Control, ETag, Vary, content-encoding hints.
+        <code class="language-javascript">// Wrong: silently drops Cache-Control, ETag, Vary, content-encoding hints.
 return new Response(await origin.text(), { status: origin.status });
 
 // Right: clone the response, then mutate only what you mean to.
 const out = new Response(origin.body, origin);
 out.headers.set('x-variant', variant);
 out.headers.append('vary', 'x-variant');
-return out;</code></pre>
+return out;</code>
 
         <h2>19. Questions I Get Asked</h2>
 
@@ -695,12 +695,20 @@ return out;</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/edge-personalization/">Leveraging Edge Computing for Real-Time Personalization</a></strong>
-              <p>Vercel Edge middleware and geolocation headers.</p>
+              <strong><a href="/blog/vercel-nextjs-edge-rendering-ecommerce/">Vercel &amp; Next.js Edge Rendering for E-Commerce</a></strong>
+              <p>Vercel and Next.js for ecommerce: middleware matchers, edge vs node runtime, how ISR really ...</p>
             </li>
             <li>
-              <strong><a href="/blog/cdn-speed-seo/">Leveraging CDNs for Ecommerce Speed and SEO</a></strong>
-              <p>Fastly and Cloudflare Edge-Side Includes (ESI).</p>
+              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
+              <p>How headless commerce backends actually perform: Storefront API budgets, persisted queries, ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/edge-personalization/">Leveraging Edge Computing for Real-Time Personalization</a></strong>
+              <p>Geo and segment personalisation at the edge without destroying cacheability: cache keys inst...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/browser-vs-server-load-testing/">Browser-Originated vs Server-Side Load Testing: When &amp; How to Benchmark from the Client</a></strong>
+              <p>An architectural comparison between client browser load testing and CLI engines like k6, wrk...</p>
             </li>
           </ul>
         </div>

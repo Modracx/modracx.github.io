@@ -208,8 +208,8 @@
         <p class="lede">Decoupling the storefront from the commerce engine trades template flexibility for network hops. Here is where those hops cost you, and how to remove them from the request path.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 25 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 36 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -272,7 +272,7 @@
 
         <p>Concretely, on a well-built headless storefront the request path for an anonymous visitor hitting a product page touches: the CDN, and nothing else. The commerce API was consulted at build time or at revalidation time, minutes or hours ago. The only live calls are the ones that must be live — inventory for a variant, cart state, a personalised block — and those happen client-side, after the document has already painted.</p>
 
-        <pre><code class="language-javascript">// The shape you want: the API call happens during generation, not during the request.
+        <code class="language-javascript">// The shape you want: the API call happens during generation, not during the request.
 // This runs on a schedule or on a webhook, never while a customer is waiting.
 export const revalidate = 900; // 15 minutes
 
@@ -290,7 +290,7 @@ export default async function ProductPage({ params }) {
     cache: { revalidate: 900, tags: [`product:${params.slug}`] },
   });
   return &lt;ProductView product={product} /&gt;;
-}</code></pre>
+}</code>
 
         <h2>4. Where the Latency Actually Goes</h2>
 
@@ -366,7 +366,7 @@ export default async function ProductPage({ params }) {
 
         <p>So the rule is: anything that appears in JSON-LD must be in the server-rendered HTML, and must be invalidated by webhook rather than by timer alone. A timer is your safety net for the webhooks you miss, not your primary mechanism.</p>
 
-        <pre><code class="language-javascript">// Webhook receiver. Shopify/Magento/commercetools all emit something like this.
+        <code class="language-javascript">// Webhook receiver. Shopify/Magento/commercetools all emit something like this.
 // Verify the signature first — an unauthenticated purge endpoint is a free DoS.
 import crypto from 'node:crypto';
 import { revalidateTag } from 'next/cache';
@@ -389,7 +389,7 @@ export async function POST(request) {
   // A price change also changes every collection page the product appears on
   for (const c of product.collections ?? []) revalidateTag(`collection:${c}`);
   return Response.json({ ok: true });
-}</code></pre>
+}</code>
 
         <p>The second half of that handler is the part people forget. A product's price appears on its own page and on every category page, search result and cross-sell block that lists it. Invalidating one page and not the others gives you a site that contradicts itself, and Google will find the contradiction because it crawls category pages more often than product pages.</p>
 
@@ -407,7 +407,7 @@ export async function POST(request) {
 
         <p><strong>Watch nesting depth.</strong> Products → variants → metafields → references is four levels of resolution, and on most backends each level is a separate fan-out. This is the N+1 problem in a new costume; I go into the server-side mechanics of it in <a href="/blog/graphql-rest-api-performance/">the GraphQL and REST performance piece</a>.</p>
 
-        <pre><code class="language-graphql"># Bad: everything, for everyone, forever
+        <code class="language-graphql"># Bad: everything, for everyone, forever
 query Collection($handle: String!) {
   collection(handle: $handle) {
     products(first: 250) {
@@ -440,7 +440,7 @@ query Collection($handle: String!, $first: Int = 24, $cursor: String) {
       pageInfo { hasNextPage endCursor }
     }
   }
-}</code></pre>
+}</code>
 
         <p>The second query on the same catalogue returned in 190ms against 420ms, and the response was 61KB instead of 940KB. No caching involved — just not asking for things.</p>
 
@@ -450,7 +450,7 @@ query Collection($handle: String!, $first: Int = 24, $cursor: String) {
 
         <p>Persisted queries fix it. You register the query text with the backend ahead of time, get back a hash, and at runtime send the hash as a GET parameter. Now the request is a cacheable URL.</p>
 
-        <pre><code class="language-bash"># Automatic persisted queries: try the hash first, fall back to sending the
+        <code class="language-bash"># Automatic persisted queries: try the hash first, fall back to sending the
 # document once if the server has not seen it. The hash is sha256 of the query
 # string, byte-for-byte, including whitespace.
 QUERY='query ProductByHandle($handle:String!){product(handle:$handle){id title}}'
@@ -459,7 +459,7 @@ HASH=$(printf '%s' "$QUERY" | shasum -a 256 | cut -d' ' -f1)
 curl -sG "https://shop.example.com/api/2025-01/graphql.json" \
   --data-urlencode "variables={\"handle\":\"oak-side-table\"}" \
   --data-urlencode "extensions={\"persistedQuery\":{\"version\":1,\"sha256Hash\":\"$HASH\"}}" \
-  -H 'X-Shopify-Storefront-Access-Token: '"$TOKEN"</code></pre>
+  -H 'X-Shopify-Storefront-Access-Token: '"$TOKEN"</code>
 
         <p>Two caveats worth knowing before you commit. First, a GET request has a URL length ceiling — around 8KB on most proxies — so large variable payloads still need POST. Second, if any part of your variables is customer-specific you've just made a per-customer cache key, and your hit rate collapses. Persisted queries pay off for anonymous catalogue reads and almost nowhere else.</p>
 
@@ -475,7 +475,7 @@ curl -sG "https://shop.example.com/api/2025-01/graphql.json" \
 
         <p><strong>The browser.</strong> <code>Cache-Control</code> on the document itself. My default is <code>public, max-age=0, s-maxage=900, stale-while-revalidate=86400</code> — never trusted in the browser, cached hard at the CDN, and allowed to serve stale for a day while it refreshes if the origin is down.</p>
 
-        <pre><code class="language-javascript">// Hydrogen: cache policy is per-query, and the defaults are conservative.
+        <code class="language-javascript">// Hydrogen: cache policy is per-query, and the defaults are conservative.
 // CacheLong() is roughly max-age 3600 / swr 82800. For a catalogue that is
 // webhook-invalidated, that is fine. For anything cart-shaped, use CacheNone().
 const [collection, menu] = await Promise.all([
@@ -491,7 +491,7 @@ const [collection, menu] = await Promise.all([
 ]);
 
 // Note Promise.all. Two serial awaits here cost you the sum, not the max —
-// this single change removed 180ms from the category route on one build.</code></pre>
+// this single change removed 180ms from the category route on one build.</code>
 
         <p>The failure mode I've hit personally: <code>stale-while-revalidate</code> with a long window plus a webhook purge that silently 500s. The CDN kept serving a two-week-old page and nobody noticed, because the page looked completely normal. It was advertising a discontinued product at a price we no longer honoured. Now I alert on webhook receipt failures the same way I alert on checkout errors, and I log the age of every cache hit into the response headers so I can see drift in the field.</p>
 
@@ -501,7 +501,7 @@ const [collection, menu] = await Promise.all([
 
         <p>Hydrogen is a Remix application. Its data loading model is route loaders, which run on the server and can be parallelised naturally, and the framework nudges you toward the right shape: a <code>loader</code> that fetches, a component that renders, and deferred data for the slow stuff. The deferred pattern is the important one — you return a promise rather than an awaited value, the shell streams immediately, and the slow block fills in.</p>
 
-        <pre><code class="language-javascript">import { defer } from '@shopify/remix-oxygen';
+        <code class="language-javascript">import { defer } from '@shopify/remix-oxygen';
 import { Await, useLoaderData } from '@remix-run/react';
 import { Suspense } from 'react';
 
@@ -534,7 +534,7 @@ export default function Product() {
       &lt;/Suspense&gt;
     &lt;/&gt;
   );
-}</code></pre>
+}</code>
 
         <p>Oxygen, Shopify's hosting for Hydrogen, runs your code as a worker at the edge with a sub-cloud connection back to Shopify's infrastructure. That last part is the reason Oxygen usually beats self-hosting a Hydrogen app on a general platform: the Storefront API call doesn't traverse the public internet. On a build I measured in early 2025, the same query took 210ms from a Vercel function in Virginia and 95ms from Oxygen. Not magic, just proximity plus a warm connection pool.</p>
 
@@ -552,7 +552,7 @@ export default function Product() {
 
         <p><strong>Optimistic UI drifts from reality.</strong> You increment the count locally, the mutation fails, and now the badge says 3 and the cart has 2. Reconcile from the server response, always, and treat the local state as a hint.</p>
 
-        <pre><code class="language-javascript">// Client-side cart hydration. The document was static; this runs after paint.
+        <code class="language-javascript">// Client-side cart hydration. The document was static; this runs after paint.
 export function useCart() {
   const [cart, setCart] = useState(null);
   useEffect(() =&gt; {
@@ -575,7 +575,7 @@ export async function GET(request) {
   return Response.json(cart, {
     headers: { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex' },
   });
-}</code></pre>
+}</code>
 
         <p>One thing I got wrong on an early build: I put the cart line-item count into the page's static HTML for a "you have N items" nudge, cached the page, and served one customer's basket count to everyone in that region for fifteen minutes. It leaked no personal data, but it was a genuinely alarming bug report to receive. Anything session-shaped stays out of cacheable HTML. No exceptions, no clever exceptions.</p>
 
@@ -587,7 +587,7 @@ export async function GET(request) {
 
         <p>Export every URL that has ever received an impression. Search Console's Performance report, 16 months, page dimension, exported through the API rather than the UI so you get more than 1,000 rows. Then the server logs for the last 90 days, filtered to Googlebot, deduplicated. Then the old sitemap. Then a crawl of the live site with Screaming Frog or a scripted crawler. Union all four. The union is always bigger than anyone expects — on that homeware project it was 41,000 URLs against a catalogue of 9,000 products.</p>
 
-        <pre><code class="language-bash"># Every URL Googlebot actually requested, with counts, from raw access logs.
+        <code class="language-bash"># Every URL Googlebot actually requested, with counts, from raw access logs.
 # Verify the bot properly in production; UA matching alone is spoofable.
 zcat access-*.log.gz \
   | grep -F 'Googlebot' \
@@ -599,7 +599,7 @@ zcat access-*.log.gz \
 cut -c9- googlebot-urls.txt | head -5000 | while read -r p; do
   code=$(curl -s -o /dev/null -w '%{http_code}' -L "https://staging.example.com$p")
   [ "$code" != "200" ] &amp;&amp; printf '%s\t%s\n' "$code" "$p"
-done &gt; broken.tsv</code></pre>
+done &gt; broken.tsv</code>
 
         <p>Then the rules. Not a 41,000-row lookup table — patterns first, exceptions second. Pagination, facet parameters, legacy category paths, old product URL formats, image paths, feed endpoints. And test the redirect chain length: a 301 to a 301 to a 200 works but wastes crawl budget, and I've seen chains four deep after two successive replatforms.</p>
 
@@ -611,7 +611,7 @@ done &gt; broken.tsv</code></pre>
 
         <p>Generate the JSON-LD from the same object the template renders, never from a second fetch, and validate its shape in a test rather than trusting it.</p>
 
-        <pre><code class="language-javascript">export function productSchema(product, url) {
+        <code class="language-javascript">export function productSchema(product, url) {
   const v = product.variants.nodes[0];
   return {
     '@context': 'https://schema.org',
@@ -634,13 +634,13 @@ done &gt; broken.tsv</code></pre>
       itemCondition: 'https://schema.org/NewCondition',
     },
   };
-}</code></pre>
+}</code>
 
         <p>The <code>price</code> field must match what a human sees on the page, to the penny, in the same currency. If you run multi-currency with client-side conversion, the server-rendered schema and the client-rendered display will disagree for every visitor outside your base market. That's a rich-result suppression and a Merchant Center warning, and the fix is to make currency a server-side routing concern rather than a client-side preference.</p>
 
         <p>A test I put in CI on every commerce build:</p>
 
-        <pre><code class="language-javascript">// Fails the build if the schema loses a field. Cheap insurance against
+        <code class="language-javascript">// Fails the build if the schema loses a field. Cheap insurance against
 // a refactor silently dropping gtin13 or availability.
 test('product schema keeps required offer fields', async () =&gt; {
   const html = await renderRoute('/products/oak-side-table');
@@ -657,7 +657,7 @@ test('product schema keeps required offer fields', async () =&gt; {
   expect(product.offers.availability).toContain('schema.org/');
   // and the visible price must agree with the markup
   expect(html).toContain(formatMoney(product.offers.price));
-});</code></pre>
+});</code>
 
         <h2>14. Faceted Navigation Without an Index Explosion</h2>
 
@@ -671,7 +671,7 @@ test('product schema keeps required offer fields', async () =&gt; {
 
         <p>Sort orders, view modes and pagination cursors go in query strings, and those parameters get blocked in <code>robots.txt</code> if they multiply. Blocking is a blunt instrument and it does prevent link equity flowing through the blocked URLs, so use it only for parameters that generate no discovery value.</p>
 
-        <pre><code class="language-javascript">// Route-level indexing decision, derived from the URL rather than sprinkled
+        <code class="language-javascript">// Route-level indexing decision, derived from the URL rather than sprinkled
 // through components. One place to reason about, one place to test.
 const INDEXABLE_FACETS = new Set(['brand', 'colour']);
 
@@ -680,7 +680,7 @@ export function robotsFor(searchParams) {
   if (keys.length === 0) return 'index,follow';
   if (keys.length === 1 &amp;&amp; INDEXABLE_FACETS.has(keys[0])) return 'index,follow';
   return 'noindex,follow';
-}</code></pre>
+}</code>
 
         <p>Pagination itself: every paginated page should be self-canonical and indexable. Canonicalising page 2 to page 1 was never supported and it hides products from discovery. <code>rel="next"</code> and <code>rel="prev"</code> stopped being used by Google in 2019 — they're harmless, they just don't do anything.</p>
 
@@ -694,7 +694,7 @@ export function robotsFor(searchParams) {
 
         <p>The check I run before every headless launch, and quarterly after:</p>
 
-        <pre><code class="language-bash"># What is in the HTML before any JavaScript runs.
+        <code class="language-bash"># What is in the HTML before any JavaScript runs.
 # If the price and title are not in here, the architecture is wrong.
 curl -sL -A 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' \
   https://www.example.com/products/oak-side-table \
@@ -702,7 +702,7 @@ curl -sL -A 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.
       print("title:", bool(re.search(r"&lt;h1[^&gt;]*&gt;", h))); \
       print("price in html:", "£249.00" in h); \
       print("ld+json blocks:", h.count("application/ld+json")); \
-      print("canonical:", re.search(r"rel=.canonical.[^&gt;]*", h).group(0) if "canonical" in h else None)'</code></pre>
+      print("canonical:", re.search(r"rel=.canonical.[^&gt;]*", h).group(0) if "canonical" in h else None)'</code>
 
         <p>Then the same URL through the URL Inspection tool's live test, and compare the rendered HTML against the raw. Anything that appears only in the rendered version is on a delay. Decide deliberately whether that's acceptable for that element. For a review carousel, fine. For the price, never.</p>
 
@@ -714,7 +714,7 @@ curl -sL -A 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.
 
         <p>If you must geo-redirect, redirect on first visit only, remember the choice, and never redirect a request whose user agent is a crawler. Better: don't redirect, show a dismissible banner offering the switch.</p>
 
-        <pre><code class="language-javascript">// Middleware. Runs at the edge, decides the market, sets a cache key.
+        <code class="language-javascript">// Middleware. Runs at the edge, decides the market, sets a cache key.
 export function middleware(request) {
   const { pathname } = request.nextUrl;
   const hasLocale = /^\/[a-z]{2}-[a-z]{2}\//.test(pathname);
@@ -730,7 +730,7 @@ export function middleware(request) {
   const country = request.headers.get('x-vercel-ip-country')?.toLowerCase();
   const market = remembered ?? MARKET_BY_COUNTRY[country] ?? 'en-gb';
   return NextResponse.redirect(new URL(`/${market}${pathname}`, request.url), 302);
-}</code></pre>
+}</code>
 
         <p>Note the 302. A geo redirect is not permanent — the same URL redirects differently for different visitors — and marking it 301 tells Google the original URL is gone, which it isn't.</p>
 
@@ -770,7 +770,7 @@ export function middleware(request) {
 
         <p>The first was the revalidation stampede. When we deployed, the entire page cache invalidated at once, and Googlebot — which by then was crawling enthusiastically — hit 4,000 uncached product pages in about eleven minutes. Every one of them triggered a Magento query. Magento's database hit connection saturation and started returning 503s, which the storefront cached as error pages. We served 503s for nine minutes and Search Console logged a crawl anomaly spike. The fix was a small concurrency limiter around the generation path and a rule that a non-200 from the backend never gets cached.</p>
 
-        <pre><code class="language-javascript">// Bound how many uncached generations can hit the commerce backend at once.
+        <code class="language-javascript">// Bound how many uncached generations can hit the commerce backend at once.
 // Without this, a cache flush plus an eager crawler is a self-inflicted DoS.
 let active = 0;
 const queue = [];
@@ -792,7 +792,7 @@ export async function getProduct(handle) {
   // Never cache a failure. A cached 503 outlives the outage that caused it.
   if (!res.ok) throw new UncacheableError(res.status);
   return res.data;
-}</code></pre>
+}</code>
 
         <p>The second was subtler and took three weeks to spot. Stock webhooks from Magento fired on every inventory movement, including internal warehouse transfers that didn't change sellable quantity. During a stocktake we received about 40,000 webhooks in an afternoon, each triggering a regeneration. The regeneration queue backed up, revalidation fell behind by hours, and prices went stale during exactly the period we'd built the whole mechanism to protect. Now the webhook handler compares the incoming sellable quantity against the last value it saw and drops the no-ops. Cost: a small Redis key per SKU. Benefit: a 96% reduction in regeneration volume.</p>
 
@@ -849,12 +849,20 @@ export async function getProduct(handle) {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
-              <p>GraphQL fetchers and edge caching.</p>
+              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
+              <p>The content layer for headless commerce: modelling in Sanity, Strapi and Contentful, preview...</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
-              <p>Sanity, Strapi, and Contentful integrations.</p>
+              <strong><a href="/blog/pwa-seo-performance/">Progressive Web Apps (PWA) for SEO &amp; Performance</a></strong>
+              <p>Master PWA SEO for ecommerce: how Googlebot renders Single Page Apps, server-side rendering ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/magento-2-seo-performance/">Magento 2 SEO Deep Dive: Advanced Optimization &amp; Core Web Vitals</a></strong>
+              <p>Advanced Magento 2 SEO: indexer optimization, URL rewrite table management, catalog performa...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-api-data-architecture/">Headless API &amp; Data Architecture for Large-Scale Ecommerce</a></strong>
+              <p>Designing decoupled ecommerce backends: Storefront API budgets, persisted query optimization...</p>
             </li>
           </ul>
         </div>

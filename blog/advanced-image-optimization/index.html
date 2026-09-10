@@ -89,7 +89,7 @@
     "dateModified": "2026-08-03",
     "mainEntityOfPage": "https://www.modracx.com/blog/advanced-image-optimization/",
     "image": "https://www.modracx.com/og-image.png",
-    "timeRequired": "PT22M",
+    "timeRequired": "PT41M",
     "author": {
       "@type": "Person",
       "name": "Kenneth D'Silva",
@@ -201,8 +201,8 @@
         <p class="lede">A build step that resized every product image had been disabled four months earlier and nobody noticed. Here is the pipeline underneath the markup: where transformation happens, what AVIF actually saves on real catalogue images, and what it costs.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 31 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
+          <span>Reading Time: 41 min read</span> •
+          <span>Category: <a href="/blog/archive/#performance-speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -281,12 +281,12 @@
 
         <p>Whatever product you pick, you end up with a URL grammar. Treat it as an API surface you own, not as vendor syntax you scatter through templates.</p>
 
-        <pre><code class="language-html">&lt;!-- Do not do this: vendor syntax inline, 400 times, across 60 templates --&gt;
-&lt;img src="https://res.cloudinary.com/acme/image/upload/w_800,q_auto,f_auto/v1/products/lamp.jpg" /&gt;</code></pre>
+        <code class="language-html">&lt;!-- Do not do this: vendor syntax inline, 400 times, across 60 templates --&gt;
+&lt;img src="https://res.cloudinary.com/acme/image/upload/w_800,q_auto,f_auto/v1/products/lamp.jpg" /&gt;</code>
 
         <p>The moment that string appears in a template you have made a migration off that vendor into a find-and-replace across your entire codebase, and you have made it impossible to change your quality policy centrally. Wrap it once:</p>
 
-        <pre><code class="language-javascript">// image-url.js — the only place vendor syntax exists.
+        <code class="language-javascript">// image-url.js — the only place vendor syntax exists.
 // Quality is a policy decision keyed on what the image IS, not a magic number
 // sprinkled through templates. See the image-class table further down.
 const QUALITY = {
@@ -309,7 +309,7 @@ export function imageUrl(path, { width, imageClass = 'product', format = 'auto',
     fit: 'cover',
   });
   return `${BASE}/${path}?${params}`;
-}</code></pre>
+}</code>
 
         <p>Three things this buys you. Changing vendors is one file. Changing quality policy is one file and a cache purge. And you can log or lint calls — I have caught a template asking for a 2400px variant of a 64px thumbnail more than once, and the wrapper is where you notice.</p>
 
@@ -347,7 +347,7 @@ export function imageUrl(path, { width, imageClass = 'product', format = 'auto',
 
         <p>In my experience, AVIF at quality 50–60 (on the 0–100 scale libavif exposes, which maps internally to a quantiser) looks roughly like WebP at 75–80 for photographic content. If you migrate by keeping the number the same you will ship AVIFs that are larger than they need to be and conclude the format is disappointing. This is, I think, the single most common reason teams report "AVIF barely helped".</p>
 
-        <pre><code class="language-bash"># Do not trust equal quality numbers across formats. Encode a ladder and look.
+        <code class="language-bash"># Do not trust equal quality numbers across formats. Encode a ladder and look.
 for q in 30 40 50 60 70 80; do
   avifenc --min 0 --max 63 -a end-usage=q -a cq-level=$((63 - q * 63 / 100)) \
     --speed 4 master.png "out-avif-q${q}.avif"
@@ -357,7 +357,7 @@ done
 for f in out-avif-q*.avif; do
   # ssimulacra2 correlates far better with human judgement than PSNR or plain SSIM
   echo -n "$f: "; ssimulacra2 master.png "$f"
-done</code></pre>
+done</code>
 
         <h2>6. Where AVIF Actually Loses</h2>
 
@@ -385,15 +385,15 @@ done</code></pre>
 
         <p><strong>Chroma subsampling.</strong> 4:2:0 discards three quarters of the colour information and is nearly free perceptually on photographs. It is visibly destructive on saturated edges — red text on white, brand colours meeting a border, a thin cyan line. For photography use 4:2:0. For anything with graphics, logos, or text in the image use 4:4:4 and accept the larger file, or better, do not put text in a raster image.</p>
 
-        <pre><code class="language-bash"># Photographic content: 4:2:0 is the right default
+        <code class="language-bash"># Photographic content: 4:2:0 is the right default
 avifenc --yuv 420 --speed 4 --min 20 --max 30 photo.png photo.avif
 
 # Contains a logo, product packaging text, or hard saturated edges
-avifenc --yuv 444 --speed 4 --min 18 --max 28 packshot.png packshot.avif</code></pre>
+avifenc --yuv 444 --speed 4 --min 18 --max 28 packshot.png packshot.avif</code>
 
         <p><strong>Colour management.</strong> A master exported from Adobe RGB or ProPhoto with an embedded ICC profile, resized by a pipeline that strips profiles, comes out desaturated and slightly wrong — and the merchandising team notices this before you do, because they compare against the sample on their desk. Convert to sRGB explicitly during transformation rather than stripping the profile and hoping.</p>
 
-        <pre><code class="language-javascript">// sharp: convert into sRGB rather than dropping the ICC profile.
+        <code class="language-javascript">// sharp: convert into sRGB rather than dropping the ICC profile.
 // Skipping this is the classic "why do our reds look flat" bug.
 await sharp(input)
   .rotate()                      // honour EXIF orientation before any resize
@@ -401,7 +401,7 @@ await sharp(input)
   .withMetadata({ icc: 'srgb' }) // tag the output so browsers do not guess
   .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
   .avif({ quality: 55, effort: 4, chromaSubsampling: '4:2:0' })
-  .toBuffer();</code></pre>
+  .toBuffer();</code>
 
         <p><strong>Resize kernel.</strong> Lanczos3 is the sensible default and what sharp uses. Where it matters is downscaling by large factors — a 4000px master to a 200px thumbnail in one step produces aliasing on fine detail. Two-stage downscaling, or letting libvips use its shrink-on-load path for JPEG (which decodes at a reduced size and is both faster and cleaner), fixes it. libvips does this automatically when you resize a JPEG; it is one of the reasons sharp is so much faster than ImageMagick.</p>
 
@@ -438,7 +438,7 @@ await sharp(input)
 
         <p>Once you have a metric, you can invert the problem. Rather than picking a quality number and accepting whatever size results, pick a quality <em>target</em> and search for the smallest file that meets it.</p>
 
-        <pre><code class="language-javascript">// Binary search for the lowest quality that still hits a perceptual target.
+        <code class="language-javascript">// Binary search for the lowest quality that still hits a perceptual target.
 // Run this at build time for hero images, or offline to calibrate the constants
 // you then hard-code per image class. Do NOT run it per request.
 import sharp from 'sharp';
@@ -461,7 +461,7 @@ async function encodeToTarget(input, target = 78, lo = 30, hi = 90) {
     }
   }
   return best;
-}</code></pre>
+}</code>
 
         <p>Running this across a sample of a few hundred images per class is how you derive the numbers in the table above for <em>your</em> catalogue. It is a calibration exercise, done once and repeated when your photography style changes, not something that belongs in a request path.</p>
 
@@ -477,7 +477,7 @@ async function encodeToTarget(input, target = 78, lo = 30, hi = 90) {
 
         <p>Art direction requires <code>&lt;picture&gt;</code> with <code>&lt;source media&gt;</code>, because the browser cannot infer intent. It also requires a human to decide the crop, which is the part that makes it expensive.</p>
 
-        <pre><code class="language-html">&lt;picture&gt;
+        <code class="language-html">&lt;picture&gt;
   &lt;!-- Mobile: tight square crop, subject centred. A different composition,
        not a smaller version of the desktop image. --&gt;
   &lt;source media="(max-width: 600px)"
@@ -494,7 +494,7 @@ async function encodeToTarget(input, target = 78, lo = 30, hi = 90) {
           sizes="100vw" /&gt;
   &lt;img src="/i/hero.jpg?w=1280&amp;h=720&amp;fit=crop" alt="Linen sofa in a bay window"
        width="1280" height="720" fetchpriority="high" decoding="async" /&gt;
-&lt;/picture&gt;</code></pre>
+&lt;/picture&gt;</code>
 
         <p>Note <code>fp-x</code> and <code>fp-y</code>. Most transforming CDNs support a focal point, expressed as normalised coordinates, that the crop is centred on. This is how you get art direction without a human cropping every image: the merchandiser sets one focal point per image in the PIM, and every crop ratio derives from it automatically. Some CDNs also offer automatic subject detection, which works well enough on product photography with a clean background and badly on lifestyle shots where it will confidently centre on a cushion.</p>
 
@@ -506,13 +506,13 @@ async function encodeToTarget(input, target = 78, lo = 30, hi = 90) {
 
         <p>The perceptual return above 2× is small — the pixels are below the angular resolution most people resolve at normal viewing distance — while the byte cost keeps rising roughly with area. A 3× image is 2.25× the pixels of a 2×. I cap effective DPR at 2 for photographic content and let quality drop slightly as DPR rises, because compression artefacts at 3× are themselves below the resolution threshold. Some CDNs expose this directly as a DPR-aware quality parameter; if yours does not, encode the high-DPR variants at a lower quality number in your URL builder.</p>
 
-        <pre><code class="language-javascript">// Cap DPR and taper quality as density rises. A 3x screen showing a slightly
+        <code class="language-javascript">// Cap DPR and taper quality as density rises. A 3x screen showing a slightly
 // softer image is indistinguishable; a 3x screen showing 2.25x the bytes is not.
 function densityAdjusted(width, dpr, baseQuality) {
   const capped = Math.min(dpr, 2);
   const quality = capped &gt;= 2 ? baseQuality - 8 : baseQuality;
   return { width: Math.round(width * capped), quality };
-}</code></pre>
+}</code>
 
         <h2>11. Choosing the Width Ladder</h2>
 
@@ -526,11 +526,11 @@ function densityAdjusted(width, dpr, baseQuality) {
 
         <p>Then check what is actually being requested. Every image CDN can report this, and the report is usually surprising.</p>
 
-        <pre><code class="language-bash"># Which widths are your users actually pulling? Run against a day of CDN logs.
+        <code class="language-bash"># Which widths are your users actually pulling? Run against a day of CDN logs.
 # If a rung accounts for under 2% of requests, it is fragmenting your cache
 # for no benefit and should be removed from the srcset.
 awk -F'[?&amp;]' '{for(i=2;i&lt;=NF;i++) if($i ~ /^w=/) print $i}' cdn-access.log \
-  | sort | uniq -c | sort -rn | head -20</code></pre>
+  | sort | uniq -c | sort -rn | head -20</code>
 
         <p>On the homeware site this showed that 320w accounted for 0.3% of requests — the site's minimum layout width meant it was never selected on any real device — while an undeclared gap between 900 and 1440 meant a large cluster of 1366×768 laptops at DPR 1 was pulling the 1440 variant and downscaling it. Removing one rung and adding another cut average image bytes per product page by 11% with no visual change.</p>
 
@@ -544,7 +544,7 @@ awk -F'[?&amp;]' '{for(i=2;i&lt;=NF;i++) if($i ~ /^w=/) print $i}' cdn-access.lo
 
         <p><strong>Normalise the URL before it becomes a cache key.</strong> Strip unknown query parameters, sort known ones, round widths to your ladder rungs, clamp quality to a permitted set. A request for <code>w=1237</code> should be served the <code>w=1280</code> variant, not encoded fresh. Without clamping, one bad template or one scraper can generate tens of thousands of one-off variants.</p>
 
-        <pre><code class="language-javascript">// Edge worker: snap to the ladder before anything touches the cache.
+        <code class="language-javascript">// Edge worker: snap to the ladder before anything touches the cache.
 // Without this, w=799 and w=800 are two cache entries and two encodes.
 const LADDER = [320, 448, 640, 900, 1280, 1440, 1920, 2560];
 const FORMATS = new Set(['avif', 'webp', 'jpeg']);
@@ -565,7 +565,7 @@ function normalise(url) {
   clean.set('fm', FORMATS.has(fm) ? fm : 'auto');
   u.search = clean.toString();
   return u.toString();
-}</code></pre>
+}</code>
 
         <p><strong>Version by content, not by time.</strong> Put a content hash of the master in the path, set <code>Cache-Control: public, max-age=31536000, immutable</code>, and never purge. When the merchandiser replaces an image, the hash changes and the URL changes. Purging a CDN by wildcard across 3.4 million objects is slow, sometimes rate-limited, and on some providers billed.</p>
 
@@ -607,7 +607,7 @@ function normalise(url) {
 
         <p>If you land on the DIY option, the shape is stable and worth knowing even if you buy instead, because it tells you what you are paying for.</p>
 
-        <pre><code class="language-javascript">// Cloudflare Worker in front of R2. Cache-first, transform on miss, and
+        <code class="language-javascript">// Cloudflare Worker in front of R2. Cache-first, transform on miss, and
 // crucially: never let two concurrent misses for the same key both encode.
 export default {
   async fetch(request, env, ctx) {
@@ -643,13 +643,13 @@ export default {
     ctx.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
   },
-};</code></pre>
+};</code>
 
         <p>The thundering-herd problem in that comment is real and I have been bitten by it. A homepage hero goes live, ten thousand people hit it in the first minute, and ten thousand concurrent requests all miss the cache and all start an AVIF encode. Whatever is doing the encoding falls over. The fixes are a request-coalescing lock keyed on the normalised URL, or a pre-warm step in your deploy, or both. Pre-warming is simpler and I would do that first.</p>
 
         <p>If you are running your own encode workers rather than using an edge platform's transform, sharp on top of libvips is what you want. It is dramatically faster than ImageMagick — a factor of four to five on typical resize workloads — because libvips streams tiles rather than materialising whole images in memory, and because it uses shrink-on-load for JPEG. The memory profile matters when you are running many concurrent transforms in a container with a limit.</p>
 
-        <pre><code class="language-javascript">// Concurrency control matters more than raw speed. Unbounded parallel encodes
+        <code class="language-javascript">// Concurrency control matters more than raw speed. Unbounded parallel encodes
 // in a 512MB container is how you get OOM kills that look like random 502s.
 import sharp from 'sharp';
 import pLimit from 'p-limit';
@@ -664,7 +664,7 @@ export const transform = (buf, opts) =&gt; limit(() =&gt;
     .resize(opts.width, null, { withoutEnlargement: true, fit: 'inside' })
     .avif({ quality: opts.quality, effort: 4 })
     .toBuffer()
-);</code></pre>
+);</code>
 
         <p><code>limitInputPixels</code> is not paranoia. A crafted PNG that decompresses to a 40,000×40,000 canvas will take your worker out, and if your upload path accepts images from customers you have handed anyone a denial-of-service primitive.</p>
 
@@ -710,7 +710,7 @@ export const transform = (buf, opts) =&gt; limit(() =&gt;
 
         <p>Two mechanisms that hold. First, a budget in CI with a number in it. Not "keep images small" — a hard failure at a byte count per template.</p>
 
-        <pre><code class="language-javascript">// Playwright budget check. Runs against a preview deploy on every PR.
+        <code class="language-javascript">// Playwright budget check. Runs against a preview deploy on every PR.
 // Fails loudly, with the offending URLs, because "images got bigger" is
 // useless feedback and "this specific image is 480KB" is actionable.
 const BUDGETS = { '/': 700_000, '/collections/sofas': 900_000, '/products/*': 800_000 };
@@ -731,13 +731,13 @@ test('image weight budget', async ({ page }) =&gt; {
   const worst = images.sort((a, b) =&gt; b.bytes - a.bytes).slice(0, 5);
   expect(total, `worst offenders:\n${worst.map(i =&gt; `${i.bytes} ${i.url}`).join('\n')}`)
     .toBeLessThan(BUDGETS['/products/*']);
-});</code></pre>
+});</code>
 
         <p>Second, a linter that catches raw <code>&lt;img src&gt;</code> pointing anywhere other than through the builder. A grep in CI is enough. The rule is not "images must be optimised", which nobody can enforce; it is "image URLs must come from one function", which a regex can check and which makes optimisation a property of the system rather than of everyone's diligence.</p>
 
         <p>Field monitoring closes the loop. Resource timing gives you the actual transfer size and duration of the LCP image in real conditions, which is the only number that matters, and it will disagree with your lab runs.</p>
 
-        <pre><code class="language-javascript">// Report the LCP element's real transfer size from the field. Lab numbers
+        <code class="language-javascript">// Report the LCP element's real transfer size from the field. Lab numbers
 // tell you what could happen; this tells you what did.
 new PerformanceObserver((list) =&gt; {
   const lcp = list.getEntries().at(-1);
@@ -752,7 +752,7 @@ new PerformanceObserver((list) =&gt; {
     // transferSize 0 with a nonzero decoded size means it came from cache
     decoded: entry?.decodedBodySize ?? null,
   }));
-}).observe({ type: 'largest-contentful-paint', buffered: true });</code></pre>
+}).observe({ type: 'largest-contentful-paint', buffered: true });</code>
 
         <h2>18. Questions People Ask</h2>
 
@@ -789,20 +789,24 @@ new PerformanceObserver((list) =&gt; {
         <p>Put a byte budget in CI on the day you finish, not later. The pipeline is not the deliverable; the pipeline plus the thing that stops it silently switching off is the deliverable. The client I opened with had a working pipeline and a 4.1MB page at the same time, and the gap between those two facts is where all the interesting failures live.</p>
 
         <div class="blog-suggested-reads">
-          <h3>Suggested &amp; Related Engineering Guides</h3>
-          <p>Explore related deep-dive technical guides from Kenneth D'Silva:</p>
+          <h3>Suggested &amp; Related Reading</h3>
+          <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/core-web-vitals/">Mastering Core Web Vitals</a></strong>
-              <p>Understanding CLS, FID, INP, and LCP in deep technical detail for enterprise deployments.</p>
+              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify: The Engineering Blueprint</a></strong>
+              <p>Platform performance for Magento and Shopify: Varnish hit ratio and what breaks it, Redis se...</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
-              <p>Implementing full-page Varnish caching, Redis object caching, and asset minification.</p>
+              <strong><a href="/blog/cdn-speed-seo/">CDN Speed Optimization &amp; Edge Caching for Global Stores</a></strong>
+              <p>Single-CDN fundamentals for ecommerce: what edge caching does to TTFB, cache key normalisati...</p>
             </li>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Why SEO Matters for Enterprise Ecommerce</a></strong>
-              <p>Technical SEO optimizations, crawl budget management, and schema architecture.</p>
+              <strong><a href="/blog/http2-tls13-implementation/">Implementing HTTP/2 and TLS 1.3 for Secure, Fast Ecommerce</a></strong>
+              <p>HTTP/2 multiplexing and prioritisation, the TLS 1.3 handshake, session resumption, cipher an...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/mobile-first-optimization/">Mobile-First Optimization Strategies for Retailers</a></strong>
+              <p>Mobile optimisation for the slow device: JavaScript CPU cost on mid-range Android, INP attri...</p>
             </li>
           </ul>
         </div>

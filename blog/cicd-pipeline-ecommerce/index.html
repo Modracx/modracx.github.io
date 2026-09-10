@@ -200,8 +200,8 @@
         <p class="lede">A rollback that turned a partial outage into a total one, because the migration had dropped a column the old code still wanted. Pipeline stages, gates, migration safety, and the deploy you cannot undo.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 39 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -288,7 +288,7 @@
 
         <p>The pattern in practice:</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # build.sh — runs once per commit. Everything downstream consumes the digest.
 set -euo pipefail
 
@@ -308,13 +308,13 @@ docker push "${IMAGE}:${SHA}"
 # The digest — not the tag — is what every later stage deploys. A tag can be
 # moved by anyone with push access; a digest cannot.
 DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${SHA}")"
-echo "artifact=${DIGEST}" &gt;&gt; "$PIPELINE_OUTPUT"</code></pre>
+echo "artifact=${DIGEST}" &gt;&gt; "$PIPELINE_OUTPUT"</code>
 
         <p>Deploying by digest rather than tag closes a real hole. <code>storefront:v2.4.1</code> is a mutable pointer; someone can push a different image to it and your "rollback to v2.4.1" gets something else entirely. <code>storefront@sha256:...</code> cannot be moved.</p>
 
         <p>The same logic applies without containers. A PHP application deployed by rsync should be built into a versioned directory — vendor installed, assets compiled, autoloader optimised — and then activated by moving a symlink. The build happens once; each environment activates the same tree.</p>
 
-        <pre><code class="language-bash"># Release-directory pattern for a non-containerised stack.
+        <code class="language-bash"># Release-directory pattern for a non-containerised stack.
 # The build ran once, upstream; here we only unpack and switch.
 RELEASE="/var/www/releases/${BUILD_SHA}"
 mkdir -p "${RELEASE}"
@@ -332,7 +332,7 @@ ln -sfn "${RELEASE}" /var/www/current.new &amp;&amp; mv -Tf /var/www/current.new
 systemctl reload php8.3-fpm
 
 # Keep five releases. Rollback is then a symlink move, measured in milliseconds.
-ls -1dt /var/www/releases/* | tail -n +6 | xargs -r rm -rf</code></pre>
+ls -1dt /var/www/releases/* | tail -n +6 | xargs -r rm -rf</code>
 
         <h3>What must not be inside the artefact</h3>
 
@@ -340,14 +340,14 @@ ls -1dt /var/www/releases/* | tail -n +6 | xargs -r rm -rf</code></pre>
 
         <p>This bites hardest with front-end bundles, where the temptation to inline the API base URL at build time is strong and the tooling actively encourages it. The fix is to serve runtime configuration as a small document the application fetches or reads from a template-injected global, so the same bundle behaves correctly everywhere.</p>
 
-        <pre><code class="language-javascript">// Runtime config, not build-time. The bundle is environment-agnostic; the
+        <code class="language-javascript">// Runtime config, not build-time. The bundle is environment-agnostic; the
 // server injects this on the document before the app boots.
 window.__APP_CONFIG__ = {
   apiBase: '{{ env.API_BASE }}',
   paymentMode: '{{ env.PAYMENT_MODE }}',   // 'test' | 'live'
   flagsEndpoint: '{{ env.FLAGS_URL }}',
   buildSha: '{{ build.sha }}'              // for correlating errors to a release
-};</code></pre>
+};</code>
 
         <p>The <code>buildSha</code> line is small and repays itself constantly. Every error report, every performance sample, every log line should carry the release identifier, so "did this start with the deploy at 14:20" is a query rather than an argument.</p>
 
@@ -373,7 +373,7 @@ window.__APP_CONFIG__ = {
 
         <p>Flaky E2E tests deserve a paragraph of their own because they destroy pipelines quietly. A test that fails 5% of the time in a suite of ten is a pipeline that fails 40% of the time for no reason, and the human response is to re-run it reflexively, which means the suite has stopped conveying information. Quarantine flaky tests aggressively — move them out of the blocking suite the day they are identified, fix them or delete them within a sprint. A smaller suite everyone trusts is worth far more than a larger one everyone re-runs.</p>
 
-        <pre><code class="language-javascript">// Post-deploy smoke test: not a substitute for E2E, but the thing that runs
+        <code class="language-javascript">// Post-deploy smoke test: not a substitute for E2E, but the thing that runs
 // against production after every increment and decides whether to continue.
 const CHECKS = [
   { name: 'homepage',   url: '/',                          expect: 200, maxMs: 1500 },
@@ -400,7 +400,7 @@ export async function smoke(base, buildSha) {
     });
   }
   return { ok: results.every(r =&gt; r.pass), results };
-}</code></pre>
+}</code>
 
         <p>The <code>x-build-sha</code> assertion is the part people leave out, and it is the reason a smoke test can pass against the previous release and tell you everything is fine.</p>
 
@@ -414,7 +414,7 @@ export async function smoke(base, buildSha) {
 
         <p>The interesting middle is performance. A bundle-size or Core Web Vitals budget should block, but only on regression relative to the current production build and only outside a tolerance band, because absolute thresholds produce a pipeline that is permanently red for reasons unrelated to today's change. Measuring properly in CI is its own discipline and I have written about the mechanics in <a href="/blog/core-web-vitals-optimization/">the Core Web Vitals monitoring guide</a>; the pipeline-design point is simply that a performance gate must compare like with like or it will be disabled within a month.</p>
 
-        <pre><code class="language-python">#!/usr/bin/env python3
+        <code class="language-python">#!/usr/bin/env python3
 """Bundle budget gate: blocks on regression, not on absolute size."""
 import json, sys
 
@@ -442,7 +442,7 @@ for w in warnings:
     print(f"::warning::{w}")
 for f in failures:
     print(f"::error::{f}")
-sys.exit(1 if failures else 0)</code></pre>
+sys.exit(1 if failures else 0)</code>
 
         <h3>On approval gates</h3>
 
@@ -466,7 +466,7 @@ sys.exit(1 if failures else 0)</code></pre>
 
         <p>Renaming <code>customer_phone</code> to <code>phone_national</code> — the change that caused the incident I opened with — should have been four deploys over about two weeks.</p>
 
-        <pre><code class="language-sql">-- DEPLOY 1 (expand). Additive only. Old code is entirely unaffected.
+        <code class="language-sql">-- DEPLOY 1 (expand). Additive only. Old code is entirely unaffected.
 ALTER TABLE customer_entity
   ADD COLUMN phone_country_code VARCHAR(4)  NULL,
   ADD COLUMN phone_national     VARCHAR(32) NULL;
@@ -479,9 +479,9 @@ SET    phone_country_code = split_country(customer_phone),
        phone_national     = split_national(customer_phone)
 WHERE  phone_national IS NULL
   AND  customer_phone IS NOT NULL
-LIMIT  5000;</code></pre>
+LIMIT  5000;</code>
 
-        <pre><code class="language-sql">-- DEPLOY 2 (dual-write). New code writes BOTH shapes and reads the new one.
+        <code class="language-sql">-- DEPLOY 2 (dual-write). New code writes BOTH shapes and reads the new one.
 -- Old code, if any is still running, still reads and writes the old column.
 -- Application-side; shown here as the trigger equivalent for systems where
 -- writes come from more than one codebase (ERP sync, admin, import jobs).
@@ -494,13 +494,13 @@ FOR EACH ROW EXECUTE FUNCTION sync_phone_columns();
 
 -- DEPLOY 4 (contract). Only after the old code is provably gone —
 -- days later, verified by traffic logs, not by assumption.
-ALTER TABLE customer_entity DROP COLUMN customer_phone;</code></pre>
+ALTER TABLE customer_entity DROP COLUMN customer_phone;</code>
 
         <p>The discipline is entirely in the gap between deploy 3 and deploy 4. Everyone understands expand-contract in principle; what actually happens is that the contraction gets bundled into the same release as the expansion because it is the same ticket and it feels wasteful to leave a dead column lying around for a fortnight. That is precisely the decision that cost us two hours and eleven minutes.</p>
 
         <p>Make it structural. A migration linter in the pipeline that refuses to run a <code>DROP COLUMN</code> or a <code>NOT NULL</code> addition in the same release as anything else, and requires an explicit annotation naming the release that introduced the corresponding expansion.</p>
 
-        <pre><code class="language-python">#!/usr/bin/env python3
+        <code class="language-python">#!/usr/bin/env python3
 """Migration safety gate. Runs on every PR touching db/migrations/."""
 import re, sys, pathlib
 
@@ -529,7 +529,7 @@ for path in pathlib.Path("db/migrations").glob("*.sql"):
     if UNBOUNDED.search(sql):
         print(f"::warning file={path}::unbounded UPDATE/DELETE — batch it")
 
-sys.exit(1 if fail else 0)</code></pre>
+sys.exit(1 if fail else 0)</code>
 
         <h3>Test the migration against production-shaped data</h3>
 
@@ -537,7 +537,7 @@ sys.exit(1 if fail else 0)</code></pre>
 
         <p>The gate worth building: restore the most recent production snapshot into a scratch database, run the pending migrations against it, record the wall-clock time and the locks taken, and fail the pipeline if either exceeds a budget. It is not free — you need an anonymised snapshot and somewhere to put it — and it is the highest-value thing on this page for anyone with a large orders table.</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # migration-rehearsal.sh — run in the pipeline, not during the deploy.
 set -euo pipefail
 BUDGET_SECONDS=90
@@ -559,7 +559,7 @@ echo "migration wall clock: ${ELAPSED}s (budget ${BUDGET_SECONDS}s)"
 }
 
 # Then prove the PREVIOUS release still functions against the new schema.
-./bin/test-suite --tag backwards-compat --database rehearsal --app-version "$PREVIOUS_SHA"</code></pre>
+./bin/test-suite --tag backwards-compat --database rehearsal --app-version "$PREVIOUS_SHA"</code>
 
         <p>That last line is the one that would have saved us. Running the previous release's test suite against the new schema is a direct test of "is rollback safe", and it is a thing almost nobody does.</p>
 
@@ -571,7 +571,7 @@ echo "migration wall clock: ${ELAPSED}s (budget ${BUDGET_SECONDS}s)"
 
         <p>Three properties a flag system needs before I would rely on it. Evaluation must be local and fast — a network call per flag per request is a new single point of failure in your critical path, so poll the ruleset into memory and evaluate against a cached copy. It must fail to a defined default when the flag service is unreachable, and that default must be the old behaviour. And bucketing must be sticky per user or per session, because a customer whose checkout flips between two variants between page loads will produce a support ticket you cannot reproduce.</p>
 
-        <pre><code class="language-javascript">// Local evaluation against a periodically-refreshed ruleset.
+        <code class="language-javascript">// Local evaluation against a periodically-refreshed ruleset.
 // No network call in the request path; unreachable service means last-known
 // rules, and an unknown flag means the safe default.
 import crypto from 'node:crypto';
@@ -604,7 +604,7 @@ export class Flags {
     const h = crypto.createHash('sha1').update(`${key}:${subject}`).digest();
     return (h.readUInt32BE(0) % 10_000) &lt; Math.round(rule.percent * 100);
   }
-}</code></pre>
+}</code>
 
         <p>Now the cost, which flag advocates undersell. Every flag doubles the number of code paths, and n flags in the same subsystem produce 2^n combinations of which you have tested perhaps three. Flags that live for months become permanent conditional complexity that nobody dares remove, and I have opened codebases with sixty flags of which four were still being evaluated for anything other than "always on".</p>
 
@@ -624,7 +624,7 @@ export class Flags {
 
         <p>I would default to canary for anything customer-facing on a site with enough traffic to produce a signal within minutes, and rolling with a good smoke test below that. Blue/green is worth it specifically when you need a fast, certain revert of application code and you have already handled state separately.</p>
 
-        <pre><code class="language-python">#!/usr/bin/env python3
+        <code class="language-python">#!/usr/bin/env python3
 """Automated canary analysis. Compares the canary against the stable pool on
 the metrics that actually correlate with revenue, then decides."""
 import sys, time
@@ -658,7 +658,7 @@ def run(deployer, metrics):
             deployer.shift(0)                 # drain the canary first
             deployer.rollback()
             sys.exit(f"canary halted at {pct}%: {why}")
-    print("canary promoted to 100%")</code></pre>
+    print("canary promoted to 100%")</code>
 
         <p>The conversion check in there is the one I would fight for. Error rate and latency are proxies; orders per thousand sessions is the thing. It is noisier and needs a longer soak at low percentages, which is why the soak times increase rather than decrease as traffic grows.</p>
 
@@ -706,7 +706,7 @@ def run(deployer, metrics):
 
         <p><strong>Fifth: preserve the inputs.</strong> If a backfill transforms data, write the original into an archive table in the same transaction. Storage is measured in pennies; the ability to reconstruct is measured in hours of outage avoided.</p>
 
-        <pre><code class="language-sql">-- Irreversible-by-default becomes reversible for the price of one table.
+        <code class="language-sql">-- Irreversible-by-default becomes reversible for the price of one table.
 BEGIN;
 
 CREATE TABLE archive_customer_phone_20251014 AS
@@ -729,7 +729,7 @@ END $$;
 ALTER TABLE customer_entity DROP COLUMN customer_phone;
 
 COMMIT;
--- Drop the archive on a scheduled ticket 90 days later, not today.</code></pre>
+-- Drop the archive on a scheduled ticket 90 days later, not today.</code>
 
         <p><strong>Sixth: define the abort criteria in advance and in numbers.</strong> Before you start, write down what "this is going badly" looks like: error rate above X, conversion below Y for Z minutes, more than N support contacts about the affected flow. Then write down what you will do, given that you cannot roll back. Usually it is one of: disable the affected feature by flag, put the site into a degraded but functional mode, or take the deliberate outage while you roll forward. Deciding that at 02:00 with an audience is how you get the two-hour version instead of the twenty-minute version.</p>
 
@@ -818,12 +818,20 @@ COMMIT;
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
+              <strong><a href="/blog/azure-devops-magento-shopify-cicd/">Azure DevOps CI/CD Pipelines for Enterprise E-Commerce</a></strong>
+              <p>Build-once-deploy-many Azure Pipelines for Magento 2 and Shopify themes: artefacts, static c...</p>
+            </li>
+            <li>
               <strong><a href="/blog/zero-downtime-deployment/">Zero-Downtime Deployments for High-Traffic E-Commerce</a></strong>
-              <p>Blue/Green and Canary deployment strategies.</p>
+              <p>Zero-downtime deploys for Magento and high-traffic ecommerce: realpath cache, connection dra...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/database-sharding-scaling/">Database Sharding &amp; Read-Replica Architecture for E-Commerce</a></strong>
+              <p>Read replicas, replication lag, when sharding is warranted, shard key mistakes you cannot un...</p>
             </li>
             <li>
               <strong><a href="/blog/containerization-docker-kubernetes/">Containerizing Monolithic E-Commerce: Docker &amp; Kubernetes</a></strong>
-              <p>Helm chart releases and Kubernetes rolling updates.</p>
+              <p>Containerising a Magento or Node commerce monolith: multi-stage Dockerfiles, persistent medi...</p>
             </li>
           </ul>
         </div>

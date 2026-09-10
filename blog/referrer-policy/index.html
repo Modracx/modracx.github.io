@@ -108,8 +108,8 @@
         <p class="lede">Order IDs and customer emails leak to every third party on the page unless you tell the browser otherwise. Here is the header, what it breaks, and how to ship it without losing your attribution data.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 26 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
+          <span>Reading Time: 32 min read</span> •
+          <span>Category: <a href="/blog/archive/#security-compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
 
@@ -142,7 +142,7 @@
 
         <p>A client forwarded me a screenshot from their affiliate network's dashboard. It was a list of referring URLs — the pages that had sent traffic to the affiliate's tracking link. Most of them were what you'd expect: category pages, a blog post, the homepage. Three rows down was this:</p>
 
-        <pre><code class="language-text">https://shop.example.com/checkout/success?order=100047821&amp;email=priya.n%40gmail.com&amp;total=8499.00</code></pre>
+        <code class="language-text">https://shop.example.com/checkout/success?order=100047821&amp;email=priya.n%40gmail.com&amp;total=8499.00</code>
 
         <p>The affiliate network could see a real customer's order number, email address, and order value. So could every other third party whose script or image sat on that success page. Nobody had been hacked. No database had leaked. The browser had simply done what browsers do: attached the current page's full URL to every outbound request as the <code>Referer</code> header, and the success page happened to carry personal data in its query string.</p>
 
@@ -154,9 +154,9 @@
 
         <p>When a browser navigates from page A to page B, or loads a subresource on page A, it may attach a header naming where the request came from:</p>
 
-        <pre><code class="language-http">GET /partner-landing HTTP/1.1
+        <code class="language-http">GET /partner-landing HTTP/1.1
 Host: affiliate.example.net
-Referer: https://shop.example.com/checkout/success?order=100047821</code></pre>
+Referer: https://shop.example.com/checkout/success?order=100047821</code>
 
         <p>Yes, it's spelled wrong. The original HTTP specification misspelled "referrer" and the typo was baked in before anyone noticed. The header is <code>Referer</code>; the policy that controls it is <code>Referrer-Policy</code>, spelled correctly. The JavaScript property is <code>document.referrer</code>, also correct. You will typo this repeatedly. Everyone does.</p>
 
@@ -234,7 +234,7 @@ Referer: https://shop.example.com/checkout/success?order=100047821</code></pre>
 
         <p>My recommendation for essentially every commercial storefront:</p>
 
-        <pre><code class="language-http">Referrer-Policy: strict-origin-when-cross-origin</code></pre>
+        <code class="language-http">Referrer-Policy: strict-origin-when-cross-origin</code>
 
         <p>The reasoning is straightforward. Internally — your own origin — you keep the full URL, so your funnel analysis, internal search reporting, and your own server logs remain complete. Externally, third parties learn only that traffic came from your domain, which is exactly the amount of information an attribution system needs and no more. And nothing at all is sent when a request downgrades to plain HTTP, closing the network-observer hole.</p>
 
@@ -256,14 +256,14 @@ Referer: https://shop.example.com/checkout/success?order=100047821</code></pre>
 
         <h3>Nginx</h3>
 
-        <pre><code class="language-nginx">add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        <code class="language-nginx">add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
 # Routes where the URL is itself a credential
 location ^~ /customer/account/createPassword {
     add_header Referrer-Policy "no-referrer" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-}</code></pre>
+}</code>
 
         <p>The <code>always</code> flag matters more than it looks. Without it, Nginx omits <code>add_header</code> directives on error responses — 4xx and 5xx — and your 404 page is a real page that real browsers render and that really loads third-party resources. Add <code>always</code> everywhere.</p>
 
@@ -271,19 +271,19 @@ location ^~ /customer/account/createPassword {
 
         <h3>Apache</h3>
 
-        <pre><code class="language-apache">&lt;IfModule mod_headers.c&gt;
+        <code class="language-apache">&lt;IfModule mod_headers.c&gt;
     Header always set Referrer-Policy "strict-origin-when-cross-origin"
 
     &lt;LocationMatch "^/customer/account/(createPassword|resetPassword)"&gt;
         Header always set Referrer-Policy "no-referrer"
     &lt;/LocationMatch&gt;
-&lt;/IfModule&gt;</code></pre>
+&lt;/IfModule&gt;</code>
 
         <p>Apache's <code>Header set</code> replaces rather than appends, and inheritance works the way you'd expect, so this is less error-prone than the Nginx equivalent. Use <code>set</code>, not <code>add</code> — <code>add</code> will happily send the header twice, and browsers handle duplicate <code>Referrer-Policy</code> values by taking the last valid one, which turns your config into a coin flip.</p>
 
         <h3>Cloudflare Workers</h3>
 
-        <pre><code class="language-javascript">export default {
+        <code class="language-javascript">export default {
   async fetch(request, env, ctx) {
     const response = await fetch(request);
     const headers = new Headers(response.headers);
@@ -302,7 +302,7 @@ location ^~ /customer/account/createPassword {
       headers
     });
   }
-};</code></pre>
+};</code>
 
         <p>Doing it at the edge worker has one real advantage over Transform Rules in the dashboard: it lives in version control and goes through code review. Dashboard rules are invisible to your repo and someone will change one at 11pm during an incident and forget to tell you.</p>
 
@@ -310,7 +310,7 @@ location ^~ /customer/account/createPassword {
 
         <p>Magento ships a <code>Magento_Csp</code> module but does not manage <code>Referrer-Policy</code> for you. The clean insertion point is a plugin on the response, or simply the web server — which is what I'd normally recommend. If you need it in the application because your route logic is complicated:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 namespace Modracx\Security\Plugin;
 
 use Magento\Framework\App\Response\Http as HttpResponse;
@@ -337,7 +337,7 @@ class ReferrerPolicy
 
         $response->setHeader('Referrer-Policy', $policy, true);
     }
-}</code></pre>
+}</code>
 
         <p>The third argument to <code>setHeader</code> is the replace flag. Pass <code>true</code>. Without it you can end up with two policy headers when a third-party module sets its own, and you're back to the coin flip.</p>
 
@@ -349,7 +349,7 @@ class ReferrerPolicy
 
         <h3>Next.js and other Node front ends</h3>
 
-        <pre><code class="language-javascript">// next.config.js
+        <code class="language-javascript">// next.config.js
 module.exports = {
   async headers() {
     return [
@@ -365,13 +365,13 @@ module.exports = {
       }
     ];
   }
-};</code></pre>
+};</code>
 
         <p>Next.js applies the first matching rule set per path, and both blocks can match <code>/account/settings</code>. Order matters and the behaviour has changed between major versions. Verify with an actual request rather than trusting the config to do what you meant.</p>
 
         <h3>The meta tag, and why it's a fallback</h3>
 
-        <pre><code class="language-html">&lt;meta name="referrer" content="strict-origin-when-cross-origin"&gt;</code></pre>
+        <code class="language-html">&lt;meta name="referrer" content="strict-origin-when-cross-origin"&gt;</code>
 
         <p>This works, and it is the only option if you genuinely cannot set response headers — some hosted platforms, some CMS setups. But it has a real weakness: it only takes effect once the parser reaches it. Any resource requested before that point uses the previous policy. Put it as early in <code>&lt;head&gt;</code> as you can, and prefer the header when you have the choice. Where both exist, the meta tag wins for the document, which makes it a useful override on one specific page of an otherwise header-governed site.</p>
 
@@ -381,7 +381,7 @@ module.exports = {
 
         <p>On links, images, iframes, scripts, and forms, use the <code>referrerpolicy</code> attribute:</p>
 
-        <pre><code class="language-html">&lt;!-- This partner's attribution genuinely needs the landing path --&gt;
+        <code class="language-html">&lt;!-- This partner's attribution genuinely needs the landing path --&gt;
 &lt;a href="https://partner.example.net/track" referrerpolicy="strict-origin-when-cross-origin"&gt;
   Compare prices
 &lt;/a&gt;
@@ -392,13 +392,13 @@ module.exports = {
 &lt;/a&gt;
 
 &lt;!-- A tracking pixel that must not learn the page URL --&gt;
-&lt;img src="https://pixel.example.net/p.gif" alt="" referrerpolicy="no-referrer" width="1" height="1"&gt;</code></pre>
+&lt;img src="https://pixel.example.net/p.gif" alt="" referrerpolicy="no-referrer" width="1" height="1"&gt;</code>
 
         <p><code>rel="noreferrer"</code> is the older mechanism and it does two things at once: suppresses the referrer <em>and</em> severs <code>window.opener</code>. That second effect is why it's bundled with <code>noopener</code> in most advice. If you only want the referrer behaviour, <code>referrerpolicy="no-referrer"</code> is the precise tool. If you want both, <code>rel="noreferrer"</code> is fine and shorter.</p>
 
         <p>For scripted requests, pass it to <code>fetch</code>:</p>
 
-        <pre><code class="language-javascript">// Analytics beacon that should not carry the checkout URL
+        <code class="language-javascript">// Analytics beacon that should not carry the checkout URL
 await fetch('https://metrics.example.net/collect', {
   method: 'POST',
   referrerPolicy: 'no-referrer',
@@ -409,7 +409,7 @@ await fetch('https://metrics.example.net/collect', {
 // Internal API call where the full referrer is useful for debugging
 await fetch('/api/cart/refresh', {
   referrerPolicy: 'same-origin'
-});</code></pre>
+});</code>
 
         <p>Note the casing difference, which will cost you ten minutes at some point: the HTML attribute is lowercase <code>referrerpolicy</code>, the JavaScript property is camelCase <code>referrerPolicy</code>, and the HTTP header is <code>Referrer-Policy</code>.</p>
 
@@ -475,22 +475,22 @@ await fetch('/api/cart/refresh', {
 
         <p>Check the live header before you assume anything:</p>
 
-        <pre><code class="language-bash">curl -sI https://shop.example.com/ | grep -i referrer-policy
+        <code class="language-bash">curl -sI https://shop.example.com/ | grep -i referrer-policy
 curl -sI https://shop.example.com/checkout/success | grep -i referrer-policy
 
 # And the one people forget — error pages
-curl -sI https://shop.example.com/definitely-not-a-real-page | grep -i referrer-policy</code></pre>
+curl -sI https://shop.example.com/definitely-not-a-real-page | grep -i referrer-policy</code>
 
         <h3>Step two: inventory the URLs that carry secrets</h3>
 
         <p>Pull a month of URLs from your access logs or analytics and look for parameters that should not exist. A crude but effective sweep:</p>
 
-        <pre><code class="language-bash">awk '{print $7}' /var/log/nginx/access.log \
+        <code class="language-bash">awk '{print $7}' /var/log/nginx/access.log \
   | grep -oP '\?.*' \
   | tr '&amp;' '\n' \
   | cut -d= -f1 \
   | sort | uniq -c | sort -rn \
-  | head -60</code></pre>
+  | head -60</code>
 
         <p>Read that list with suspicion. Anything resembling <code>email</code>, <code>token</code>, <code>order</code>, <code>customer</code>, <code>phone</code>, <code>postcode</code>, <code>total</code>, or <code>hash</code> deserves an explanation. Most will turn out to be a shortcut someone took years ago that nothing depends on any more.</p>
 
@@ -532,8 +532,8 @@ curl -sI https://shop.example.com/definitely-not-a-real-page | grep -i referrer-
 
         <h3>The header itself</h3>
 
-        <pre><code class="language-bash">curl -sI https://shop.example.com/account/orders | grep -i referrer-policy
-# Referrer-Policy: no-referrer</code></pre>
+        <code class="language-bash">curl -sI https://shop.example.com/account/orders | grep -i referrer-policy
+# Referrer-Policy: no-referrer</code>
 
         <p>Check a representative URL from every rule you wrote, plus one that should fall through to the default, plus a 404. If you use a CDN, run the check against the edge and against the origin — they can disagree, and the edge is what customers get.</p>
 
@@ -541,9 +541,9 @@ curl -sI https://shop.example.com/definitely-not-a-real-page | grep -i referrer-
 
         <p>The header is a request to the browser, not a guarantee. Confirm what's actually being sent. Open DevTools, Network tab, click a request, look at the request headers. Or drive it from the page:</p>
 
-        <pre><code class="language-javascript">// Paste in the console on the page under test
+        <code class="language-javascript">// Paste in the console on the page under test
 console.log('policy:', document.referrerPolicy || '(unset — using browser default)');
-console.log('this page was reached from:', document.referrer || '(nothing)');</code></pre>
+console.log('this page was reached from:', document.referrer || '(nothing)');</code>
 
         <p>Then click an outbound link to a request bin you control and read what arrived. A free request-inspection service works; so does a two-line Node server on a spare host. Trust the received header over the configured one.</p>
 
@@ -551,7 +551,7 @@ console.log('this page was reached from:', document.referrer || '(nothing)');</c
 
         <p>Headers regress. A CDN configuration change, a platform upgrade, a well-meaning module — any of them can drop your policy without a deploy touching your code. Put it in a smoke test that runs after every release:</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 set -euo pipefail
 
 check() {
@@ -567,7 +567,7 @@ check() {
 
 check https://shop.example.com/                       "strict-origin-when-cross-origin"
 check https://shop.example.com/account/orders         "no-referrer"
-check https://shop.example.com/no-such-page           "strict-origin-when-cross-origin"</code></pre>
+check https://shop.example.com/no-such-page           "strict-origin-when-cross-origin"</code>
 
         <p>Free external scanners will also grade your headers and are worth running quarterly, but they check the homepage. Your leak is on the checkout success page. Write your own check against the URLs that matter.</p>
 
@@ -633,7 +633,28 @@ check https://shop.example.com/no-such-page           "strict-origin-when-cross-
 
         <p>Fix the header this week, because it's cheap and it closes the widest exposure. Then open the longer conversation about why the data was in the URL at all. That second one is where the actual privacy improvement lives, and it's the one that never makes it onto a roadmap unless someone with a screenshot insists.</p>
 
-        <div class="blog-suggested-reads"><h3>Suggested &amp; Related Reading</h3><ul><li><a href="/blog/secure-http-headers/">Configuring Secure HTTP Headers for E-Commerce</a></li></ul></div>
+        <div class="blog-suggested-reads">
+          <h3>Suggested &amp; Related Reading</h3>
+          <p>Explore related engineering guides from Kenneth D'Silva:</p>
+          <ul>
+            <li>
+              <strong><a href="/blog/hsts-secure-seo/">HTTP Strict Transport Security (HSTS) Setup</a></strong>
+              <p>HSTS for ecommerce: what the browser does with the header, why includeSubDomains causes outa...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/secure-http-headers/">Configuring Secure HTTP Headers for E-Commerce</a></strong>
+              <p>Security headers for ecommerce: HSTS, CSP, nosniff, Referrer-Policy, frame-ancestors and Per...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/csp-implementation/">Content Security Policy (CSP) Directives for E-Commerce</a></strong>
+              <p>Nonces, strict-dynamic, report-only rollout and the Magento and Shopify specifics of shippin...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/secure-api-gateways/">Securing E-Commerce REST &amp; GraphQL API Gateways</a></strong>
+              <p>API gateway authentication and authorisation: JWT validation pitfalls, scope design, object-...</p>
+            </li>
+          </ul>
+        </div>
       </article>
     </section>
   </main>

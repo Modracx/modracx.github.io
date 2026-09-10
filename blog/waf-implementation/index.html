@@ -208,8 +208,8 @@
         <p class="lede">A managed ruleset went live on a Friday and blocked twelve thousand checkouts by Monday. How to deploy a WAF that stops attacks instead of customers.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 24 min read</span> •
-          <span>Category: <a href="/blog/?category=Security+%26+Compliance">Security &amp; Compliance</a></span>
+          <span>Reading Time: 32 min read</span> •
+          <span>Category: <a href="/blog/archive/#security-compliance">Security &amp; Compliance</a></span>
         </div>
       </div>
 
@@ -304,7 +304,7 @@
 
         <p>Payment gateway webhooks are the clearest case. You know the source IP ranges, the exact path, the method, the content type, the signature header. A positive rule there is four lines and eliminates an entire class of forged-notification fraud where an attacker posts a fake "payment received" callback and gets an order fulfilled.</p>
 
-        <pre><code class="language-text">// Cloudflare custom rule, action: Block
+        <code class="language-text">// Cloudflare custom rule, action: Block
 // Everything that is not a legitimate PSP webhook is denied outright.
 (http.request.uri.path eq "/webhooks/psp/notify"
  and not (
@@ -312,7 +312,7 @@
    and http.request.headers["content-type"][0] eq "application/json"
    and len(http.request.headers["x-psp-signature"][0]) &gt; 0
    and ip.src in {203.0.113.0/24 198.51.100.0/24}
- ))</code></pre>
+ ))</code>
 
         <p>Signature verification still happens in the application. The rule means an attacker never gets to attempt it.</p>
 
@@ -340,7 +340,7 @@
 
         <p>PL3 and PL4 exist for applications where you control every input. A Magento storefront with customer-written product reviews and a WYSIWYG CMS is not that application. I have never successfully run PL3 on a full storefront; I have run it usefully on <code>/admin</code> and on a JSON API where every field was numeric.</p>
 
-        <pre><code class="language-apache"># crs-setup.conf — the four settings that matter most
+        <code class="language-apache"># crs-setup.conf — the four settings that matter most
 SecAction "id:900000,phase:1,nolog,pass,t:none,\
   setvar:tx.blocking_paranoia_level=1"
 
@@ -355,7 +355,7 @@ SecAction "id:900110,phase:1,nolog,pass,t:none,\
 
 # Sampling: run CRS on 10% of traffic while you measure CPU impact.
 SecAction "id:900400,phase:1,nolog,pass,t:none,\
-  setvar:tx.sampling_percentage=100"</code></pre>
+  setvar:tx.sampling_percentage=100"</code>
 
         <p>That detection-paranoia-level trick is the most useful thing in CRS and almost nobody uses it. It runs the higher level's rules in logging mode only, so you can see exactly what PL2 would break before you enable it.</p>
 
@@ -367,13 +367,13 @@ SecAction "id:900400,phase:1,nolog,pass,t:none,\
 
         <p><strong>Exclude one rule for one parameter on one path.</strong> The best kind. The rule still protects everything else.</p>
 
-        <pre><code class="language-apache"># The CMS body field legitimately contains HTML. Turn off the XSS
+        <code class="language-apache"># The CMS body field legitimately contains HTML. Turn off the XSS
 # rules for that one parameter, on that one admin path, nowhere else.
 SecRule REQUEST_URI "@beginsWith /admin/cms/page/save" \
   "id:1001,phase:2,pass,nolog,\
    ctl:ruleRemoveTargetById=941100;ARGS:content,\
    ctl:ruleRemoveTargetById=941110;ARGS:content,\
-   ctl:ruleRemoveTargetById=941160;ARGS:content"</code></pre>
+   ctl:ruleRemoveTargetById=941160;ARGS:content"</code>
 
         <p><strong>Exclude a rule group for a path.</strong> Acceptable when a whole family of rules conflicts with a known-safe endpoint.</p>
 
@@ -391,7 +391,7 @@ SecRule REQUEST_URI "@beginsWith /admin/cms/page/save" \
 
         <p>Which means a custom rule that skips managed rules for a path must be written as a Skip action in custom rules — you cannot "undo" a managed rule block later in the chain.</p>
 
-        <pre><code class="language-text">// Rule 1 — Skip. Payment callbacks must never be filtered.
+        <code class="language-text">// Rule 1 — Skip. Payment callbacks must never be filtered.
 // Ordered first, terminating, so nothing downstream can block them.
 Expression: (http.request.uri.path in {"/paypal/ipn/" "/adyen/notification/"}
              and ip.src in $psp_ranges)
@@ -413,13 +413,13 @@ Action: Block
 // Real customers are not on hosting provider networks.
 Expression: (http.request.uri.path contains "/checkout/"
              and ip.src.asnum in {14061 16509 15169 24940 63949})
-Action: Managed Challenge</code></pre>
+Action: Managed Challenge</code>
 
         <p>Rule 3 deserves a comment because it's the cheapest win in this whole article. A Magento or Shopify store receives a constant background of scans for WordPress paths, exposed <code>.env</code> files, and PHPUnit's remote code execution vector. None of those paths exist. Blocking them costs one rule and removes a large fraction of your log noise, which matters because noise is what stops people reading logs.</p>
 
         <p>Rate limiting is configured separately and it's where most of the real defensive value lives:</p>
 
-        <pre><code class="language-text">// Login: 5 attempts per 10 minutes per IP. Credential stuffing dies here.
+        <code class="language-text">// Login: 5 attempts per 10 minutes per IP. Credential stuffing dies here.
 Path: /customer/account/loginPost
 Characteristics: IP
 Period: 600s   Requests: 5   Action: Block for 3600s
@@ -437,7 +437,7 @@ Period: 300s   Requests: 10   Action: Managed Challenge
 // Search: expensive queries, scraped catalogues.
 Path: /catalogsearch/result/
 Characteristics: IP
-Period: 60s    Requests: 30   Action: Managed Challenge</code></pre>
+Period: 60s    Requests: 30   Action: Managed Challenge</code>
 
         <p>Coupon enumeration is worth dwelling on because it's specific to ecommerce and almost never defended. An attacker scripts thousands of guesses against the coupon endpoint, finds the codes that return a discount instead of an error, and either uses them or sells them. I've seen a store lose four figures a month to a leaked <code>STAFF40</code> code found this way. Ten attempts per five minutes stops it entirely and no real customer notices.</p>
 
@@ -449,7 +449,7 @@ Period: 60s    Requests: 30   Action: Managed Challenge</code></pre>
 
         <p>That budget is the thing that catches people. The managed rule groups are not free: the Core Rule Set is 700 WCU, Known Bad Inputs 200, SQL Database 200, Linux 200, PHP 100, Anonymous IP List 50. Add the common set and you have spent most of your budget before writing a single rule of your own.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "Name": "storefront-acl",
   "DefaultAction": { "Allow": {} },
   "Rules": [
@@ -500,7 +500,7 @@ Period: 60s    Requests: 30   Action: Managed Challenge</code></pre>
         "CloudWatchMetricsEnabled": true, "MetricName": "login" }
     }
   ]
-}</code></pre>
+}</code>
 
         <p>Note <code>OverrideAction: Count</code> on the managed group. That is the AWS equivalent of detection mode and it is how you must deploy any managed rule group for the first two weeks. It evaluates everything, emits metrics, blocks nothing.</p>
 
@@ -546,13 +546,13 @@ Period: 60s    Requests: 30   Action: Managed Challenge</code></pre>
 
         <p>Distinguish verified crawlers by reverse DNS rather than user agent, which is trivially forged. Cloudflare's verified bot category does this for you. Then decide: Googlebot and Bingbot always allowed; GPTBot, CCBot and their peers, your call, but express it in <code>robots.txt</code> as well as in rules because the honest ones read it and blocking without declaring is a support problem waiting to happen.</p>
 
-        <pre><code class="language-text">// Challenge unverified bots on expensive paths only.
+        <code class="language-text">// Challenge unverified bots on expensive paths only.
 // Blocking bots site-wide is how you accidentally deindex yourself.
 (cf.client.bot eq false
  and cf.threat_score &gt; 14
  and (http.request.uri.path contains "/catalogsearch/"
       or http.request.uri.query contains "product_list_order"
-      or http.request.uri.path matches "^/[a-z-]+\\.html$"))</code></pre>
+      or http.request.uri.path matches "^/[a-z-]+\\.html$"))</code>
 
         <p>I've watched a store block Googlebot for eleven days with an over-broad user-agent rule. Organic traffic halved and took two months to recover. If you write a bot rule, verify against real crawler traffic in your logs before it goes to blocking mode, and set up an alert on crawl rate.</p>
 
@@ -566,14 +566,14 @@ Period: 60s    Requests: 30   Action: Managed Challenge</code></pre>
 
         <p>A targeted rule blocking the specific exploit pattern can be live in ten minutes.</p>
 
-        <pre><code class="language-apache"># Virtual patch: block the exploit shape, not the whole endpoint.
+        <code class="language-apache"># Virtual patch: block the exploit shape, not the whole endpoint.
 # Ticket SEC-4471. Remove after 2.4.7-p3 is deployed everywhere.
 SecRule REQUEST_URI "@beginsWith /rest/V1/guest-carts" \
   "id:1100,phase:2,deny,status:403,log,\
    msg:'Virtual patch SEC-4471: nested payload in guest cart',\
    chain"
   SecRule REQUEST_BODY "@rx \"extension_attributes\"\\s*:\\s*\\{[^}]{2000,}" \
-    "t:none"</code></pre>
+    "t:none"</code>
 
         <p>Two rules for the Magento history books, both of which I deployed as virtual patches before the official fix landed on client systems: the 2022 template injection in the email field, and the SQLi in the older SUPEE era. In both cases the WAF rule was live the same day and the patch followed within the fortnight.</p>
 
@@ -591,7 +591,7 @@ SecRule REQUEST_URI "@beginsWith /rest/V1/guest-carts" \
 
         <p><strong>Do any would-be blocks land on conversion paths?</strong> This is the question that matters. Filter the log to requests whose path contains checkout, cart, login, or account. A false positive on a product page annoys someone. A false positive on <code>/checkout/onepage/saveOrder</code> costs an order, and you will not hear about it.</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # Cloudflare detection review. Requires CF_TOKEN and ZONE.
 # Pulls the last 24h of logged (not blocked) events, grouped by rule.
 curl -sS "https://api.cloudflare.com/client/v4/graphql" \
@@ -606,7 +606,7 @@ curl -sS "https://api.cloudflare.com/client/v4/graphql" \
       orderBy: [count_DESC]
     ) { count dimensions { ruleId action clientRequestPath } }
   }}}"}
-JSON</code></pre>
+JSON</code>
 
         <p>Then a second pass filtering to conversion paths only. If that returns anything, investigate every single row before enabling blocking. It's usually a dozen rows and an hour of work.</p>
 
@@ -618,14 +618,14 @@ JSON</code></pre>
 
         <p>A block page should say, in plain language, that something about the request looked automated, apologise, give a reference code, and offer a route to a human. Cloudflare exposes the ray ID; ModSecurity has the unique ID. Put it on the page.</p>
 
-        <pre><code class="language-html">&lt;!-- Custom WAF block page. The reference is the whole point:
+        <code class="language-html">&lt;!-- Custom WAF block page. The reference is the whole point:
      it turns a silent lost order into a two-minute support call. --&gt;
 &lt;h1&gt;We couldn't complete that request&lt;/h1&gt;
 &lt;p&gt;Our security system flagged something unusual. If you were
 placing an order, nothing has been charged.&lt;/p&gt;
 &lt;p&gt;Please call 0800 000 0000 or email help@example.com quoting
 reference &lt;strong&gt;::RAY_ID::&lt;/strong&gt; and we'll finish the order
-for you.&lt;/p&gt;</code></pre>
+for you.&lt;/p&gt;</code>
 
         <p>This is also your false positive detection system. If support gets three calls a week with reference codes, you have data you'd otherwise never see. On the garden furniture store we added this after the incident and it surfaced two further rule problems within a month that the logs alone hadn't made obvious.</p>
 
@@ -649,14 +649,14 @@ for you.&lt;/p&gt;</code></pre>
 
         <p>On the host, real. ModSecurity with CRS at PL1 costs roughly 3 to 8% of CPU on a typical Magento origin, and request body inspection is the expensive part. At PL2 I've measured 12%. The <code>SecRequestBodyLimit</code> and <code>SecRequestBodyNoFilesLimit</code> settings are the main lever — inspecting a 50MB product image upload byte by byte is pointless and expensive.</p>
 
-        <pre><code class="language-apache"># Don't inspect file uploads as request bodies; do inspect form fields.
+        <code class="language-apache"># Don't inspect file uploads as request bodies; do inspect form fields.
 SecRequestBodyLimit 13107200
 SecRequestBodyNoFilesLimit 131072
 SecRequestBodyLimitAction Reject
 
 # Response body inspection catches data leakage but doubles the cost
 # and interacts badly with streaming. Off unless you have a reason.
-SecResponseBodyAccess Off</code></pre>
+SecResponseBodyAccess Off</code>
 
         <p>Response body inspection deserves its own note. It can catch a SQL error message leaking a table name, which is genuinely useful during an assessment. It also buffers responses, which breaks streaming and adds latency to every page. I turn it on for a week during a security review and then off again.</p>
 
@@ -739,12 +739,20 @@ SecResponseBodyAccess Off</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/secure-ecommerce-checklist/">Securing Your Ecommerce Store: Security Hardening Blueprint</a></strong>
-              <p>PCI-DSS 4.0 requirement 6.4.3 compliance.</p>
+              <strong><a href="/blog/csp-implementation/">Content Security Policy (CSP) Directives for E-Commerce</a></strong>
+              <p>Nonces, strict-dynamic, report-only rollout and the Magento and Shopify specifics of shippin...</p>
             </li>
             <li>
-              <strong><a href="/blog/security-hardening-checklist/">Comprehensive Security Hardening Checklist for Magento 2</a></strong>
-              <p>Linux file permissions and SSH access control.</p>
+              <strong><a href="/blog/zero-trust-security/">Zero-Trust Security Architecture for E-Commerce Enterprise Infrastructure</a></strong>
+              <p>Implementing zero trust on a real ecommerce estate: identity-aware proxies, short-lived cred...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/cybersecurity-best-practices-ecommerce/">Cybersecurity Best Practices for E-Commerce Merchants</a></strong>
+              <p>The merchant threat model for ecommerce security: Magecart script governance, credential stu...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/api-rate-limiting-probing-guide/">How to Probe and Tune API Rate Limits: A Practical Engineering Guide</a></strong>
+              <p>A step-by-step engineering guide to probing API rate limits, analyzing 429 Too Many Requests...</p>
             </li>
           </ul>
         </div>

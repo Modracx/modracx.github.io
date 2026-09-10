@@ -208,8 +208,8 @@
         <p class="lede">A homeware retailer was paying £3,000 a month for a 4 TiB Azure Files share holding 38 GB of images. The rest of the estate had similar stories. Here is how Magento 2 actually maps onto Azure.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 30 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 45 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -292,7 +292,7 @@
 
         <p>The worker pool wants memory rather than cores. A Magento full reindex on a 60,000-SKU catalogue will happily take 6 GB of PHP memory per process, and the E-series ratio of 8 GB per vCPU suits that far better than the D-series 4 GB. Putting consumers on the same D-series SKU as the web tier is the most common sizing mistake I see, and it shows up as OOMKilled pods during catalogue updates.</p>
 
-        <pre><code class="language-bash"># Web pool: general purpose, autoscaled, zone-redundant.
+        <code class="language-bash"># Web pool: general purpose, autoscaled, zone-redundant.
 az aks nodepool add \
   --resource-group rg-commerce-prod \
   --cluster-name aks-commerce-prod \
@@ -315,7 +315,7 @@ az aks nodepool add \
   --enable-cluster-autoscaler --min-count 1 --max-count 6 \
   --zones 1 \
   --node-taints workload=worker:NoSchedule \
-  --labels workload=worker</code></pre>
+  --labels workload=worker</code>
 
         <p>The zone pinning on the worker pool is deliberate and is the single change that removed about £700 a month from the sailing equipment retailer's bill. Cross-zone traffic within a region is billed in both directions on Azure. Consumers are chatty — a message queue consumer polling Redis and writing to MySQL generates a continuous low-level stream that adds up. Web pods should stay zone-redundant because availability matters more there; consumers can tolerate a zonal outage by restarting elsewhere, and the autoscaler will do that for you if you allow a second zone as a fallback.</p>
 
@@ -331,7 +331,7 @@ az aks nodepool add \
 
         <p>Then the parameters. The ones I change on every deployment:</p>
 
-        <pre><code class="language-ini"># innodb_buffer_pool_size is set by Azure as a fraction of instance memory
+        <code class="language-ini"># innodb_buffer_pool_size is set by Azure as a fraction of instance memory
 # and you cannot override it directly. Choose the SKU for the buffer pool
 # you need: target 70-80% of your active dataset in memory. A 120 GB
 # Magento database with a 40 GB hot set wants at least 64 GB of RAM.
@@ -352,7 +352,7 @@ max_heap_table_size = 256M           # tables; spilling to disk is slow
 sort_buffer_size = 2M                # per-connection: do NOT set this high
 join_buffer_size = 2M
 log_bin_trust_function_creators = ON # Magento's triggers need this for
-                                     # MView-based indexing to install</code></pre>
+                                     # MView-based indexing to install</code>
 
         <p>The <code>innodb_flush_log_at_trx_commit = 2</code> line is the one that gets argued about. The strict reading is that a value of 2 risks losing up to a second of committed transactions if the host dies. In practice, on Flexible Server with zone-redundant HA, the failover mechanism replicates at the storage layer and the exposure is smaller than the naive reading suggests. I set it to 2 on stores where checkout write latency is the bottleneck and to 1 where the client is regulated or nervous. Both are defensible. Anyone who tells you there is one correct answer has not had to explain a slow checkout to a merchandising director.</p>
 
@@ -362,7 +362,7 @@ log_bin_trust_function_creators = ON # Magento's triggers need this for
 
         <p>Azure offers built-in PgBouncer for PostgreSQL but nothing equivalent for MySQL, so you deploy ProxySQL yourself, either as a sidecar or as a small deployment in the cluster. A sidecar per pod is simpler to reason about and gives you a local Unix socket; a shared deployment gives better pooling ratios but becomes a single point of failure that needs its own HA. I run it as a sidecar for stores under about 20 web pods and as a DaemonSet above that, so each node has one instance and pods connect over the node's loopback.</p>
 
-        <pre><code class="language-sql">-- ProxySQL: route Magento's read-heavy queries to a replica.
+        <code class="language-sql">-- ProxySQL: route Magento's read-heavy queries to a replica.
 -- Magento 2 supports split connections natively via env.php, but
 -- routing at the proxy means you do not have to teach every module
 -- about replicas, and third-party modules routinely ignore the setting.
@@ -378,7 +378,7 @@ VALUES
   (99, 1, '.*',                             10, 1);
 
 LOAD MYSQL QUERY RULES TO RUNTIME;
-SAVE MYSQL QUERY RULES TO DISK;</code></pre>
+SAVE MYSQL QUERY RULES TO DISK;</code>
 
         <p>Be careful with read splitting. Magento's own replica support, configured through the <code>slave_connection</code> key in <code>env.php</code>, is honoured by core code and ignored by a good proportion of third-party modules. Replication lag on Flexible Server read replicas is asynchronous and can reach several seconds under write load, which produces the classic bug where a customer saves an address and the next page does not show it. Route reads to replicas for catalogue browsing and never for anything in the checkout or account flow.</p>
 
@@ -388,7 +388,7 @@ SAVE MYSQL QUERY RULES TO DISK;</code></pre>
 
         <p>Sessions need persistence and must never evict under memory pressure — an evicted session is a customer whose cart vanished. Cache wants aggressive eviction and does not care about durability at all, because a cache miss is a slow page and not a lost sale. Azure Cache for Redis lets you set <code>maxmemory-policy</code> per instance; set <code>noeviction</code> on sessions and <code>allkeys-lru</code> on cache.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // app/etc/env.php, abbreviated. Two distinct Azure Cache instances.
 return [
     'session' =&gt; [
@@ -445,7 +445,7 @@ return [
             ],
         ],
     ],
-];</code></pre>
+];</code>
 
         <p>Two Azure-specific notes. Port 6380 is the TLS port and you should be using it; the non-TLS 6379 endpoint can be disabled entirely on the instance and should be. And Azure Cache for Redis in the Standard tier gives you a replica with automatic failover but the failover takes tens of seconds, during which PHP will throw connection exceptions. Set a short connect timeout and make sure your session handler degrades rather than fataling, or a routine maintenance event on Microsoft's side becomes a visible outage.</p>
 
@@ -467,7 +467,7 @@ return [
 
         <p><strong>Never put the application root on a share.</strong> I said this earlier and it bears repeating because I have now inherited two projects that did it. PHP resolves includes by stat-ing the filesystem. Over NFS, with <code>realpath_cache</code> cold, a single page load can generate thousands of network round trips. The symptom is a store where every page takes two seconds and the database is idle, and it is baffling until you strace a worker.</p>
 
-        <pre><code class="language-yaml"># Premium Files, NFS, mounted ONLY at pub/media. Note the mount options:
+        <code class="language-yaml"># Premium Files, NFS, mounted ONLY at pub/media. Note the mount options:
 # the defaults are conservative and the read/write sizes matter a great
 # deal for throughput on larger files.
 apiVersion: storage.k8s.io/v1
@@ -489,7 +489,7 @@ mountOptions:
   - actimeo=30        # cache attributes for 30s. Media files are
                       # effectively immutable once written.
 reclaimPolicy: Retain
-allowVolumeExpansion: true</code></pre>
+allowVolumeExpansion: true</code>
 
         <p>The <code>nconnect=8</code> option is the single highest-value mount flag here and it is not on by default. It opens multiple TCP connections to the storage endpoint, and on Premium NFS shares it roughly triples achievable throughput for concurrent access. I have measured 118 MB/s with the default single connection and 340 MB/s with <code>nconnect=8</code> on the same share, same node SKU.</p>
 
@@ -505,7 +505,7 @@ allowVolumeExpansion: true</code></pre>
 
         <p>The two configuration details that matter for Magento:</p>
 
-        <pre><code class="language-json">// Front Door rule set. Magento's full page cache varies on a small,
+        <code class="language-json">// Front Door rule set. Magento's full page cache varies on a small,
 // known set of things. If you let Front Door cache with default
 // query-string handling you will serve one customer's currency to
 // everyone, or fragment the cache so badly it never hits.
@@ -541,11 +541,11 @@ allowVolumeExpansion: true</code></pre>
       ]
     }
   ]
-}</code></pre>
+}</code>
 
         <p>And the X-Forwarded-Proto handling. Front Door terminates TLS and talks to your origin over HTTPS or HTTP depending on configuration, and Magento decides whether to generate <code>https://</code> URLs based on what it thinks the request scheme was. Get this wrong and you get mixed content warnings, or an infinite redirect loop where Magento redirects to HTTPS, Front Door forwards as HTTP, and Magento redirects again.</p>
 
-        <pre><code class="language-nginx"># Nginx in the pod, sitting behind Front Door.
+        <code class="language-nginx"># Nginx in the pod, sitting behind Front Door.
 # Front Door sends X-Forwarded-Proto and X-Azure-FDID. Validate the
 # latter or anyone who finds your origin can spoof the former.
 map $http_x_azure_fdid $fd_allowed {
@@ -571,7 +571,7 @@ server {
         fastcgi_param  SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
         include        fastcgi_params;
     }
-}</code></pre>
+}</code>
 
         <h2>9. Search: Where Azure Genuinely Lets You Down</h2>
 
@@ -587,7 +587,7 @@ server {
 
         <p>If you self-host, the configuration that matters most is heap sizing and shard count. Magento creates one index per store view per index type, and a store with four store views and a large catalogue easily ends up with 30 shards it does not need. Over-sharding on a small cluster is the most common cause of Magento search being slow, and the fix is to set the shard count explicitly rather than accepting the default.</p>
 
-        <pre><code class="language-bash"># Magento's default index settings create 1 shard and 1 replica per index,
+        <code class="language-bash"># Magento's default index settings create 1 shard and 1 replica per index,
 # which is correct. The problem is people copying a template with 5 shards.
 # Check what you actually have:
 curl -s "https://os.internal:9200/_cat/indices/magento2*?v&amp;h=index,pri,rep,docs.count,store.size"
@@ -595,7 +595,7 @@ curl -s "https://os.internal:9200/_cat/indices/magento2*?v&amp;h=index,pri,rep,d
 # A single-node dev cluster with replicas configured will sit yellow
 # forever and Magento will report the index as unhealthy. Set replicas
 # to 0 there and 1 in production, per environment, not globally.
-bin/magento config:set catalog/search/elasticsearch7_index_prefix magento2_prod</code></pre>
+bin/magento config:set catalog/search/elasticsearch7_index_prefix magento2_prod</code>
 
         <h2>10. Deployments, Migrations, and the Processes That Aren't Web Traffic</h2>
 
@@ -605,7 +605,7 @@ bin/magento config:set catalog/search/elasticsearch7_index_prefix magento2_prod<
 
         <p>The right answer is to bake everything into the image. Build once, in the pipeline, and produce an immutable image containing the vendor directory, generated code, and deployed static content. Then set the application root read-only in the pod security context, which catches an entire class of problem where something writes to the filesystem at runtime and one pod diverges from the others.</p>
 
-        <pre><code class="language-dockerfile"># Multi-stage. The build stage has Composer and dev dependencies;
+        <code class="language-dockerfile"># Multi-stage. The build stage has Composer and dev dependencies;
 # the runtime stage has neither.
 FROM php:8.3-fpm-alpine AS build
 
@@ -636,11 +636,11 @@ WORKDIR /app
 # Everything Magento writes at runtime is a mounted volume or emptyDir.
 # If it tries to write anywhere else, we want to know at deploy time.
 USER 1000
-CMD ["php-fpm", "-F"]</code></pre>
+CMD ["php-fpm", "-F"]</code>
 
         <p>The opcache configuration deserves its own file and its own attention, because it is the highest-leverage PHP tuning on a Magento box and the defaults are far too small.</p>
 
-        <pre><code class="language-ini">; opcache.ini — Magento 2.4 with a moderate module set compiles to
+        <code class="language-ini">; opcache.ini — Magento 2.4 with a moderate module set compiles to
 ; roughly 30,000 files. The default 10,000 max_accelerated_files
 ; silently evicts, and you get a store that is fast for some requests
 ; and slow for others with no obvious pattern.
@@ -659,7 +659,7 @@ opcache.jit_buffer_size=128M       ; measure this. On some catalogues JIT
 
 ; Preloading gives a further 5-10% and costs nothing at runtime.
 opcache.preload=/app/generated/code/preload.php
-opcache.preload_user=www-data</code></pre>
+opcache.preload_user=www-data</code>
 
         <p>Setting <code>validate_timestamps=0</code> is only safe because the image is immutable. If you deploy by rsyncing files onto a running container — and people do — this setting will serve stale code forever and you will lose an afternoon.</p>
 
@@ -669,7 +669,7 @@ opcache.preload_user=www-data</code></pre>
 
         <p>The pattern I use is a Kubernetes Job as a Helm pre-upgrade hook, which runs to completion before any pod rollout begins.</p>
 
-        <pre><code class="language-yaml">apiVersion: batch/v1
+        <code class="language-yaml">apiVersion: batch/v1
 kind: Job
 metadata:
   name: magento-setup-upgrade
@@ -706,7 +706,7 @@ spec:
               bin/magento maintenance:disable
           envFrom:
             - secretRef:
-                name: magento-env</code></pre>
+                name: magento-env</code>
 
         <p>The <code>--keep-generated</code> flag is important. Without it, <code>setup:upgrade</code> wipes the generated code that you carefully compiled at build time, and the first request to each new pod triggers a runtime compile that takes minutes and times out the readiness probe. I have watched a deployment fail for this exact reason and spent longer than I want to admit finding it.</p>
 
@@ -718,7 +718,7 @@ spec:
 
         <p>Run it as its own Deployment with exactly one replica, on the worker pool, with a recreate strategy so you never have two.</p>
 
-        <pre><code class="language-yaml">apiVersion: apps/v1
+        <code class="language-yaml">apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: magento-cron
@@ -750,20 +750,20 @@ spec:
             requests: { memory: "2Gi", cpu: "500m" }
             limits:   { memory: "6Gi" }   # no CPU limit: throttling a
                                           # reindex just makes it longer
-</code></pre>
+</code>
 
         <p>Leaving the CPU limit off is a considered choice. CFS throttling on a CPU-limited pod produces long, unpredictable pauses, and for a batch workload that nobody is waiting on synchronously, letting it burst is better than metering it. Set requests so the scheduler places it sensibly and let it use spare capacity.</p>
 
         <p>The message queue consumers are separate again. Magento 2.4 defines around twenty consumers by default and most stores need four or five of them running continuously — async operations, product action attribute updates, inventory reservation cleanup, and the export consumers if you use them. Do not run them all; each is a PHP process holding a database connection.</p>
 
-        <pre><code class="language-bash"># List what is actually defined, then run only what you need.
+        <code class="language-bash"># List what is actually defined, then run only what you need.
 bin/magento queue:consumers:list
 
 # --max-messages forces the process to exit after N messages so the
 # container restarts and reclaims leaked memory. PHP long-running
 # processes in Magento leak; this is a pragmatic mitigation, not a fix.
 bin/magento queue:consumers:start product_action_attribute.update \
-  --max-messages=5000 --single-thread</code></pre>
+  --max-messages=5000 --single-thread</code>
 
         <p>The <code>--max-messages</code> flag plus a Kubernetes restart policy of <code>Always</code> is the standard pattern: the consumer processes 5,000 messages, exits cleanly, and the kubelet restarts it with fresh memory. It looks like a hack because it is one, but PHP's memory behaviour in long-lived processes makes it necessary.</p>
 
@@ -773,7 +773,7 @@ bin/magento queue:consumers:start product_action_attribute.update \
 
         <p>Scale on the thing that actually indicates saturation: PHP-FPM's active process count as a fraction of <code>pm.max_children</code>. Export it with the PHP-FPM exporter, scrape it with Prometheus, and use KEDA or the custom metrics API to drive the HPA.</p>
 
-        <pre><code class="language-yaml">apiVersion: keda.sh/v1alpha1
+        <code class="language-yaml">apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: magento-web
@@ -806,7 +806,7 @@ spec:
         serverAddress: http://prometheus.monitoring:9090
         query: |
           avg(phpfpm_active_processes / phpfpm_max_children) * 100
-        threshold: "60"</code></pre>
+        threshold: "60"</code>
 
         <p>Asymmetric scaling behaviour is the point here. Scale up instantly and aggressively; scale down one pod at a time over ten minutes. The cost of an extra pod for ten minutes is pennies. The cost of a scaled-down pod terminating a checkout is a lost order and a support ticket.</p>
 
@@ -822,7 +822,7 @@ spec:
 
         <p>On Azure the correct arrangement is workload identity plus Key Vault, with the CSI driver mounting secrets as files and the pod reading them via environment variables that are populated at container start. No credential is ever stored in the cluster.</p>
 
-        <pre><code class="language-yaml">apiVersion: secrets-store.csi.x-k8s.io/v1
+        <code class="language-yaml">apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
 metadata:
   name: magento-kv
@@ -853,7 +853,7 @@ spec:
       type: Opaque
       data:
         - objectName: mysql-password
-          key: MYSQL_PASSWORD</code></pre>
+          key: MYSQL_PASSWORD</code>
 
         <p>Better still, drop the password entirely. Azure Database for MySQL Flexible Server supports Microsoft Entra authentication, which means the pod authenticates with its workload identity and receives a short-lived token instead of a static password. It requires a small amount of glue because Magento expects a password string, but a token-refresh sidecar that writes a token to a shared file every 45 minutes handles it, and it removes the highest-value credential from your estate.</p>
 
@@ -867,7 +867,7 @@ spec:
 
         <p>The bit people miss is DNS. If your private DNS zone is not linked to the cluster's VNet, the hostname resolves to the public IP and everything still works, silently, over the public path. I check this on every deployment now, because it fails open.</p>
 
-        <pre><code class="language-bash"># Confirm the private endpoint is actually being used. If this returns
+        <code class="language-bash"># Confirm the private endpoint is actually being used. If this returns
 # a 10.x address you are on the private path; a public IP means the
 # DNS zone link is missing and you are paying for internet egress.
 kubectl run -it --rm dnscheck --image=busybox --restart=Never -- \
@@ -879,7 +879,7 @@ az monitor metrics list \
   --resource "/subscriptions/$SUB/resourceGroups/rg-commerce-prod/providers/Microsoft.Network/natGateways/nat-commerce" \
   --metric "ByteCount" \
   --interval PT1H \
-  --start-time 2026-07-01T00:00:00Z</code></pre>
+  --start-time 2026-07-01T00:00:00Z</code>
 
         <p>Three cost traps in Azure networking that catch Magento deployments specifically. Cross-zone traffic within a region is billed, and a zone-spread cluster talking to a single-zone database pays it constantly. Egress to the internet from the cluster is billed, and if your Front Door origin is configured over the public path rather than Private Link, every cache miss is billed egress. And NAT Gateway is billed per gigabyte processed as well as per hour, so a chatty integration polling an external API is a line item.</p>
 
@@ -897,7 +897,7 @@ az monitor metrics list \
 
         <p><strong>Queue depth per consumer.</strong> The Magento message queue tables are just database tables; a query counting unconsumed messages per topic, run every minute, gives you a leading indicator of consumer failure. This is the same reconciliation logic I described in the <a href="/blog/sap-commerce-cloud-erp-sync/">SAP Commerce and S/4HANA synchronisation piece</a> and it applies just as well when both ends are Magento's own subsystems.</p>
 
-        <pre><code class="language-sql">-- Unconsumed message age per topic. Alert on age, not just count:
+        <code class="language-sql">-- Unconsumed message age per topic. Alert on age, not just count:
 -- a queue can be short and completely stuck.
 SELECT q.name AS queue,
        COUNT(*) AS pending,
@@ -908,7 +908,7 @@ JOIN queue_message m ON m.id = s.message_id
 WHERE s.status IN (2, 7)      -- 2 = new, 7 = retry_required
 GROUP BY q.name
 HAVING oldest_minutes &gt; 15
-ORDER BY oldest_minutes DESC;</code></pre>
+ORDER BY oldest_minutes DESC;</code>
 
         <h2>15. What Things Actually Cost</h2>
 
@@ -970,11 +970,11 @@ ORDER BY oldest_minutes DESC;</code></pre>
 
         <p>What everyone should have regardless: an automated backup with point-in-time restore on the database, a tested restore procedure run at least twice a year against a real target, media in geo-redundant blob storage, and infrastructure defined as code so the cluster itself can be rebuilt from a repository rather than from memory. The last one is the item that most often does not survive contact with reality, because someone made a change in the portal during an incident and never brought it back into Terraform.</p>
 
-        <pre><code class="language-bash"># Detect portal drift against your Terraform state. Run it weekly in CI
+        <code class="language-bash"># Detect portal drift against your Terraform state. Run it weekly in CI
 # and fail the build on a non-empty plan, so drift is caught while
 # someone still remembers making the change.
 terraform plan -detailed-exitcode -refresh-only
-# exit 0 = no drift, 2 = drift detected, 1 = error</code></pre>
+# exit 0 = no drift, 2 = drift detected, 1 = error</code>
 
         <h2>18. Things I Got Wrong the First Time</h2>
 
@@ -988,7 +988,7 @@ terraform plan -detailed-exitcode -refresh-only
 
         <p><strong>I trusted the readiness probe on <code>/health_check.php</code>.</strong> Magento's default health check returns 200 as soon as PHP responds, which is before the database connection is verified, before the cache is warm, and well before the pod can serve a category page in reasonable time. A pod entered rotation, took forty requests, and every one of them was slow. Write a real readiness endpoint that checks the database, Redis and search.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // pub/health.php — readiness, not liveness. This should fail if the
 // pod cannot serve real traffic, so the service stops sending it any.
 require __DIR__ . '/../app/bootstrap.php';
@@ -1016,7 +1016,7 @@ try {
 }
 
 header('Content-Type: application/json');
-echo json_encode($checks);</code></pre>
+echo json_encode($checks);</code>
 
         <p>Use a separate, cheaper liveness probe — a plain <code>200</code> from Nginx — because a liveness probe that checks the database will restart every pod in the cluster when the database has a brief hiccup, turning a two-second blip into a full outage. That is a mistake I have made and it is spectacular.</p>
 
@@ -1059,12 +1059,20 @@ echo json_encode($checks);</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/cloud-migration-guide/">Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS &amp; Azure</a></strong>
-              <p>Cloud migration architecture strategies.</p>
+              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 on AWS: Cloud Architecture, Migration &amp; Cost Optimization</a></strong>
+              <p>Deploying Magento 2 on AWS: design patterns for ECS/EKS nodes, Aurora RDS performance tuning...</p>
             </li>
             <li>
-              <strong><a href="/blog/containerization-docker-kubernetes/">Containerizing Monolithic E-Commerce: Docker &amp; Kubernetes</a></strong>
-              <p>Kubernetes HPA deployment manifests.</p>
+              <strong><a href="/blog/wix-to-shopify-magento-migration/">Wix to Shopify &amp; Magento 2 Migration Roadmap</a></strong>
+              <p>Replatforming from Wix to Shopify or Magento 2: building a complete URL inventory, 301 mappi...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/magento-hyva-themes/">Revolutionizing Magento 2 Frontends with Hyvä Themes &amp; Alpine.js</a></strong>
+              <p>Hyva versus Luma on real Magento stores: what the rewrite removes, Alpine and Tailwind in pr...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/cloud-migration-guide/">Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS &amp; Azure</a></strong>
+              <p>Complete step-by-step guide for migrating monolithic ecommerce stores (Magento 2, custom pla...</p>
             </li>
           </ul>
         </div>

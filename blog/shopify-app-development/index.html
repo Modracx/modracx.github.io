@@ -103,7 +103,7 @@
         "url": "https://www.modracx.com/og-image.png"
       }
     },
-    "timeRequired": "PT22M"
+    "timeRequired": "PT38M"
   }
   </script>
   <script type="application/ld+json">
@@ -209,8 +209,8 @@
         <p class="lede">A stock sync stopped receiving webhooks for nine days and nothing alerted. Session tokens, delivery guarantees, cost-based rate limits and what uninstall really does.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 24 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 38 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -265,7 +265,7 @@
 
         <p>For an ERP connector serving one client, an admin-created app or a custom app is almost always correct, and I have watched teams burn six weeks on App Store review for software that will only ever be installed once. Ask "how many shops will install this" before you write a line, because the answer decides whether you need the billing API, the mandatory compliance webhooks, and a listing.</p>
 
-        <pre><code class="language-toml"># shopify.app.toml — the manifest. Scopes here are the ones you will
+        <code class="language-toml"># shopify.app.toml — the manifest. Scopes here are the ones you will
 # be asked to justify at review, so ask for what you use and nothing more.
 name = "warehouse-sync"
 client_id = "a1b2c3d4e5f6"
@@ -296,7 +296,7 @@ api_version = "2025-07"
   uri = "https://apps.example.com/webhooks/compliance"
 
 [build]
-automatically_update_urls_on_dev = true</code></pre>
+automatically_update_urls_on_dev = true</code>
 
         <p>Declaring webhooks in the manifest rather than creating them at runtime is the single change I would push hardest on anyone maintaining an older app. Shopify reconciles the declared set on every app version deploy, which means the failure mode from my opening story — subscription deleted, nothing recreates it — becomes recoverable by pushing a version rather than by writing repair code.</p>
 
@@ -308,7 +308,7 @@ automatically_update_urls_on_dev = true</code></pre>
 
         <p>A session token is a JWT, signed HS256 with your app's client secret, issued by App Bridge in the browser, valid for one minute. It identifies the shop and the logged-in staff user. It is <em>not</em> an API access token and cannot call the Admin API.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "iss": "https://client-shop.myshopify.com/admin",
   "dest": "https://client-shop.myshopify.com",
   "aud": "a1b2c3d4e5f6",
@@ -318,11 +318,11 @@ automatically_update_urls_on_dev = true</code></pre>
   "iat": 1754562060,
   "jti": "9f2c1e44-3b7a-4c19-9a1e-6d0f2b8e4471",
   "sid": "d41d8cd98f00b204e9800998ecf8427e"
-}</code></pre>
+}</code>
 
         <p>Four fields carry the security weight. <code>dest</code> is the shop the request is for and is the value you must key your session lookup on — never a shop parameter from the query string. <code>aud</code> must equal your own client ID or someone is replaying a token issued to a different app. <code>exp</code> and <code>nbf</code> bracket a sixty-second window. <code>sub</code> is the staff user ID, which matters if you implement per-user permissions.</p>
 
-        <pre><code class="language-javascript">import crypto from 'node:crypto';
+        <code class="language-javascript">import crypto from 'node:crypto';
 
 /**
  * Verify a Shopify session token. The library does this for you; this
@@ -358,7 +358,7 @@ export function verifySessionToken(token, { clientId, clientSecret }) {
   if (!/^[a-z0-9-]+\.myshopify\.com$/.test(shop)) throw new Error('bad dest');
 
   return { shop, userId: payload.sub, sessionId: payload.sid };
-}</code></pre>
+}</code>
 
         <p>The five-second clock skew allowance in there is not decorative. I have had verification fail on a container whose clock had drifted three seconds, producing an app that worked for some users and not others, on the same shop, at the same time.</p>
 
@@ -368,7 +368,7 @@ export function verifySessionToken(token, { clientId, clientSecret }) {
 
         <p>Token exchange replaces it. You take the session token you already have and swap it for an access token, server side, with no redirects at all.</p>
 
-        <pre><code class="language-javascript">/**
+        <code class="language-javascript">/**
  * Exchange a session token for an Admin API access token.
  * requested_token_type decides whether you get an online token (tied
  * to the staff user, expires with their session) or an offline one
@@ -396,7 +396,7 @@ async function exchangeToken(shop, sessionToken, { online = false } = {}) {
     throw new ReauthRequired(shop);
   }
   return res.json();
-}</code></pre>
+}</code>
 
         <p>Almost every app needs an offline token, because almost every app has a background job. Apps that also want per-staff-user behaviour need both, stored separately. Storing an online token and using it from a cron job is a bug that surfaces days later as sporadic 401s when the staff member's admin session ends.</p>
 
@@ -406,7 +406,7 @@ async function exchangeToken(shop, sessionToken, { online = false } = {}) {
 
         <p>Your session store holds, per shop: the offline access token, the granted scopes, the shop domain, and whatever install state you track. It is written on install, read on every background job, and deleted on uninstall. Encrypt the token column at rest — it grants full API access under the granted scopes, and a leaked session table is a leaked customer database for every shop that installed you.</p>
 
-        <pre><code class="language-sql">-- Minimum viable session store. The scopes column matters more than
+        <code class="language-sql">-- Minimum viable session store. The scopes column matters more than
 -- people expect: when you add a scope to the manifest, existing
 -- installs keep their old grant until the merchant re-consents, and
 -- you need to detect that rather than 403 in production.
@@ -424,7 +424,7 @@ CREATE TABLE shopify_sessions (
 );
 
 CREATE UNIQUE INDEX ON shopify_sessions (shop) WHERE is_online = FALSE;
-CREATE INDEX ON shopify_sessions (shop, user_id) WHERE is_online = TRUE;</code></pre>
+CREATE INDEX ON shopify_sessions (shop, user_id) WHERE is_online = TRUE;</code>
 
         <p>Note the <code>uninstalled_at</code> column rather than a hard delete. Merchants reinstall — churn-and-return is common, especially after a theme change or a staff turnover — and knowing that this shop was here before, with this configuration, turns a fresh onboarding into a two-click reconnection. The compliance rules constrain how long you may keep other data, but the fact of a prior install is not customer personal data.</p>
 
@@ -442,7 +442,7 @@ CREATE INDEX ON shopify_sessions (shop, user_id) WHERE is_online = TRUE;</code><
 
         <p><strong>Payloads can be truncated.</strong> An order with several hundred line items will not arrive complete. Treat the webhook as a notification that something changed, and fetch the authoritative record if you need all of it.</p>
 
-        <pre><code class="language-javascript">import crypto from 'node:crypto';
+        <code class="language-javascript">import crypto from 'node:crypto';
 
 /**
  * The only webhook handler shape I will sign off on.
@@ -484,7 +484,7 @@ app.post('/webhooks/:topic',
     // fast enough to fit comfortably inside five seconds.
     await queue.add(topic, { shop, body: req.body.toString(), webhookId });
     res.sendStatus(200);
-  });</code></pre>
+  });</code>
 
         <p>The <code>X-Shopify-Triggered-At</code> header is underused. It is the time the event happened, not the time it was delivered, and comparing it against the record you already hold is how you discard an out-of-order update without needing a version column.</p>
 
@@ -492,7 +492,7 @@ app.post('/webhooks/:topic',
 
         <p>Given everything above, no app should treat webhooks as its only source of truth. The pattern that works is webhooks for latency and a scheduled sweep for correctness.</p>
 
-        <pre><code class="language-javascript">/**
+        <code class="language-javascript">/**
  * Hourly reconciliation. Two jobs in one: repair missing webhook
  * subscriptions, then catch anything that changed while we were deaf.
  * The overlap window is deliberate — 90 minutes for an hourly job,
@@ -520,7 +520,7 @@ export async function reconcile(shop, client) {
   for await (const order of paginate(client, ORDERS_SINCE, { since })) {
     await upsertOrder(shop, order);   // must be idempotent
   }
-}</code></pre>
+}</code>
 
         <p>The alert is the important line. Every integration I have rescued had the sweep and lacked the alarm, so the sweep quietly papered over a broken subscription for months until the day the sweep also broke.</p>
 
@@ -548,7 +548,7 @@ export async function reconcile(shop, client) {
 
         <p>That last row is the practical difference. GraphQL tells you what a query cost and how much budget remains, in the response, every time.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "data": { "products": { "edges": [ "..." ] } },
   "extensions": {
     "cost": {
@@ -561,11 +561,11 @@ export async function reconcile(shop, client) {
       }
     }
   }
-}</code></pre>
+}</code>
 
         <p>Requested cost is computed from your <code>first</code> and <code>last</code> arguments before execution; actual cost is what the returned data really came to. You are charged the actual, but you are <em>rejected</em> on the requested — a query whose theoretical maximum exceeds the bucket is refused before it runs, which is why deeply nested queries with generous page sizes fail even on shops with almost no data.</p>
 
-        <pre><code class="language-graphql"># Requested cost around 2,102. Rejected outright on a Standard app
+        <code class="language-graphql"># Requested cost around 2,102. Rejected outright on a Standard app
 # even if the shop has eleven products, because 1 + 2+100 nested
 # inside 2+100 multiplies out past the bucket ceiling.
 {
@@ -593,11 +593,11 @@ export async function reconcile(shop, client) {
       variants(first: 5) { edges { node { id sku } } }
     } }
   }
-}</code></pre>
+}</code>
 
         <p>The client-side discipline is a token bucket that mirrors Shopify's, updated from every response, with the request paused rather than retried when the budget is low. Retrying on a throttle is how you turn a slow job into a stuck one.</p>
 
-        <pre><code class="language-javascript">/**
+        <code class="language-javascript">/**
  * Cost-aware GraphQL client. Waits for budget instead of failing,
  * and leaves a floor so an urgent request (a webhook-triggered
  * fetch) is not starved by a bulk backfill.
@@ -642,7 +642,7 @@ class ThrottledClient {
     }
     return json.data;
   }
-}</code></pre>
+}</code>
 
         <p>I have been caught by that last comment twice. A throttled GraphQL response is a 200. If your error handling keys off HTTP status you will treat an empty payload as "no results" and, in a sync job, conclude the merchant has no products.</p>
 
@@ -650,7 +650,7 @@ class ThrottledClient {
 
         <p>For anything above a few thousand records, paginating is the wrong tool. The bulk operation API runs your query asynchronously against the whole dataset and hands you a JSONL file on a URL. It costs almost nothing against your rate limit and it is the only sane way to do an initial catalogue import.</p>
 
-        <pre><code class="language-graphql">mutation {
+        <code class="language-graphql">mutation {
   bulkOperationRunQuery(
     query: """
     {
@@ -666,7 +666,7 @@ class ThrottledClient {
     bulkOperation { id status }
     userErrors { field message }
   }
-}</code></pre>
+}</code>
 
         <p>Two constraints that catch people. There is no pagination inside a bulk query — you omit <code>first</code> entirely, which looks wrong if you have been writing normal queries all day. And a shop can run one bulk query at a time per app, so if your onboarding kicks one off and your hourly sync kicks off another, the second fails and you need a queue rather than an assumption.</p>
 
@@ -678,7 +678,7 @@ class ThrottledClient {
 
         <p>Three shapes: recurring subscriptions, one-time charges, and usage charges that sit inside a subscription under a capped amount the merchant approves up front.</p>
 
-        <pre><code class="language-graphql">mutation CreatePlan($url: URL!) {
+        <code class="language-graphql">mutation CreatePlan($url: URL!) {
   appSubscriptionCreate(
     name: "Warehouse Sync — Growth"
     returnUrl: $url
@@ -701,7 +701,7 @@ class ThrottledClient {
     appSubscription { id status }
     userErrors { field message }
   }
-}</code></pre>
+}</code>
 
         <p>The mutation returns a <code>confirmationUrl</code>. The merchant must visit it and approve; nothing is charged until they do. In an embedded app you cannot simply set <code>window.location</code>, because you are in an iframe — you redirect the top frame through App Bridge, and getting this wrong produces a blank panel that is one of the most common review rejections I have seen.</p>
 
@@ -739,7 +739,7 @@ class ThrottledClient {
 
         <p>What stays: metafields you wrote, files you uploaded, draft orders, discounts, and any tags you applied to products or customers. These persist in the shop forever unless the merchant deletes them, which means a poorly behaved app leaves permanent litter. I have cleaned up a shop with four thousand orphaned metafields from three defunct apps.</p>
 
-        <pre><code class="language-javascript">/**
+        <code class="language-javascript">/**
  * app/uninstalled handler. Everything here is local — the token is
  * already dead. Do not attempt an API call; it will 401 and, if you
  * retry it, will keep 401ing until your queue gives up.
@@ -761,7 +761,7 @@ export async function onUninstall({ shop }) {
   // Retention clock starts now. shop/redact arrives in 48 hours and
   // the purge must have happened by the time it does.
   await scheduler.at(Date.now() + 47 * 3600 * 1000, 'purge-shop', { shop });
-}</code></pre>
+}</code>
 
         <p>Three failure modes I have hit personally.</p>
 
@@ -783,13 +783,13 @@ export async function onUninstall({ shop }) {
 
         <p>The current version is a script tag rather than an npm package, loaded from Shopify's CDN, and it exposes globals rather than requiring a bundler integration. That change caught out a lot of apps built against the older React bindings, and if you are maintaining something from 2021 the migration is not trivial.</p>
 
-        <pre><code class="language-html">&lt;!-- App Bridge must load before your application bundle and must
+        <code class="language-html">&lt;!-- App Bridge must load before your application bundle and must
      not be self-hosted. Shopify checks this at review, and a bundled
      copy will fail the automated checks. --&gt;
 &lt;script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"
-        data-api-key="a1b2c3d4e5f6"&gt;&lt;/script&gt;</code></pre>
+        data-api-key="a1b2c3d4e5f6"&gt;&lt;/script&gt;</code>
 
-        <pre><code class="language-javascript">// Fetching from your own backend. App Bridge patches window.fetch so
+        <code class="language-javascript">// Fetching from your own backend. App Bridge patches window.fetch so
 // same-origin requests carry a fresh session token automatically —
 // which is why you should not roll your own token plumbing.
 const res = await fetch('/api/sync/status');
@@ -802,7 +802,7 @@ open('https://apps.example.com/docs/setup', '_top');
 // Rendering your own sticky footer instead is the sort of thing that
 // gets described in review notes as "does not follow admin patterns".
 const saveBar = document.querySelector('ui-save-bar');
-saveBar.show();</code></pre>
+saveBar.show();</code>
 
         <p>Polaris is the component library that matches the admin's visual language. You are not obliged to use it, and there are apps with strong custom design that pass review. But every hour spent building a table component is an hour not spent on the thing merchants installed you for, and Polaris tables handle the accessibility and keyboard behaviour that a hand-rolled one will not.</p>
 
@@ -814,7 +814,7 @@ saveBar.show();</code></pre>
 
         <p>Script tags injected JavaScript into every page, could not be positioned by the merchant, and were invisible in the theme editor. Theme app extensions instead ship Liquid blocks that a merchant drags into a section, configures through schema-defined settings, and previews before publishing. They are versioned with your app, removed automatically on uninstall, and they do not require write access to the theme.</p>
 
-        <pre><code class="language-liquid">{%- comment -%}
+        <code class="language-liquid">{%- comment -%}
   extensions/storefront/blocks/delivery-estimate.liquid
   Settings defined in the schema appear in the theme editor, so the
   merchant changes copy without opening a support ticket.
@@ -839,7 +839,7 @@ saveBar.show();</code></pre>
       "default": 14 }
   ]
 }
-{% endschema %}</code></pre>
+{% endschema %}</code>
 
         <p>The constraint that surprises people: an app block's JavaScript runs on the merchant's storefront, competing with the theme and every other app for main-thread time, and you have no control over what else is on the page. Keep it small, defer it, and never assume jQuery is present because some themes still ship it and some do not. An app that adds 200ms to a merchant's Largest Contentful Paint will eventually be uninstalled for reasons the merchant attributes to something else entirely.</p>
 
@@ -849,7 +849,7 @@ saveBar.show();</code></pre>
 
         <p>Development stores are free, unlimited, and can be populated from the CLI's data generators or by duplicating a theme and importing a CSV. Use several: one clean store for reproducing the reviewer's experience, one heavily populated store for pagination and rate limit behaviour, and one with the awkward configuration your largest client has, because multi-location inventory and multi-currency both change API responses in ways that are easy to miss.</p>
 
-        <pre><code class="language-bash"># Trigger a webhook against your local tunnel without creating an
+        <code class="language-bash"># Trigger a webhook against your local tunnel without creating an
 # order. The payload is a fixture, so it will not match your data —
 # useful for verifying the handler, useless for verifying the sync.
 shopify app webhook trigger \
@@ -871,7 +871,7 @@ curl -X POST http://localhost:3000/webhooks/orders \
   -H "X-Shopify-Shop-Domain: dev-store.myshopify.com" \
   -H "X-Shopify-Webhook-Id: $(uuidgen)" \
   -H "X-Shopify-Hmac-Sha256: $SIG" \
-  --data "$BODY"</code></pre>
+  --data "$BODY"</code>
 
         <p>Billing is testable without money. Setting <code>test: true</code> on a subscription produces the full approval flow, a subscription object, and charge records, with nothing taken. Run through it once per plan and once for the cap-reached path, which is the one nobody tests and the one that breaks quietly.</p>
 
@@ -956,16 +956,20 @@ curl -X POST http://localhost:3000/webhooks/orders \
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
-              <p>Connecting custom storefronts to Shopify Storefront GraphQL APIs.</p>
+              <strong><a href="/blog/shopify-app-creation-guide/">Creating a Shopify App: From Scaffold to App Store Submission</a></strong>
+              <p>A comprehensive technical guide to creating, building, and submitting a Shopify app to the A...</p>
             </li>
             <li>
-              <strong><a href="/blog/secure-payment-gateways/">Secure Payment Gateways Integration</a></strong>
-              <p>Understanding the security considerations when integrating payment processors in eCommerce platforms.</p>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
+              <p>Technical guide to syncing customers, orders, inventory, and deals between Magento 2 / Shopi...</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization Strategies</a></strong>
-              <p>Techniques for rendering fast, highly-available eCommerce storefronts under heavy loads.</p>
+              <strong><a href="/blog/built-for-shopify-guide/">Built for Shopify: Requirements, Certification Process &amp; What It Actually Means</a></strong>
+              <p>A technical deep-dive into the Built for Shopify programme, covering App Bridge 4 migration,...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/shopify-theme-creation/">Creating a Shopify Theme: Architecture, Liquid Templating &amp; Theme Store Submission</a></strong>
+              <p>A comprehensive guide to Shopify theme development, from architecture and Liquid templates t...</p>
             </li>
           </ul>
         </div>

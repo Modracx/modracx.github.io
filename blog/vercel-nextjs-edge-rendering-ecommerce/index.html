@@ -200,8 +200,8 @@
         <p class="lede">Their edge middleware invocations went from 9 million a month to 61 million in eleven days, and nobody had shipped a feature. A twelve-line file with no matcher was running on every font and every image.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 24 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 31 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -268,7 +268,7 @@
 
         <p>So the matcher is not a tidiness concern. It is the single most consequential line in the file.</p>
 
-        <pre><code class="language-javascript">// middleware.ts
+        <code class="language-javascript">// middleware.ts
 export const config = {
   matcher: [
     // Everything EXCEPT: static output, image optimiser, API routes,
@@ -276,13 +276,13 @@ export const config = {
     // The final `.*\\..*` clause is what excludes .js, .css, .woff2, .png.
     '/((?!_next/static|_next/image|api|\\.well-known|favicon\\.ico|.*\\..*).*)'
   ]
-};</code></pre>
+};</code>
 
         <p>That negative lookahead is unpleasant to read and I copy it between projects rather than rewriting it, because getting it wrong is expensive in a way that does not show up in testing. There is no test that fails when your middleware runs on 40 million font requests.</p>
 
         <p>A more explicit alternative, which I now prefer on larger projects because it is legible six months later, is to match only the paths that genuinely need a decision:</p>
 
-        <pre><code class="language-javascript">export const config = {
+        <code class="language-javascript">export const config = {
   matcher: [
     '/',
     '/product/:path*',
@@ -290,13 +290,13 @@ export const config = {
     '/search',
     '/account/:path*'
   ]
-};</code></pre>
+};</code>
 
         <p>You lose the catch-all safety net, so a new route section needs a matcher update. I consider that a feature: it makes the cost of middleware a thing somebody decides about rather than a default.</p>
 
         <p>The second discipline is to bail out early. Even within matched paths, most requests do not need the expensive branch.</p>
 
-        <pre><code class="language-javascript">export function middleware(request) {
+        <code class="language-javascript">export function middleware(request) {
   const { pathname } = request.nextUrl;
 
   // Cheapest possible exit. A returned NextResponse.next() with no
@@ -307,7 +307,7 @@ export const config = {
 
   // Only first-time visitors reach anything that costs CPU.
   return assignLocaleAndVariant(request);
-}</code></pre>
+}</code>
 
         <h2>4. What Middleware Can and Cannot Do to a Response</h2>
 
@@ -315,7 +315,7 @@ export const config = {
 
         <p><strong><code>NextResponse.next()</code></strong> — continue to the route. If you pass request headers, downstream server components can read them, which is the sanctioned way to hand a computed value from middleware into rendering:</p>
 
-        <pre><code class="language-javascript">const headers = new Headers(request.headers);
+        <code class="language-javascript">const headers = new Headers(request.headers);
 headers.set('x-geo-country', request.geo?.country ?? 'GB');
 headers.set('x-ab-variant', variant);
 return NextResponse.next({ request: { headers } });
@@ -323,7 +323,7 @@ return NextResponse.next({ request: { headers } });
 // In a server component:
 import { headers } from 'next/headers';
 const h = await headers();               // async since Next 15
-const country = h.get('x-geo-country');</code></pre>
+const country = h.get('x-geo-country');</code>
 
         <p>The catch: calling <code>headers()</code> in a server component opts that route out of static rendering entirely. You have made the page dynamic in order to read a value that middleware computed at the edge. On a product page that is a bad trade — you traded a 15ms cached response for a function invocation. Recognising this trap is most of what separates a fast Next.js storefront from a slow one.</p>
 
@@ -339,7 +339,7 @@ const country = h.get('x-geo-country');</code></pre>
 
         <p>The <code>runtime</code> segment config is a per-route decision and teams tend to make it globally, which is wrong in both directions.</p>
 
-        <pre><code class="language-javascript">// app/api/geo/route.ts — no database, pure header logic. Edge is ideal.
+        <code class="language-javascript">// app/api/geo/route.ts — no database, pure header logic. Edge is ideal.
 export const runtime = 'edge';
 
 export async function GET(request) {
@@ -347,13 +347,13 @@ export async function GET(request) {
     country: request.headers.get('x-vercel-ip-country') ?? 'GB',
     city:    request.headers.get('x-vercel-ip-city')
   });
-}</code></pre>
+}</code>
 
-        <pre><code class="language-javascript">// app/api/checkout/route.ts — Stripe SDK, Prisma, a transaction.
+        <code class="language-javascript">// app/api/checkout/route.ts — Stripe SDK, Prisma, a transaction.
 // Node runtime, and pinned to the region the database is in.
 export const runtime = 'nodejs';
 export const preferredRegion = ['dub1'];   // match the database, not the user
-export const dynamic = 'force-dynamic';</code></pre>
+export const dynamic = 'force-dynamic';</code>
 
         <p>My defaults, which I would defend:</p>
 
@@ -387,7 +387,7 @@ export const dynamic = 'force-dynamic';</code></pre>
 
         <p>A route with a <code>revalidate</code> value is generated on first request (or at build if it is in <code>generateStaticParams</code>), stored in the platform's ISR cache, and served from there. After the revalidation window elapses, the next request still gets the stale copy immediately while a regeneration runs in the background. Nobody waits, except the very first visitor to an ungenerated path.</p>
 
-        <pre><code class="language-javascript">// app/product/[sku]/page.tsx
+        <code class="language-javascript">// app/product/[sku]/page.tsx
 export const revalidate = 300;              // seconds
 export const dynamicParams = true;          // generate unlisted SKUs on demand
 
@@ -396,7 +396,7 @@ export async function generateStaticParams() {
   // 60,000 SKUs at build time is a 90-minute build and a bad idea.
   const top = await getTopSellingSkus(1500);
   return top.map(sku =&gt; ({ sku }));
-}</code></pre>
+}</code>
 
         <p>Three details that are not in the obvious place in the documentation.</p>
 
@@ -410,7 +410,7 @@ export async function generateStaticParams() {
 
         <p>A time window alone means serving stale prices for the duration of the window. For a five-minute window on a promotional launch, that is a customer service problem. The answer is invalidation driven by your source of truth.</p>
 
-        <pre><code class="language-javascript">// app/api/revalidate/route.ts — called by the PIM/ERP webhook.
+        <code class="language-javascript">// app/api/revalidate/route.ts — called by the PIM/ERP webhook.
 import { revalidatePath, revalidateTag } from 'next/cache';
 
 export const runtime = 'nodejs';
@@ -432,13 +432,13 @@ export async function POST(request) {
   if (priceChanged) revalidateTag('sitemap-prices');
 
   return Response.json({ ok: true, at: Date.now() });
-}</code></pre>
+}</code>
 
         <p>Tags are the more maintainable half of this. Attach a tag at the fetch site and you can invalidate a concept rather than enumerating routes:</p>
 
-        <pre><code class="language-javascript">const res = await fetch(`${API}/products/${sku}`, {
+        <code class="language-javascript">const res = await fetch(`${API}/products/${sku}`, {
   next: { tags: [`product-${sku}`, `brand-${brandId}`], revalidate: 300 }
-});</code></pre>
+});</code>
 
         <p>Then a brand-wide price update is one <code>revalidateTag</code> call on the brand tag rather than a loop over four hundred paths.</p>
 
@@ -450,28 +450,28 @@ export async function POST(request) {
 
         <p>The practical consequence of upgrading without noticing is a large increase in origin traffic and function duration, because calls that used to hit the data cache now go to your API every time. It does not error. It does not warn. Your commerce API bill and your p75 both move.</p>
 
-        <pre><code class="language-javascript">// Next 15+: be explicit at every fetch site. Silence is now "no cache".
+        <code class="language-javascript">// Next 15+: be explicit at every fetch site. Silence is now "no cache".
 const product = await fetch(url, { next: { revalidate: 300, tags: [tag] } });
 const config  = await fetch(cfgUrl, { cache: 'force-cache' });   // rarely changes
-const cart    = await fetch(cartUrl, { cache: 'no-store' });     // never cache</code></pre>
+const cart    = await fetch(cartUrl, { cache: 'no-store' });     // never cache</code>
 
         <p>I now grep for bare <code>fetch(</code> calls in server code during review. Every one of them should carry an explicit caching intent, the same way every database query should have a considered index.</p>
 
         <p>For non-<code>fetch</code> data access — a database client, an SDK — wrap it, because the data cache only knows about <code>fetch</code>:</p>
 
-        <pre><code class="language-javascript">import { unstable_cache } from 'next/cache';
+        <code class="language-javascript">import { unstable_cache } from 'next/cache';
 
 export const getStockLevel = unstable_cache(
   async (sku) =&gt; db.inventory.findFirst({ where: { sku } }),
   ['stock'],                                  // key prefix
   { revalidate: 60, tags: ['inventory'] }
-);</code></pre>
+);</code>
 
         <h2>10. Streaming, Suspense, and Partial Prerendering</h2>
 
         <p>The most useful thing streaming buys an ecommerce page is that one slow query stops holding the whole document hostage. Recommendations, reviews and stock indicators are exactly the sort of thing that is slow, non-critical, and — importantly — not needed for indexing.</p>
 
-        <pre><code class="language-jsx">export default async function ProductPage({ params }) {
+        <code class="language-jsx">export default async function ProductPage({ params }) {
   const { sku } = await params;              // async params since Next 15
   const product = await getProduct(sku);     // fast, cached, must be in the shell
 
@@ -491,7 +491,7 @@ export const getStockLevel = unstable_cache(
       &lt;/Suspense&gt;
     &lt;/&gt;
   );
-}</code></pre>
+}</code>
 
         <p>The rule I hold to: product name, price, availability, description and structured data go in the shell. Everything else may stream. Google does process streamed content, but the shell is what is guaranteed and immediate, and there is no upside to putting your price in a Suspense boundary.</p>
 
@@ -515,7 +515,7 @@ export const getStockLevel = unstable_cache(
 
         <p>The diagnosis is quick once you know where to look. The build output tells you what each route is, and the response headers tell you what actually happened.</p>
 
-        <pre><code class="language-bash"># Build output legend: ○ static, ● SSG, ƒ dynamic. Anything you expected
+        <code class="language-bash"># Build output legend: ○ static, ● SSG, ƒ dynamic. Anything you expected
 # to be static and shows as ƒ is a route that will invoke a function.
 next build | grep -E '^\s*[○●ƒλ]' | head -40
 
@@ -524,7 +524,7 @@ curl -sI https://shop.example.com/product/oak-side-table | grep -i x-vercel-cach
 # HIT      served from cache, no function ran
 # STALE    served from cache, regeneration running in background
 # MISS     generated now, visitor waited
-# BYPASS   route is dynamic; every request runs a function</code></pre>
+# BYPASS   route is dynamic; every request runs a function</code>
 
         <p>A route reporting <code>BYPASS</code> that you believed was static is the single highest-value finding available on this platform, and it takes one curl to get.</p>
 
@@ -549,13 +549,13 @@ curl -sI https://shop.example.com/product/oak-side-table | grep -i x-vercel-cach
 
         <p>The pattern I use on a dynamic-but-shareable route — a category listing with a filter, say — is to cache hard at the CDN and not at all in the browser, so a customer navigating back sees fresh content while the CDN absorbs the load:</p>
 
-        <pre><code class="language-javascript">return new Response(html, {
+        <code class="language-javascript">return new Response(html, {
   headers: {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'private, no-cache',                 // browser: always revalidate
     'vercel-cdn-cache-control': 'max-age=300, stale-while-revalidate=86400'
   }
-});</code></pre>
+});</code>
 
         <p>Do not set <code>Cache-Control</code> manually on a page that uses ISR. You will either fight the platform's own header or accidentally make a page cacheable in browsers that should not be, and browser caches cannot be purged. That last point deserves emphasis: an over-long <code>max-age</code> on an HTML document is not recoverable. You cannot invalidate it, and the customer will keep seeing a stale price until it expires. I have watched a team discover this on a Black Friday price they could not retract.</p>
 
@@ -569,7 +569,7 @@ curl -sI https://shop.example.com/product/oak-side-table | grep -i x-vercel-cach
 
         <p><strong>Image optimisation.</strong> Priced per source image transformed, not per delivered image. A catalogue refresh that changes 60,000 product photos is a bill on the day it lands. Two mitigations: set <code>images.minimumCacheTTL</code> high, and constrain <code>deviceSizes</code> so you are not generating eight widths of every image nobody requests at those sizes.</p>
 
-        <pre><code class="language-javascript">// next.config.js — fewer variants, cached longer.
+        <code class="language-javascript">// next.config.js — fewer variants, cached longer.
 module.exports = {
   images: {
     deviceSizes: [640, 828, 1080, 1920],   // four, not the default eight
@@ -577,7 +577,7 @@ module.exports = {
     formats: ['image/avif', 'image/webp'],
     minimumCacheTTL: 60 * 60 * 24 * 31     // product photos do not change hourly
   }
-};</code></pre>
+};</code>
 
         <p><strong>Bandwidth.</strong> Frequently the largest line on an image-heavy catalogue, and the one people never think of as an application concern.</p>
 
@@ -593,13 +593,13 @@ module.exports = {
 
         <p><strong>Every branch gets a public URL.</strong> Left alone, those get discovered and indexed, producing duplicate content across dozens of hostnames and occasionally outranking production for long-tail queries. Turn on deployment protection, and belt-and-braces it in middleware:</p>
 
-        <pre><code class="language-javascript">export function middleware(request) {
+        <code class="language-javascript">export function middleware(request) {
   const res = NextResponse.next();
   if (process.env.VERCEL_ENV !== 'production') {
     res.headers.set('x-robots-tag', 'noindex, nofollow');
   }
   return res;
-}</code></pre>
+}</code>
 
         <p><strong>Version skew.</strong> A customer with your site open when you deploy has old client JavaScript requesting chunks that no longer exist, and old server action ids that the new deployment does not recognise. The symptom is a burst of client errors in the minutes after every deploy that everyone learns to ignore. Skew protection pins a session to its original deployment for a configured window and makes the problem go away; it is off by default and I turn it on for every commerce project.</p>
 
@@ -649,10 +649,10 @@ module.exports = {
 
         <p><strong>Soft 404s on generated pages.</strong> A missing SKU that renders a "not found" component with a 200 status is thin content in the index. Call <code>notFound()</code> so the framework sets the status, and verify with curl rather than with your eyes.</p>
 
-        <pre><code class="language-javascript">import { notFound } from 'next/navigation';
+        <code class="language-javascript">import { notFound } from 'next/navigation';
 
 const product = await getProduct(sku);
-if (!product) notFound();       // real 404 status, not a 200 with sad text</code></pre>
+if (!product) notFound();       // real 404 status, not a 200 with sad text</code>
 
         <h2>17. When I Would Not Use This Stack</h2>
 
@@ -703,12 +703,20 @@ if (!product) notFound();       // real 404 status, not a 200 with sad text</cod
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/edge-personalization/">Leveraging Edge Computing for Real-Time Personalization</a></strong>
-              <p>Vercel Edge functions and KV storage.</p>
+              <strong><a href="/blog/edge-computing-ecommerce/">Edge Computing in Modern E-Commerce Infrastructure</a></strong>
+              <p>What actually runs at the edge: V8 isolates, the missing TCP sockets, CPU budgets, and why c...</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
-              <p>Next.js ISR static regeneration.</p>
+              <strong><a href="/blog/edge-personalization/">Leveraging Edge Computing for Real-Time Personalization</a></strong>
+              <p>Geo and segment personalisation at the edge without destroying cacheability: cache keys inst...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Decoupling Front-End &amp; Back-End</a></strong>
+              <p>An honest engineering assessment of headless commerce: what decoupling genuinely buys you, t...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/micro-frontend-architecture/">Micro-Frontend Architecture for Enterprise E-Commerce Storefronts</a></strong>
+              <p>When micro-frontends are the wrong choice, and how to implement Module Federation on a store...</p>
             </li>
           </ul>
         </div>

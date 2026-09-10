@@ -99,7 +99,7 @@
         "url": "https://www.modracx.com/og-image.png"
       }
     },
-    "timeRequired": "PT22M"
+    "timeRequired": "PT26M"
   }
   </script>
   <script type="application/ld+json">
@@ -185,8 +185,8 @@
         <p class="lede">It was Black Friday when the ecommerce catalogue went entirely dark—a cascading failure caused by a "mapping explosion" combined with undersized heap on a solitary node attempting to act as both cluster manager and data store.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 26 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture & Cloud</a></span>
         </div>
       </div>
 
@@ -304,7 +304,7 @@
         
         <p>Here is a complete, runnable bash script to install OpenSearch 2.11 on a fresh Ubuntu 22.04 server:</p>
 
-<pre><code>#!/bin/bash
+<code>#!/bin/bash
 # OpenSearch Installation Script for Ubuntu 22.04
 # Author: Kenneth D'Silva | MODRACX
 
@@ -318,7 +318,7 @@ sudo swapoff -a
 sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
 # Apply sysctl settings for mmap count and swappiness
-cat <<EOF | sudo tee /etc/sysctl.d/99-opensearch.conf
+cat &lt;&lt;EOF | sudo tee /etc/sysctl.d/99-opensearch.conf
 vm.max_map_count=262144
 vm.swappiness=1
 net.ipv4.tcp_retries2=5
@@ -339,7 +339,7 @@ sudo apt-get install -y opensearch
 
 echo "[5/6] Configuring systemd service limits..."
 sudo mkdir -p /etc/systemd/system/opensearch.service.d/
-cat <<EOF | sudo tee /etc/systemd/system/opensearch.service.d/override.conf
+cat &lt;&lt;EOF | sudo tee /etc/systemd/system/opensearch.service.d/override.conf
 [Service]
 LimitMEMLOCK=infinity
 LimitNOFILE=65535
@@ -348,7 +348,7 @@ EOF
 sudo systemctl daemon-reload
 
 echo "[6/6] Installation complete. Do not start the service until opensearch.yml is configured."
-</code></pre>
+</code>
 
         <h2>Configuring the Core Architecture</h2>
 
@@ -357,7 +357,7 @@ echo "[6/6] Installation complete. Do not start the service until opensearch.yml
         <h3>opensearch.yml Deep-Dive</h3>
         <p>The primary configuration file is `opensearch.yml`. Below is an annotated configuration for a data node within a cluster named `catalogue-cluster`. I have specifically included performance-tuning settings that I use in high-throughput environments.</p>
 
-<pre><code>cluster.name: catalogue-cluster
+<code>cluster.name: catalogue-cluster
 node.name: data-node-01
 
 # Role Definition: Dictates what tasks this node can perform
@@ -396,21 +396,21 @@ plugins.security.ssl.http.pemkey_filepath: certs/http-key.pem
 plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
 plugins.security.allow_unsafe_democertificates: false
 plugins.security.allow_default_init_securityindex: true
-</code></pre>
+</code>
         
         <p>Setting `bootstrap.memory_lock: true` is vital. This tells the JVM to lock its heap in memory, preventing the OS from swapping it out, which would cause severe garbage collection pauses. Furthermore, configuring `cluster.routing.allocation.node_concurrent_recoveries` prevents a cascading failure when a node reboots by limiting how many shards it attempts to rebuild simultaneously.</p>
 
         <h3>JVM Options and Garbage Collection</h3>
         <p>Modify `/etc/opensearch/jvm.options` to set your heap size and garbage collector. For a server with 64GB of RAM, set the heap to 31GB.</p>
 
-<pre><code>-Xms31g
+<code>-Xms31g
 -Xmx31g
 
 # Use G1GC (Garbage First Garbage Collector)
 -XX:+UseG1GC
 -XX:G1ReservePercent=25
 -XX:InitiatingHeapOccupancyPercent=30
-</code></pre>
+</code>
 
         <h2>Security Plugin Configuration</h2>
         
@@ -419,7 +419,7 @@ plugins.security.allow_default_init_securityindex: true
         <h3>TLS Certificate Generation</h3>
         <p>You cannot run a secure cluster without TLS for both the HTTP (client) and Transport (node-to-node) layers. Here are the exact openssl commands to generate a Root CA, an admin certificate, and a node certificate. I run these commands in a secure vault before provisioning the cluster.</p>
         
-<pre><code># Generate Root CA
+<code># Generate Root CA
 openssl genrsa -out root-ca-key.pem 2048
 openssl req -new -x509 -sha256 -key root-ca-key.pem -subj "/C=GB/ST=London/L=London/O=MODRACX/OU=Engineering/CN=root.modracx.internal" -out root-ca.pem -days 730
 
@@ -434,14 +434,14 @@ openssl genrsa -out node-key-temp.pem 2048
 openssl pkcs8 -inform PEM -outform PEM -in node-key-temp.pem -topk8 -nocrypt -v1 PBE-SHA1-3DES -out node-key.pem
 openssl req -new -key node-key.pem -subj "/C=GB/ST=London/L=London/O=MODRACX/OU=Engineering/CN=data-node-01" -out node.csr
 openssl x509 -req -in node.csr -CA root-ca.pem -CAkey root-ca-key.pem -CAcreateserial -sha256 -out node.pem -days 730
-</code></pre>
+</code>
 
         <h3>Defining Users and Roles</h3>
         <p>The `internal_users.yml` file stores your local user database. You must generate bcrypt hashes for passwords using the bundled hash tool. Navigate to `/usr/share/opensearch/plugins/opensearch-security/tools/` and run `./hash.sh -p 'YourSecurePassword123!'`. You will receive a hash like `$2y$12$....`.</p>
         
         <p>Next, define a role in `roles.yml`. Here is a concrete example of a read-only reporting role that only grants access to index data without allowing structural changes:</p>
         
-<pre><code>reporting_reader:
+<code>reporting_reader:
   cluster_permissions:
     - cluster_composite_ops_ro
   index_permissions:
@@ -451,14 +451,14 @@ openssl x509 -req -in node.csr -CA root-ca.pem -CAkey root-ca-key.pem -CAcreates
       allowed_actions:
         - read
         - search
-</code></pre>
+</code>
 
         <p>Finally, bind the user to the role in `roles_mapping.yml`:</p>
-<pre><code>reporting_reader:
+<code>reporting_reader:
   reserved: false
   users:
     - "bi_reporting_user"
-</code></pre>
+</code>
 
         <h2>Index Mapping Deep-Dive and the "Mapping Explosion" Trap</h2>
 
@@ -474,7 +474,7 @@ openssl x509 -req -in node.csr -CA root-ca.pem -CAkey root-ca-key.pem -CAcreates
 
         <p>Here is a full product index mapping JSON demonstrating text and keyword multi-fields, nested objects for variants, integer types for stock levels, and a date type for created_at timestamps. In an archive index, I often disable `_source` entirely to save disk space, though I have left it enabled here for typical eCommerce use.</p>
 
-<pre><code>PUT /ecommerce_products
+<code>PUT /ecommerce_products
 {
   "mappings": {
     "dynamic": "strict",
@@ -519,7 +519,7 @@ openssl x509 -req -in node.csr -CA root-ca.pem -CAkey root-ca-key.pem -CAcreates
     }
   }
 }
-</code></pre>
+</code>
         <p>By enforcing strict mappings, we ensure that a rogue microservice pushing malformed JSON will simply receive an ingestion error, rather than poisoning our cluster state. For complex eCommerce schemas, see our guide on <a href="/blog/performance-optimization/">Performance Optimization</a> which discusses data structuring for search engines.</p>
 
         <h2>Index Lifecycle Management via ISM Policy</h2>
@@ -528,7 +528,7 @@ openssl x509 -req -in node.csr -CA root-ca.pem -CAkey root-ca-key.pem -CAcreates
         
         <p>Here is a complete ISM policy JSON that implements a Hot-Warm-Cold architecture. It keeps indices in a hot phase until they reach 50GB or 30 days of age, at which point it rolls them over. It then moves them to a warm phase where replicas are dropped to 0 and segments are force-merged. Finally, it transitions to a cold phase and eventually deletes the index after 365 days.</p>
 
-<pre><code>PUT _plugins/_ism/policies/logs_lifecycle
+<code>PUT _plugins/_ism/policies/logs_lifecycle
 {
   "policy": {
     "description": "Hot-Warm-Cold-Delete lifecycle for log indices",
@@ -604,7 +604,7 @@ openssl x509 -req -in node.csr -CA root-ca.pem -CAkey root-ca-key.pem -CAcreates
     ]
   }
 }
-</code></pre>
+</code>
 
         <h2>Query Performance and Profiling</h2>
         
@@ -620,19 +620,19 @@ openssl x509 -req -in node.csr -CA root-ca.pem -CAkey root-ca-key.pem -CAcreates
 
         <p>To identify slow queries proactively, enable the slow query log. This setting logs any query exceeding a specific threshold to your OpenSearch log directory:</p>
 
-<pre><code>PUT /_settings
+<code>PUT /_settings
 {
   "index.search.slowlog.threshold.query.warn": "2s",
   "index.search.slowlog.threshold.query.info": "1s",
   "index.search.slowlog.threshold.fetch.warn": "1s"
 }
-</code></pre>
+</code>
 
         <h2>Monitoring and Observability</h2>
         
         <p>Visibility into your cluster state is non-negotiable. OpenSearch Dashboards is the native visual interface for cluster management. Below is a docker-compose snippet that sets up Dashboards connected to an existing OpenSearch node.</p>
 
-<pre><code>version: '3'
+<code>version: '3'
 services:
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:2.11.0
@@ -642,11 +642,11 @@ services:
     environment:
       OPENSEARCH_HOSTS: '["https://10.0.1.15:9200"]'
     # Mount custom dashboards config here
-</code></pre>
+</code>
 
         <p>For automated health checks, a simple Python script querying the Cluster Health API can trigger alerts if the cluster state changes from green to yellow or red.</p>
         
-<pre><code>import requests
+<code>import requests
 import sys
 
 response = requests.get('https://10.0.1.15:9200/_cluster/health', auth=('admin', 'your_password'), verify=False)
@@ -658,7 +658,7 @@ if data['status'] != 'green':
     sys.exit(1)
 print("Cluster health is OK.")
 sys.exit(0)
-</code></pre>
+</code>
 
         <p>Additionally, you can leverage the native OpenSearch Notifications plugin to configure webhooks directly to Slack or Microsoft Teams whenever specific thresholds (e.g., CPU &gt; 90%) are breached.</p>
 
@@ -668,7 +668,7 @@ sys.exit(0)
         
         <p>First, register the S3 snapshot repository via the REST API. You will need the repository-s3 plugin installed on all nodes.</p>
 
-<pre><code>PUT _snapshot/s3_backup
+<code>PUT _snapshot/s3_backup
 {
   "type": "s3",
   "settings": {
@@ -678,7 +678,7 @@ sys.exit(0)
     "compress": true
   }
 }
-</code></pre>
+</code>
         
         <p>Once the repository is registered, you can create a snapshot policy using the ISM plugin to automate daily backups and prune snapshots older than 30 days. This removes the need for brittle shell scripts managing backups via cron.</p>
 
@@ -728,7 +728,7 @@ sys.exit(0)
 
         <p>You can apply these settings dynamically via the cluster update API:</p>
 
-<pre><code>PUT /_cluster/settings
+<code>PUT /_cluster/settings
 {
   "persistent": {
     "thread_pool.search.size": 17,
@@ -737,7 +737,7 @@ sys.exit(0)
     "thread_pool.write.queue_size": 200
   }
 }
-</code></pre>
+</code>
         <p><em>(Assuming a 16-core machine)</em></p>
 
         <h3>Hardening Circuit Breakers</h3>
@@ -749,7 +749,7 @@ sys.exit(0)
 
         <p>The request circuit breaker (<code>indices.breaker.request.limit</code>) limits the memory a single request can consume during its execution phase. I configure this to 60%. If a single query attempts to consume more than 60% of a 31GB heap (roughly 18GB of RAM), it is a poorly constructed query that must be killed before it impacts other tenants.</p>
 
-<pre><code>PUT /_cluster/settings
+<code>PUT /_cluster/settings
 {
   "persistent": {
     "indices.breaker.total.limit": "95%",
@@ -757,7 +757,7 @@ sys.exit(0)
     "indices.breaker.request.limit": "60%"
   }
 }
-</code></pre>
+</code>
 
         <h3>Lucene Segment Merge Policy</h3>
         <p>Every time you index documents, OpenSearch writes them to new Lucene segments. Over time, having thousands of small segments destroys search performance. OpenSearch runs background threads to merge these segments.</p> 
@@ -766,12 +766,12 @@ sys.exit(0)
 
         <p>Furthermore, we must tune the Lucene <code>tieredMergePolicy</code>. By default, OpenSearch might allow segments to grow infinitely or merge too aggressively. I enforce a strict <code>maxMergedSegmentMB</code> of 5120 (5GB) and set <code>segmentsPerTier</code> to 10. This means that once a segment reaches 5GB, it will no longer be merged with other segments. This provides highly predictable I/O patterns. A 5GB segment is large enough to be extremely efficient for querying, but small enough that if it needs to be relocated to another node, it won't saturate the network interface for hours.</p>
 
-<pre><code>PUT /_settings
+<code>PUT /_settings
 {
   "index.merge.policy.max_merged_segment": "5120mb",
   "index.merge.policy.segments_per_tier": 10
 }
-</code></pre>
+</code>
 
         <h3>Disk I/O and Linux Scheduler Tuning</h3>
         <p>OpenSearch's background segment merging is incredibly I/O intensive. By default, many Linux distributions use the <code>mq-deadline</code> or <code>bfq</code> I/O scheduler. These schedulers are designed to provide fairness across multiple processes and prioritise interactive tasks, which is completely counterproductive for a dedicated database node.</p> 
@@ -779,11 +779,11 @@ sys.exit(0)
         <p>For OpenSearch data nodes equipped with NVMe SSDs, you must change the I/O scheduler to <code>none</code> (or <code>noop</code> on older kernels). This allows the NVMe controller's internal hardware queues to handle request ordering natively, eliminating the kernel's CPU overhead for reordering I/O requests. In a production cluster running on AWS <code>i3en</code> instances, switching the scheduler to <code>none</code> reduced our disk wait times (iowait) from an average of 12% to under 2% during heavy ingestion phases.</p>
 
         <p>You can verify your current scheduler with:</p>
-<pre><code>cat /sys/block/nvme0n1/queue/scheduler
-</code></pre>
+<code>cat /sys/block/nvme0n1/queue/scheduler
+</code>
         <p>And set it to <code>none</code> permanently by configuring <code>/etc/udev/rules.d/60-scheduler.rules</code>:</p>
-<pre><code>ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/scheduler}="none"
-</code></pre>
+<code>ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/scheduler}="none"
+</code>
         <p>This seemingly minor operating system tweak often yields a greater performance uplift during write-heavy workloads than weeks of application-level query tuning.</p>
 
 
@@ -807,7 +807,7 @@ sys.exit(0)
 
         <p>Here is the exact API call to create a filtered alias using a terms filter:</p>
 
-<pre><code>POST /_aliases
+<code>POST /_aliases
 {
   "actions": [
     {
@@ -834,7 +834,7 @@ sys.exit(0)
     }
   ]
 }
-</code></pre>
+</code>
 
         <p>When the application queries <code>tenant_1049_catalogue</code>, OpenSearch automatically rewrites the query at the coordinating node level to include the <code>term: { "tenant_id": "1049" }</code> filter.</p> 
 
@@ -845,23 +845,23 @@ sys.exit(0)
 
         <p>For a multi-tenant shared index, broadcasting every query to all shards is massively inefficient. Instead, you should use the <code>tenant_id</code> as the routing key.</p> 
 
-<pre><code>PUT /global_catalogue/_doc/prod_991?routing=1049
+<code>PUT /global_catalogue/_doc/prod_991?routing=1049
 {
   "tenant_id": "1049",
   "sku": "X-100",
   "title": "Industrial Widget"
 }
-</code></pre>
+</code>
 
         <p>By explicitly setting the routing parameter, OpenSearch hashes the <code>tenant_id</code> instead of the document ID. This guarantees that all documents for Tenant 1049 are stored on the exact same single shard. When querying, you pass the same routing key:</p>
 
-<pre><code>GET /global_catalogue/_search?routing=1049
+<code>GET /global_catalogue/_search?routing=1049
 {
   "query": {
     "term": { "tenant_id": "1049" }
   }
 }
-</code></pre>
+</code>
 
         <p>The coordinating node now knows precisely which shard holds all of Tenant 1049's data. It sends the request to that single shard and skips the scatter-gather phase entirely. In a cluster with 30 primary shards, this reduces the query overhead by 96%, allowing a dramatically higher throughput on the exact same hardware footprint. This single routing parameter is often the difference between a cluster supporting 5,000 requests per second versus collapsing at 200 requests per second.</p>
 
@@ -884,12 +884,20 @@ sys.exit(0)
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization</a></strong>
-              <p>Deep dive into systemic performance tuning for web platforms.</p>
+              <strong><a href="/blog/prestashop-installation-guide/">PrestaShop Installation &amp; Store Creation: Technical Setup on Linux</a></strong>
+              <p>A comprehensive technical guide to installing and configuring PrestaShop 8 on a Linux stack,...</p>
             </li>
             <li>
-              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 on AWS</a></strong>
-              <p>Learn how to deploy monolithic applications on distributed cloud architecture.</p>
+              <strong><a href="/blog/odoo-store-creation-guide/">Odoo eCommerce Store Creation: Installation, Configuration &amp; Launch Guide</a></strong>
+              <p>A comprehensive technical guide to building an Odoo eCommerce store, covering Linux server s...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/elasticsearch-installation-guide/">Elasticsearch Installation &amp; Production Configuration: The Engineering Blueprint</a></strong>
+              <p>A comprehensive technical guide to installing, configuring, and maintaining Elasticsearch fo...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/platform-store-creation-guide/">Wix, BigCommerce, PrestaShop &amp; WordPress: Platform Store Creation Compared</a></strong>
+              <p>A technical deep dive comparing store creation, installation, limits, and developer workflow...</p>
             </li>
           </ul>
         </div>

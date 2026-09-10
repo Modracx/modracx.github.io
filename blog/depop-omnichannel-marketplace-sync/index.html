@@ -200,8 +200,8 @@
         <p class="lede">A Manchester vintage reseller oversold 137 items in one Saturday. The sync tool was not broken — it polled every fifteen minutes, and on Black Friday that was forty times too slow.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 23 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 34 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -307,7 +307,7 @@
 
         <p>This is what I build. The window shrinks from minutes to whatever your queue latency plus the marketplace's propagation delay is, typically two to ten seconds. It's an order of magnitude better and it costs an order of magnitude fewer API calls, because you only push when something changed.</p>
 
-        <pre><code class="language-javascript">// One event in, N channel updates out. The queue is doing the
+        <code class="language-javascript">// One event in, N channel updates out. The queue is doing the
 // durability work; the worker only has to be idempotent.
 async function onInventoryChanged(event) {
   // event: { sku, availableAfter, reason, sourceChannel, occurredAt, version }
@@ -325,7 +325,7 @@ async function onInventoryChanged(event) {
         idempotencyKey: `${c.channel}:${event.sku}:${event.version}`
       }))
   );
-}</code></pre>
+}</code>
 
         <p>The <code>version</code> field is the piece people leave out and then spend a fortnight debugging. Without it, two updates for the same SKU can be processed out of order by two workers and the older number wins. More on that below.</p>
 
@@ -345,7 +345,7 @@ async function onInventoryChanged(event) {
 
         <p>An append-only ledger of movements, with availability derived by summation, costs slightly more in query time and saves you weeks.</p>
 
-        <pre><code class="language-sql">CREATE TABLE inventory_movement (
+        <code class="language-sql">CREATE TABLE inventory_movement (
   id            BIGSERIAL PRIMARY KEY,
   sku           TEXT        NOT NULL,
   location_id   TEXT        NOT NULL,
@@ -361,18 +361,18 @@ async function onInventoryChanged(event) {
 );
 
 CREATE INDEX ON inventory_movement (sku, location_id) INCLUDE (delta);
-CREATE INDEX ON inventory_movement (expires_at) WHERE expires_at IS NOT NULL;</code></pre>
+CREATE INDEX ON inventory_movement (expires_at) WHERE expires_at IS NOT NULL;</code>
 
         <p>Availability is then a sum, with expired reservations excluded:</p>
 
-        <pre><code class="language-sql">-- On hand minus live reservations. Expired holds fall out automatically.
+        <code class="language-sql">-- On hand minus live reservations. Expired holds fall out automatically.
 SELECT sku,
        SUM(delta) FILTER (
          WHERE expires_at IS NULL OR expires_at &gt; now()
        ) AS available
 FROM inventory_movement
 WHERE sku = $1
-GROUP BY sku;</code></pre>
+GROUP BY sku;</code>
 
         <p>For a catalogue of any size you'd materialise this into a summary table updated by trigger or by the same worker that writes the movement, and keep the ledger for audit. But start with the sum. Premature materialisation of an inventory number is how you end up with two sources of truth that disagree, which is worse than one slow query.</p>
 
@@ -386,7 +386,7 @@ GROUP BY sku;</code></pre>
 
         <p>The buffer should not be a flat number. A flat buffer of three is enormous on a SKU with four units and negligible on one with four hundred.</p>
 
-        <pre><code class="language-javascript">// Buffer scales with how fast the SKU sells and how slow the channel is.
+        <code class="language-javascript">// Buffer scales with how fast the SKU sells and how slow the channel is.
 // velocity = units sold per hour over the trailing 7 days
 function bufferFor(channel, sku, onHand, velocity) {
   // How long, realistically, between us learning of a sale and the
@@ -405,7 +405,7 @@ function bufferFor(channel, sku, onHand, velocity) {
   // than a fifth of the pool away from a healthy SKU.
   if (onHand &lt;= 2) return 0;
   return Math.min(exposure, Math.floor(onHand * 0.2), 10);
-}</code></pre>
+}</code>
 
         <p>Note the <code>onHand &lt;= 2</code> escape. Buffering a SKU with two units down to one, or one down to zero, converts a small oversell risk into a guaranteed lost sale. For the one-of-one case — most of Depop — buffers are simply not a tool you have.</p>
 
@@ -419,7 +419,7 @@ function bufferFor(channel, sku, onHand, velocity) {
 
         <p>Small window: event-driven push, and delisting rather than zeroing where the channel supports it. Setting quantity to zero on eBay leaves the listing findable and, on some listing types, buyable again the moment your next sync gets confused. Ending the listing is unambiguous.</p>
 
-        <pre><code class="language-javascript">// For one-of-one stock, don't set quantity 0 — end the listing.
+        <code class="language-javascript">// For one-of-one stock, don't set quantity 0 — end the listing.
 // Fire all channels in parallel; a sequential loop means the fourth
 // channel learns about the sale four round trips late.
 async function itemSold(sku, winningChannel) {
@@ -441,7 +441,7 @@ async function itemSold(sku, winningChannel) {
       });
     }
   });
-}</code></pre>
+}</code>
 
         <p><code>Promise.allSettled</code> rather than <code>Promise.all</code> is deliberate. With <code>all</code>, one channel timing out means you never find out whether the other two succeeded, and you retry all three. With <code>allSettled</code> you retry only what failed.</p>
 
@@ -457,7 +457,7 @@ async function itemSold(sku, winningChannel) {
 
         <p>Run them as separate pipelines with separate queues and separate rate-limit budgets. If they share a queue, a bulk listing update of 4,000 products will starve your inventory pushes for twenty minutes, which is precisely the failure mode you built the event system to avoid.</p>
 
-        <pre><code class="language-javascript">// Separate transport, separate priority, separate budget.
+        <code class="language-javascript">// Separate transport, separate priority, separate budget.
 const queues = {
   inventory: new Queue('inv',  { concurrency: 8, rateLimit: 'high' }),
   listings:  new Queue('list', { concurrency: 2, rateLimit: 'low'  }),
@@ -466,7 +466,7 @@ const queues = {
 
 // Listing pushes yield to inventory pushes when the shared API
 // budget gets tight. Inventory correctness beats catalogue freshness.
-queues.listings.pause = () =&gt; rateLimiter.remaining('ebay') &lt; 200;</code></pre>
+queues.listings.pause = () =&gt; rateLimiter.remaining('ebay') &lt; 200;</code>
 
         <p>That last rule — listings yield to inventory when the budget is low — is one I'd hold firmly. A stale product description costs nothing. A stale quantity costs a refund and a rating.</p>
 
@@ -478,7 +478,7 @@ queues.listings.pause = () =&gt; rateLimiter.remaining('ebay') &lt; 200;</code><
 
         <p>Build the mapping as data, not code. A table per channel, versioned, editable by the merchandising team without a deploy.</p>
 
-        <pre><code class="language-sql">CREATE TABLE channel_attribute_map (
+        <code class="language-sql">CREATE TABLE channel_attribute_map (
   channel        TEXT NOT NULL,
   internal_field TEXT NOT NULL,   -- 'size', 'colour', 'condition'
   internal_value TEXT NOT NULL,   -- 'UK 12'
@@ -497,7 +497,7 @@ LEFT JOIN channel_attribute_map m
  AND m.internal_field = 'size'
  AND m.internal_value = p.size
 WHERE m.external_value IS NULL
-  AND p.status = 'active';</code></pre>
+  AND p.status = 'active';</code>
 
         <p>That last query is the difference between a controlled rollout and a Monday morning of 400 listing rejections. Validate mappings exist before you publish. Marketplaces reject listings asynchronously and often with error text that means nothing, and tracing "error 21916584" back to a missing size mapping is an afternoon you don't need to spend.</p>
 
@@ -509,7 +509,7 @@ WHERE m.external_value IS NULL
 
         <p>Track spend as a first-class metric. Not as a log line — as a gauge on a dashboard with an alert at seventy percent.</p>
 
-        <pre><code class="language-javascript">// Token bucket that reads the marketplace's own headers rather than
+        <code class="language-javascript">// Token bucket that reads the marketplace's own headers rather than
 // guessing. Guessing is how you get banned during a promotion.
 class ChannelLimiter {
   constructor(channel, floor = 100) {
@@ -533,7 +533,7 @@ class ChannelLimiter {
     if (priority === 'critical') return this.remaining &gt; 0;
     return this.remaining &gt; this.floor;
   }
-}</code></pre>
+}</code>
 
         <p>On backoff: retry with exponential delay and jitter, and treat 429 differently to 5xx. A 429 with a <code>Retry-After</code> header is an instruction, and ignoring it to retry after your own computed delay is how an application gets throttled harder. A 5xx is the marketplace having a bad time and you should back off aggressively because so is everyone else, which is exactly when a thundering herd of synchronised retries makes it worse. Jitter is not optional.</p>
 
@@ -543,7 +543,7 @@ class ChannelLimiter {
 
         <p>Every channel will deliver you the same order more than once eventually. Webhook retries, a resync after an outage, an operator clicking "reimport". Your ingestion has to be idempotent on the marketplace's order id, and that has to be enforced at the database level rather than by an <code>if (exists)</code> check, because two workers will run that check simultaneously and both will find nothing.</p>
 
-        <pre><code class="language-sql">-- Enforced in the schema. Application-level checks race; this doesn't.
+        <code class="language-sql">-- Enforced in the schema. Application-level checks race; this doesn't.
 CREATE TABLE marketplace_order (
   id              BIGSERIAL PRIMARY KEY,
   channel         TEXT NOT NULL,
@@ -555,9 +555,9 @@ CREATE TABLE marketplace_order (
   payload         JSONB NOT NULL,
   received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (channel, external_id)
-);</code></pre>
+);</code>
 
-        <pre><code class="language-javascript">// Insert-or-ignore, then only advance status if the update is newer.
+        <code class="language-javascript">// Insert-or-ignore, then only advance status if the update is newer.
 async function ingestOrder(channel, order) {
   const res = await db.query(`
     INSERT INTO marketplace_order (channel, external_id, external_status,
@@ -576,7 +576,7 @@ async function ingestOrder(channel, order) {
   if (res.rows[0]?.inserted) {
     await recordSale(channel, order);
   }
-}</code></pre>
+}</code>
 
         <p>The <code>xmax = 0</code> trick tells you whether Postgres inserted or updated, which is what you need to decide whether to touch inventory. It's obscure and it works.</p>
 
@@ -590,7 +590,7 @@ async function ingestOrder(channel, order) {
 
         <p>That sounds obvious and roughly half the integrations I've reviewed get it wrong, usually because the marketplace's return webhook fires at authorisation and the developer wired the obvious event to the obvious action.</p>
 
-        <pre><code class="language-javascript">// Returns move through states. Only one of them touches availability.
+        <code class="language-javascript">// Returns move through states. Only one of them touches availability.
 const RETURN_TRANSITIONS = {
   requested:  () =&gt; {},                       // nothing
   authorised: () =&gt; {},                       // still nothing
@@ -600,7 +600,7 @@ const RETURN_TRANSITIONS = {
   graded_sellable:   (r) =&gt; restock(r.sku, 1, 'return-sellable'),
   graded_damaged:    (r) =&gt; writeOff(r.sku, 1, 'return-damaged'),
   graded_secondgrade:(r) =&gt; restock(r.sku, 1, 'return-b-grade', 'outlet')
-};</code></pre>
+};</code>
 
         <p>The last line matters for apparel resellers specifically. A returned garment often can't go back to the same listing, because the listing photographed a specific item in a specific condition. It goes to an outlet channel or gets relisted with new photos. Modelling that as "restock to a different location" rather than "restock" keeps the numbers honest.</p>
 
@@ -612,7 +612,7 @@ const RETURN_TRANSITIONS = {
 
         <p>What matters is what you do with the disagreements, and the answer is not "automatically correct them all". An automatic correction that pushes your number to a channel is fine when your number is higher. When the channel's number is <em>lower</em> than yours, that often means a sale you haven't ingested, and overwriting it upward will cause an oversell. Direction matters.</p>
 
-        <pre><code class="language-javascript">async function reconcile(channel) {
+        <code class="language-javascript">async function reconcile(channel) {
   const [theirs, ours] = await Promise.all([
     fetchAllChannelQuantities(channel),   // paginated, slow, run off-peak
     internalAvailability()
@@ -637,7 +637,7 @@ const RETURN_TRANSITIONS = {
   await emailReport(channel, report);
   metrics.gauge('reconcile.drift', report.length, { channel });
   return report;
-}</code></pre>
+}</code>
 
         <p>Track the count of discrepancies as a metric over time. It's the single best health indicator for a sync system. A steady two or three a night is normal noise. A jump to forty means something broke yesterday and you have until tomorrow's promotion to find it.</p>
 
@@ -663,7 +663,7 @@ const RETURN_TRANSITIONS = {
 
         <p>So a naive equal split is leaving money on the table. A margin-weighted allocation with a floor for each channel does better.</p>
 
-        <pre><code class="language-javascript">// Weight by contribution margin, floor at 1 so no channel goes dark,
+        <code class="language-javascript">// Weight by contribution margin, floor at 1 so no channel goes dark,
 // and hold back a reserve for the direct store where margin is best.
 function allocate(onHand, channels) {
   if (onHand &lt;= channels.length) {
@@ -689,7 +689,7 @@ function allocate(onHand, channels) {
   const best = channels.reduce((a, b) =&gt; a.margin &gt; b.margin ? a : b);
   alloc[best.name] += onHand - assigned;
   return alloc;
-}</code></pre>
+}</code>
 
         <p>I would not start here. Allocation adds a whole layer of policy that someone has to own and tune, and for most sellers a shared pool with buffers outperforms a badly-tuned allocation. Reach for it when you have evidence that cross-channel contention is costing you more than stranded stock would.</p>
 
@@ -705,7 +705,7 @@ function allocate(onHand, channels) {
 
         <p><strong>API quota headroom, per channel.</strong> Percentage of daily allowance remaining at each hour. Alert at seventy percent consumed, not at ninety-five, because by ninety-five you have no room to react.</p>
 
-        <pre><code class="language-javascript">// The alert that actually matters. Everything else is a dashboard.
+        <code class="language-javascript">// The alert that actually matters. Everything else is a dashboard.
 async function checkOversellRate() {
   const { rows } = await db.query(`
     SELECT channel, COUNT(*) AS n
@@ -721,7 +721,7 @@ async function checkOversellRate() {
         `${r.n} oversells on ${r.channel} in the last hour`);
     }
   }
-}</code></pre>
+}</code>
 
         <h2>17. A Worked Example</h2>
 
@@ -798,12 +798,20 @@ async function checkOversellRate() {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/event-driven-architecture/">Event-Driven Architecture for E-Commerce: Kafka &amp; Webhooks</a></strong>
-              <p>Asynchronous event stream processing.</p>
+              <strong><a href="/blog/square-point-of-sale-pos-integration/">Square POS Integration for Retail &amp; E-Commerce Sync</a></strong>
+              <p>Building a Square POS integration that survives promotions, offline tills and cross-channel ...</p>
             </li>
             <li>
-              <strong><a href="/blog/square-point-of-sale-pos-integration/">Square POS Integration for Retail &amp; Ecommerce Synchronization</a></strong>
-              <p>Physical retail inventory sync.</p>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
+              <p>Technical guide to syncing customers, orders, inventory, and deals between Magento 2 / Shopi...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/intranet-employee-portal-ecommerce/">Building Custom Intranet Employee Portals for Operations</a></strong>
+              <p>Building an internal operations portal: SSO with SAML and OIDC, scoped role models, ERP read...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/zoho-books-inventory-accounting-sync/">Zoho Books Inventory &amp; Accounting Synchronization</a></strong>
+              <p>Syncing Magento and Shopify with Zoho Books: the document chain, tax mapping, credit notes, ...</p>
             </li>
           </ul>
         </div>

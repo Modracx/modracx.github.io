@@ -99,7 +99,7 @@
         "url": "https://www.modracx.com/og-image.png"
       }
     },
-    "timeRequired": "PT45M"
+    "timeRequired": "PT23M"
   }
   </script>
   <script type="application/ld+json">
@@ -190,8 +190,8 @@
         <p class="lede">A rushed Magento 2 installation on an under-resourced shared hosting environment with the wrong PHP version recently cost a client two agonizing weeks of downtime and debugging before they finally called me to rebuild it properly on a dedicated architecture.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 45 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture & Cloud</a></span>
+          <span>Reading Time: 23 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture & Cloud</a></span>
         </div>
       </div>
 
@@ -294,7 +294,7 @@
         <h3>System Updates and Dedicated User Allocation</h3>
         <p>Always operate as a non-root user with sudo privileges to prevent accidental systemic damage. We will create a specific user named <code>magento</code> that will own the webroot directory and execute the cron jobs. This separation of concerns ensures that the web server user (<code>www-data</code>) cannot execute arbitrary scripts outside its intended scope.</p>
 
-        <pre><code># Update the package index and upgrade installed packages
+        <code># Update the package index and upgrade installed packages
 sudo apt update && sudo apt upgrade -y
 
 # Create a dedicated system user for Magento
@@ -303,18 +303,18 @@ sudo usermod -aG sudo magento
 sudo usermod -aG www-data magento
 
 # Switch to the new user context
-su - magento</code></pre>
+su - magento</code>
         
         <p>Notice that we are adding the <code>magento</code> user to the <code>www-data</code> group. This allows the web server to read and execute files owned by the Magento user, while restricting its ability to modify core system files. It is an often-overlooked practice that mitigates 90% of file-permission-related downtime.</p>
 
         <h3>Configuring the UFW Firewall and Fail2Ban</h3>
         <p>Establishing a basic UFW (Uncomplicated Firewall) configuration is prudent immediately after provisioning to restrict access points. You should explicitly permit SSH access and HTTP/HTTPS traffic while denying all other incoming connections by default.</p>
 
-        <pre><code>sudo ufw default deny incoming
+        <code>sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow OpenSSH
 sudo ufw allow 'Nginx Full'
-sudo ufw enable</code></pre>
+sudo ufw enable</code>
 
         <p>Beyond standard UFW rules, I consistently integrate Fail2Ban to dynamically block IP addresses exhibiting malicious behavior, such as repeated failed SSH logins or aggressive port scanning. This active mitigation drastically cuts down log noise and shields the server from targeted brute-force campaigns.</p>
 
@@ -326,21 +326,21 @@ sudo ufw enable</code></pre>
         <h3>Adding the Ondřej Surý PPA and Extension Installation</h3>
         <p>Ubuntu 22.04 ships with PHP 8.1 by default. We require PHP 8.2 for Magento 2.4.7 to benefit from the performance improvements and strict typing requirements. The Ondřej Surý PPA is the standard, reliable repository for obtaining current PHP builds on Ubuntu systems.</p>
 
-        <pre><code>sudo add-apt-repository ppa:ondrej/php
-sudo apt update</code></pre>
+        <code>sudo add-apt-repository ppa:ondrej/php
+sudo apt update</code>
 
         <p>Execute the following command to install PHP 8.2, PHP-FPM, and the exact matrix of extensions Magento expects. I have carefully compiled this list based on the official requirements; omitting any of these will lead to deployment failures.</p>
 
-        <pre><code>sudo apt install -y php8.2-fpm php8.2-cli php8.2-mysql php8.2-soap php8.2-bcmath \
+        <code>sudo apt install -y php8.2-fpm php8.2-cli php8.2-mysql php8.2-soap php8.2-bcmath \
 php8.2-xml php8.2-mbstring php8.2-gd php8.2-curl php8.2-zip php8.2-intl \
-php8.2-gmp php8.2-redis php8.2-opcache</code></pre>
+php8.2-gmp php8.2-redis php8.2-opcache</code>
 
         <h3>Configuring the Dedicated Magento PHP-FPM Pool</h3>
         <p>Instead of modifying the default `www.conf` pool, I strongly advocate creating a dedicated FPM pool for the Magento application. This provides granular control over resource allocation and process management, isolating Magento's resource consumption from other potential services on the server.</p>
         
         <p>Create a new file at <code>/etc/php/8.2/fpm/pool.d/magento.conf</code> with the following configuration. This configuration instructs the process manager to operate dynamically, spawning children as needed but maintaining a sensible baseline.</p>
 
-        <pre><code>[magento]
+        <code>[magento]
 user = magento
 group = www-data
 listen = /run/php/php8.2-fpm-magento.sock
@@ -358,18 +358,18 @@ pm.max_requests = 500
 ; Magento specific PHP settings
 php_admin_value[memory_limit] = 756M
 php_admin_value[max_execution_time] = 18000
-php_admin_flag[zlib.output_compression] = on</code></pre>
+php_admin_flag[zlib.output_compression] = on</code>
         
         <p>Let's dissect this configuration. We explicitly set the <code>user</code> to `magento`. We configure the process manager (`pm`) to `dynamic`, allocating a maximum of 20 child processes (`pm.max_children`). The `pm.max_requests` directive is crucial; it forcefully restarts child processes after 500 requests, preventing memory leaks that plague long-running PHP processes. We also increase the `memory_limit` to 756MB (the absolute minimum required for general operation; deployment commands run via CLI will require more) and set `max_execution_time` to 18000 to prevent timeouts during complex indexer runs.</p>
 
         <h3>OPcache Optimization for Heavy Lifters</h3>
         <p>Next, we must optimize the OPcache settings to ensure PHP bytecode is cached efficiently. Edit the main configuration file at <code>/etc/php/8.2/fpm/php.ini</code>:</p>
 
-        <pre><code>opcache.enable = 1
+        <code>opcache.enable = 1
 opcache.memory_consumption = 512
 opcache.max_accelerated_files = 65407
 opcache.validate_timestamps = 0
-opcache.save_comments = 1</code></pre>
+opcache.save_comments = 1</code>
         
         <p>The `opcache.memory_consumption` is set to 512MB to accommodate Magento's massive codebase. Disabling `opcache.validate_timestamps` in production ensures the server doesn't waste disk I/O checking file modifications, though it means you must manually restart FPM when deploying new code. I routinely find servers with default OPcache settings (typically 128MB) stalling under load because they continually evict and recompile scripts.</p>
 
@@ -379,15 +379,15 @@ opcache.save_comments = 1</code></pre>
         <p>Magento's EAV (Entity-Attribute-Value) architecture generates highly complex SQL queries involving numerous table joins. A standard MySQL installation, untuned, will severely bottleneck performance. The database engine requires tuning immediately upon installation to ensure sufficient memory is allocated to the InnoDB buffer pool.</p>
 
         <h3>Installation and Secure Configuration</h3>
-        <pre><code>sudo apt install -y mysql-server
-sudo mysql_secure_installation</code></pre>
+        <code>sudo apt install -y mysql-server
+sudo mysql_secure_installation</code>
         
         <p>During the secure installation process, you must enforce a strict password policy, disable remote root logins, remove anonymous users, and drop the test database. These are non-negotiable security requirements for any ecommerce application.</p>
 
         <h3>Implementing the Magento MySQL Configuration</h3>
         <p>Before creating the database, we must inject a custom configuration file. I always deploy a dedicated `magento.cnf` file rather than modifying the default `mysqld.cnf`. Create the file at <code>/etc/mysql/conf.d/magento.cnf</code>:</p>
 
-        <pre><code>[mysqld]
+        <code>[mysqld]
 # InnoDB Settings
 innodb_buffer_pool_size = 4G
 innodb_log_file_size = 512M
@@ -404,7 +404,7 @@ wait_timeout = 600
 interactive_timeout = 600
 
 # General
-max_allowed_packet = 64M</code></pre>
+max_allowed_packet = 64M</code>
         
         <p>The `innodb_buffer_pool_size` is the most critical parameter. It should typically be set to 70–80% of your server's available RAM if the server is dedicated solely to MySQL. Given we are running a consolidated stack, allocating 4GB on an 8GB machine is a reasonable compromise. The `innodb_flush_log_at_trx_commit = 2` setting is crucial for Magento; it instructs MySQL to write to the log at each commit but only flush to disk once per second, significantly improving write performance during checkout processes without compromising ACID compliance entirely.</p>
         
@@ -413,23 +413,23 @@ max_allowed_packet = 64M</code></pre>
         <h3>Provisioning the Magento Database</h3>
         <p>Now, create a dedicated database, user, and apply strict privileges. Never use the root MySQL user for the Magento application context.</p>
 
-        <pre><code>sudo mysql -u root -p
+        <code>sudo mysql -u root -p
 
 CREATE DATABASE magento_db;
 CREATE USER 'magento_user'@'localhost' IDENTIFIED BY 'Complex_Password_X99!';
 GRANT ALL PRIVILEGES ON magento_db.* TO 'magento_user'@'localhost';
 FLUSH PRIVILEGES;
-EXIT;</code></pre>
+EXIT;</code>
 
         <h2>5. Nginx Configuration Deep-Dive</h2>
         <p>Magento provides an official Nginx configuration sample file within its repository. While you should utilize this file, you cannot simply drop it in and expect optimal performance. We must construct a robust virtual host configuration that wraps the official sample, managing upstream connections, enforcing security headers, and optimizing asset delivery.</p>
 
         <h3>Installing Nginx and Architecting the Vhost</h3>
-        <pre><code>sudo apt install -y nginx</code></pre>
+        <code>sudo apt install -y nginx</code>
 
         <p>Create a new server block at <code>/etc/nginx/sites-available/magento.conf</code>. This configuration is substantially more sophisticated than standard setups, specifically engineered for Magento's requirements and future Varnish integration.</p>
 
-        <pre><code>upstream fastcgi_backend {
+        <code>upstream fastcgi_backend {
     # Point to the custom FPM pool we created earlier
     server unix:/run/php/php8.2-fpm-magento.sock;
 }
@@ -474,52 +474,52 @@ server {
             include fastcgi_params;
         }
     }
-}</code></pre>
+}</code>
 
         <p>This configuration defines the `upstream fastcgi_backend` pointing to our dedicated `php8.2-fpm-magento.sock`. We establish `X-Forwarded-For` trust, anticipating the deployment of Varnish in front of Nginx. The `gzip` directives aggressively compress textual assets, drastically reducing payload sizes. Furthermore, we implement a specific `location` block protecting the `/admin` path with HTTP Basic Authentication, a critical defense-in-depth measure against automated brute-force attacks targeting the administrative interface.</p>
 
         <p>To implement the Basic Auth, you must install `apache2-utils` and create the password file:</p>
-        <pre><code>sudo apt install -y apache2-utils
-sudo htpasswd -c /etc/nginx/.htpasswd your_admin_username</code></pre>
+        <code>sudo apt install -y apache2-utils
+sudo htpasswd -c /etc/nginx/.htpasswd your_admin_username</code>
 
         <p>Link the configuration and verify syntax before restarting the service:</p>
-        <pre><code>sudo ln -s /etc/nginx/sites-available/magento.conf /etc/nginx/sites-enabled/
+        <code>sudo ln -s /etc/nginx/sites-available/magento.conf /etc/nginx/sites-enabled/
 sudo nginx -t
-sudo systemctl restart nginx</code></pre>
+sudo systemctl restart nginx</code>
 
         <h2>6. Executing the Composer Installation</h2>
         <p>With the infrastructure provisioned and optimized, we proceed to acquire the Magento codebase via Composer. Magento distributes its software via a dedicated Composer repository, requiring authentication keys generated from the Adobe Commerce Marketplace. You cannot simply clone a public Git repository; the dependency resolution process demands authenticated access to `repo.magento.com`.</p>
 
         <h3>Installing Composer 2 and Global Configuration</h3>
         <p>Ensure you are operating as the `magento` user for this phase.</p>
-        <pre><code>curl -sS https://getcomposer.org/installer | php
-sudo mv composer.phar /usr/local/bin/composer</code></pre>
+        <code>curl -sS https://getcomposer.org/installer | php
+sudo mv composer.phar /usr/local/bin/composer</code>
 
         <p>To avoid interactive prompts during installation, configure Composer globally with your authentication keys. You must generate a Public Key (Username) and Private Key (Password) from your Magento account profile.</p>
 
-        <pre><code>composer config -g http-basic.repo.magento.com [public_key] [private_key]</code></pre>
+        <code>composer config -g http-basic.repo.magento.com [public_key] [private_key]</code>
         
         <p>The marketplace credentials are necessary because Magento resolves numerous commerce packages and proprietary modules during the installation process, even for the open-source edition.</p>
 
         <h3>Creating the Project Directory</h3>
         <p>Navigate to the web root and initiate the project creation. We will execute the installation utilizing specific flags to optimize the deployment for a production environment.</p>
 
-        <pre><code>sudo mkdir -p /var/www/magento2
+        <code>sudo mkdir -p /var/www/magento2
 sudo chown -R magento:www-data /var/www/magento2
 cd /var/www/magento2
 
-composer create-project --repository-url=https://repo.magento.com/ magento/project-community-edition:2.4.7-p3 . --no-dev --prefer-dist --no-plugins</code></pre>
+composer create-project --repository-url=https://repo.magento.com/ magento/project-community-edition:2.4.7-p3 . --no-dev --prefer-dist --no-plugins</code>
         
         <p>The `--no-dev` flag ensures that developer-centric packages (like testing frameworks) are excluded, reducing the application footprint and closing potential security vulnerabilities. The `--prefer-dist` flag forces Composer to download compressed archives rather than cloning repositories, significantly accelerating the download process. Finally, `--no-plugins` prevents third-party Composer plugins from executing during the initial scaffolding, enforcing a secure installation pipeline.</p>
 
         <h2>7. Deploying Redis Configuration</h2>
         <p>Before executing the Magento installation command, we must configure our Redis instances. While you can technically operate Magento using a single Redis instance, architectural best practice dictates utilizing separate Redis databases for object caching, full-page caching, and session storage. This prevents volatile cache data from evicting persistent session data when memory limits are reached.</p>
 
-        <pre><code>sudo apt install -y redis-server</code></pre>
+        <code>sudo apt install -y redis-server</code>
         
         <p>I recommend configuring distinct Redis instances operating on separate ports (e.g., 6379 for cache, 6380 for sessions). This allows for granular tuning of the `maxmemory-policy`. Let's create a dedicated configuration for sessions at `/etc/redis/redis-session.conf`:</p>
 
-        <pre><code>port 6380
+        <code>port 6380
 daemonize yes
 pidfile /var/run/redis/redis-session.pid
 logfile /var/log/redis/redis-session.log
@@ -528,16 +528,16 @@ dir /var/lib/redis
 maxmemory-policy noeviction
 # Enable AOF for persistence
 appendonly yes
-appendfsync everysec</code></pre>
+appendfsync everysec</code>
 
         <p>And modify the default `/etc/redis/redis.conf` (port 6379) for caching:</p>
         
-        <pre><code>maxmemory 1gb
+        <code>maxmemory 1gb
 # Cache can be evicted based on Least Recently Used algorithm
 maxmemory-policy allkeys-lru
 # RDB snapshotting is sufficient for cache
 save 900 1
-save 300 10</code></pre>
+save 300 10</code>
 
         <p>Restart the Redis service and launch the new session instance: <code>sudo redis-server /etc/redis/redis-session.conf</code>.</p>
 
@@ -546,7 +546,7 @@ save 300 10</code></pre>
 
         <p>Execute the following command, ensuring you replace the placeholder values with your specific configuration:</p>
 
-        <pre><code>bin/magento setup:install \
+        <code>bin/magento setup:install \
 --base-url="http://yourdomain.com/" \
 --db-host="localhost" \
 --db-name="magento_db" \
@@ -575,7 +575,7 @@ save 300 10</code></pre>
 --page-cache=redis \
 --page-cache-redis-server=127.0.0.1 \
 --page-cache-redis-port=6379 \
---page-cache-redis-db=1</code></pre>
+--page-cache-redis-db=1</code>
 
         <p>Let's unpack the Redis configuration flags specifically:</p>
         <ul>
@@ -593,13 +593,13 @@ save 300 10</code></pre>
         <h3>Installing Varnish and Port Reconfiguration</h3>
         <p>We must restructure our network topology. Currently, Nginx listens on port 80. We need to reconfigure Nginx to listen on an alternate port (e.g., 8080), allowing Varnish to bind to port 80 to intercept incoming traffic.</p>
 
-        <pre><code>sudo apt install -y varnish</code></pre>
+        <code>sudo apt install -y varnish</code>
         
         <p>First, modify the Nginx configuration (`/etc/nginx/sites-available/magento.conf`) to listen on port 8080:</p>
-        <pre><code>server {
+        <code>server {
     listen 8080;
     # ... rest of configuration ...
-}</code></pre>
+}</code>
         <p>Restart Nginx.</p>
 
         <p>Next, configure Varnish to listen on port 80 and forward requests to Nginx on port 8080. Edit `/etc/default/varnish` (or `/etc/systemd/system/varnish.service.d/customexec.conf` depending on your OS configuration) and adjust the `DAEMON_OPTS` to bind to `:80`.</p>
@@ -607,13 +607,13 @@ save 300 10</code></pre>
         <h3>Generating and Applying the Magento VCL</h3>
         <p>Magento dynamically generates a Varnish Configuration Language (VCL) file tailored to its specific cache invalidation architecture. Do not attempt to write this manually.</p>
 
-        <pre><code>bin/magento varnish:vcl:generate --export-version=7 --output-file=varnish.vcl
+        <code>bin/magento varnish:vcl:generate --export-version=7 --output-file=varnish.vcl
 sudo cp varnish.vcl /etc/varnish/default.vcl
-sudo systemctl restart varnish</code></pre>
+sudo systemctl restart varnish</code>
 
         <p>Finally, instruct Magento to utilize Varnish as the primary caching application via the administrative interface (Stores > Configuration > Advanced > System > Full Page Cache) or via CLI:</p>
-        <pre><code>bin/magento config:set system/full_page_cache/caching_application 2
-bin/magento cache:flush</code></pre>
+        <code>bin/magento config:set system/full_page_cache/caching_application 2
+bin/magento cache:flush</code>
 
         <h2>10. Monitoring and Alerting for a Production Magento Instance</h2>
         <p>A properly tuned Magento instance can still degrade rapidly if left unsupervised. You must implement proactive monitoring to detect resource exhaustion before it cascades into a complete outage. Relying on customer complaints to identify a failing node is an unacceptable operational standard.</p>
@@ -631,7 +631,7 @@ bin/magento cache:flush</code></pre>
         <h3>Automated Bash Monitoring Script</h3>
         <p>While enterprise tools like Datadog or New Relic are preferable, a simple bash script executed via cron can provide immediate, critical alerting. Here is a baseline script I deploy to monitor these thresholds:</p>
 
-        <pre><code>#!/bin/bash
+        <code>#!/bin/bash
 # magento_health_monitor.sh
 
 ADMIN_EMAIL="alerts@yourdomain.com"
@@ -658,7 +658,7 @@ MISSED_CRON=$($MYSQL_CMD "SELECT COUNT(*) FROM cron_schedule WHERE status = 'mis
 
 if [ "$MISSED_CRON" -gt 50 ]; then
     echo "More than 50 missed cron jobs: $MISSED_CRON" | mail -s "$SUBJECT (Cron)" $ADMIN_EMAIL
-fi</code></pre>
+fi</code>
 
         <h2>11. Magento 2 Upgrade Path: From 2.4.x to 2.4.y</h2>
         <p>Upgrading a Magento instance is a highly delicate operation. A minor version bump (e.g., 2.4.6 to 2.4.7) frequently introduces breaking changes to third-party modules or custom themes. You must execute this process in a staging environment first. Do not run composer updates directly on production without verified backups.</p>
@@ -666,7 +666,7 @@ fi</code></pre>
         <h3>The Upgrade Execution Process</h3>
         <p>The standard upgrade path requires pulling the new meta-package via Composer, then executing the database schema and data updates.</p>
 
-        <pre><code># 1. Require the target version without updating dependencies immediately
+        <code># 1. Require the target version without updating dependencies immediately
 composer require magento/product-community-edition:2.4.8 --no-update
 
 # 2. Execute the update to resolve the dependency tree
@@ -682,7 +682,7 @@ bin/magento setup:di:compile
 bin/magento setup:static-content:deploy -f
 
 # 6. Flush Caches
-bin/magento cache:flush</code></pre>
+bin/magento cache:flush</code>
         
         <h3>Understanding the Schema Pipeline</h3>
         <p>You can use <code>bin/magento setup:db:status</code> prior to running the upgrade to view a list of modules that have pending schema or data updates. This is crucial for verifying if a third-party extension requires a database migration.</p>
@@ -695,13 +695,13 @@ bin/magento cache:flush</code></pre>
         <h3>Installing the Crontab</h3>
         <p>Magento implements two distinct cron groups: `default` (handling general application tasks) and `index` (specifically managing database indexing operations). Ensure you are operating as the `magento` user when installing the cron jobs.</p>
 
-        <pre><code>bin/magento cron:install
-crontab -l</code></pre>
+        <code>bin/magento cron:install
+crontab -l</code>
         
         <p>The resulting crontab will resemble this configuration:</p>
-        <pre><code>* * * * * /usr/bin/php8.2 /var/www/magento2/bin/magento cron:run 2>&1 | grep -v "Ran jobs by schedule" >> /var/www/magento2/var/log/magento.cron.log
+        <code>* * * * * /usr/bin/php8.2 /var/www/magento2/bin/magento cron:run 2>&1 | grep -v "Ran jobs by schedule" >> /var/www/magento2/var/log/magento.cron.log
 * * * * * /usr/bin/php8.2 /var/www/magento2/update/cron.php >> /var/www/magento2/var/log/update.cron.log
-* * * * * /usr/bin/php8.2 /var/www/magento2/bin/magento setup:cron:run >> /var/www/magento2/var/log/setup.cron.log</code></pre>
+* * * * * /usr/bin/php8.2 /var/www/magento2/bin/magento setup:cron:run >> /var/www/magento2/var/log/setup.cron.log</code>
 
         <p>While you can manually execute `bin/magento cron:run` for debugging purposes, you must leave the automated scheduling to the system cron. I frequently encounter environments where administrators have disabled the system cron and rely on manual execution, leading to severe architectural degradation. Monitor the `cron_schedule` database table periodically; if this table exhibits excessive bloat (millions of records), it indicates a failure in the automated cleanup routine and requires immediate intervention.</p>
 
@@ -710,7 +710,7 @@ crontab -l</code></pre>
 
         <p>The deployment pipeline involves a specific sequence of commands that must be executed meticulously. During deployment, the site must be placed into maintenance mode to prevent users from encountering corrupted pages.</p>
 
-        <pre><code># 1. Enable Maintenance Mode
+        <code># 1. Enable Maintenance Mode
 bin/magento maintenance:enable
 
 # 2. Update the Database Schema
@@ -727,7 +727,7 @@ bin/magento setup:static-content:deploy en_GB en_US -f -j4
 bin/magento cache:flush
 
 # 6. Disable Maintenance Mode
-bin/magento maintenance:disable</code></pre>
+bin/magento maintenance:disable</code>
 
         <p>This process typically requires a 3 to 5-minute downtime window, depending on hardware capabilities. I strongly advise scripting this pipeline into an automated deployment tool (such as Jenkins or GitLab CI/CD) to guarantee consistency across deployments.</p>
 
@@ -736,7 +736,7 @@ bin/magento maintenance:disable</code></pre>
         
         <p>Do not execute blanket `chmod 777` commands under any circumstances. Execute this structured bash script, derived directly from Magento documentation, to enforce strict compliance across the filesystem.</p>
 
-        <pre><code>#!/bin/bash
+        <code>#!/bin/bash
 # magento_permissions.sh
 
 MAGE_ROOT="/var/www/magento2"
@@ -757,22 +757,22 @@ find var pub/static pub/media app/etc generated/code generated/metadata -type d 
 chown -R $MAGE_USER:$WEB_USER .
 
 # Make the CLI executable
-chmod u+x bin/magento</code></pre>
+chmod u+x bin/magento</code>
         <p>Execute this script whenever you extract new modules or encounter unexplained permission denied errors in the logs.</p>
 
         <h2>15. Securing Traffic with SSL/TLS (Let's Encrypt)</h2>
         <p>Before launching, HTTPS must be enforced. Utilizing Certbot allows for automated certificate provisioning and renewal. Ensure your DNS records correctly point to the server IP before proceeding.</p>
 
-        <pre><code>sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d yourdomain.com</code></pre>
+        <code>sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d yourdomain.com</code>
 
         <p>After provisioning the certificate, update Magento's Base URLs within the database to enforce secure protocols globally.</p>
 
-        <pre><code>bin/magento setup:store-config:set --base-url="https://yourdomain.com/"
+        <code>bin/magento setup:store-config:set --base-url="https://yourdomain.com/"
 bin/magento setup:store-config:set --base-url-secure="https://yourdomain.com/"
 bin/magento setup:store-config:set --use-secure=1
 bin/magento setup:store-config:set --use-secure-admin=1
-bin/magento cache:flush</code></pre>
+bin/magento cache:flush</code>
 
         <h2>16. When NOT to Build a Self-Managed Magento Instance</h2>
         <p>Despite Magento's robust capabilities, deploying a self-managed instance is not a universal solution. The architectural complexity we just navigated introduces substantial maintenance overhead. I regularly consult for companies that underestimated this complexity and are now burdened with an unstable platform.</p>
@@ -789,20 +789,20 @@ bin/magento cache:flush</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 AWS Architecture</a></strong>
-              <p>Designing highly available, autoscaling Magento infrastructure on AWS.</p>
+              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 on AWS: Cloud Architecture, Migration &amp; Cost Optimization</a></strong>
+              <p>Deploying Magento 2 on AWS: design patterns for ECS/EKS nodes, Aurora RDS performance tuning...</p>
             </li>
             <li>
-              <strong><a href="/blog/custom-magento-module/">Custom Magento Module Development</a></strong>
-              <p>Best practices for developing modular, performant Magento extensions.</p>
+              <strong><a href="/blog/magento-2-coding-standards/">Magento 2 Coding Standards: The Engineering Rules That Actually Matter</a></strong>
+              <p>A comprehensive technical guide to Magento 2 coding standards, PSR compliance, service contr...</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization</a></strong>
-              <p>Techniques for reducing TTFB and improving Core Web Vitals across complex systems.</p>
+              <strong><a href="/blog/azure-cloud-architecture-magento/">Enterprise Azure Cloud Architecture for Magento 2</a></strong>
+              <p>Running Magento 2 on Azure: AKS node pool design, MySQL Flexible Server tuning, the shared m...</p>
             </li>
             <li>
-              <strong><a href="/blog/secure-ecommerce-checklist/">Secure Ecommerce Checklist</a></strong>
-              <p>A comprehensive security audit framework for self-hosted ecommerce platforms.</p>
+              <strong><a href="/blog/magento-2-developer-toolbar-and-profiler-tools/">Magento 2 Developer Toolbar &amp; Profiler Tools: Streamline Your Workflow</a></strong>
+              <p>Discover Admin Dev Tools &amp; Frontend Dev Tools for Magento 2: in-browser cache flushing, ...</p>
             </li>
           </ul>
         </div>

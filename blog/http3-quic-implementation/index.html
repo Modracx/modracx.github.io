@@ -200,8 +200,8 @@
         <p class="lede">We enabled HTTP/3 and the median LCP moved by 11ms. At the 95th percentile it moved by 780ms. What QUIC actually changes, and how to measure it without fooling yourself.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 24 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
+          <span>Reading Time: 33 min read</span> •
+          <span>Category: <a href="/blog/archive/#performance-speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -298,13 +298,13 @@
 
         <p>The part that is easy to miss operationally: connection migration only works if your infrastructure routes by connection ID rather than by four-tuple. A UDP load balancer doing plain hashing on source address and port will send the migrated packets to a different backend, which has never heard of that connection ID and will drop them. You have then broken the feature you were trying to enable, and it will look like intermittent stalls that nobody can reproduce.</p>
 
-        <pre><code class="language-nginx"># Nginx 1.25+ can encode routing information into the connection ID
+        <code class="language-nginx"># Nginx 1.25+ can encode routing information into the connection ID
 # so a load balancer or a sibling worker can route migrated packets
 # back to the right place.
 quic_bpf on;   # requires Linux with eBPF support; routes across workers
 
 # Without this, a multi-worker Nginx will drop migrated connections
-# that land on a different worker than the one holding the state.</code></pre>
+# that land on a different worker than the one holding the state.</code>
 
         <p>If you are behind a CDN, this is the CDN's problem and they have solved it. That is one of several reasons the CDN route is the one I recommend, and I will come back to it.</p>
 
@@ -349,7 +349,7 @@ quic_bpf on;   # requires Linux with eBPF support; routes across workers
 
         <p>The rule I apply without exception: <strong>0-RTT is for idempotent GET requests only, and never for anything behind authentication.</strong> Configure it at the edge so that early data on any non-idempotent method is rejected and the client retries in the normal 1-RTT flow, which costs one round trip on a request that was going to be slow anyway.</p>
 
-        <pre><code class="language-nginx"># Nginx: accept early data, but make the application decide.
+        <code class="language-nginx"># Nginx: accept early data, but make the application decide.
 ssl_early_data on;
 
 # The header tells the upstream that this request arrived as early
@@ -374,11 +374,11 @@ server {
         }
         if ($early_and_mutating = 1) { return 425; }
     }
-}</code></pre>
+}</code>
 
         <p>And defend in the application too, because edge configuration drifts:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // Front-controller guard. Cheap, and it survives someone changing
 // the CDN config without telling you.
 $early = ($_SERVER['HTTP_EARLY_DATA'] ?? '0') === '1';
@@ -397,7 +397,7 @@ if ($early) {
         exit;
     }
 }
-</code></pre>
+</code>
 
         <p>My honest position: for most stores, enable 0-RTT for static assets and anonymous cacheable pages, and disable it everywhere else. The gain on a mutating request is one round trip on a path that is already doing database work; the risk is a class of bug that is nearly impossible to reproduce and will be blamed on something else for weeks. If you cannot cleanly separate the two, turn it off entirely and take the 1-RTT handshake, which is still better than what you had.</p>
 
@@ -407,7 +407,7 @@ if ($early) {
 
         <p>The standard discovery mechanism is the <code>Alt-Svc</code> header, sent over the HTTP/2 response, advertising that the same origin is available over HTTP/3 at a given port for a given duration. The browser caches that and uses QUIC next time.</p>
 
-        <pre><code class="language-nginx">server {
+        <code class="language-nginx">server {
     listen 443 ssl;
     listen 443 quic reuseport;      # reuseport on exactly one server block
     http2 on;
@@ -419,17 +419,17 @@ if ($early) {
 
     # Advertise on every response including errors, or a client whose
     # first request 404s never learns about HTTP/3.
-}</code></pre>
+}</code>
 
         <p>The consequence people miss: for a first-time visitor, HTTP/3 does nothing at all. The entire first page load is HTTP/2. If your traffic is heavily weighted toward one-page visits from paid social, the share of requests that ever use HTTP/3 will be much lower than you expect. On the nutrition client, 62% of requests used HTTP/3 after four weeks; on a different site with far higher new-visitor share it was 41%.</p>
 
         <p>The way to fix the first visit is a DNS HTTPS resource record — SVCB's HTTP-specific form, RFC 9460 — which advertises protocol support in DNS, before any connection is made. Chrome and Safari both use it. It also lets you publish the ALPN list and, usefully, the ECH configuration.</p>
 
-        <pre><code class="language-dns">; HTTPS RR: priority 1, "." means the target is the owner name itself.
+        <code class="language-dns">; HTTPS RR: priority 1, "." means the target is the owner name itself.
 ; alpn lists the protocols; h3 first means the client can go straight
 ; to QUIC on the very first connection.
 example.com.     300  IN  HTTPS  1 . alpn="h3,h2" ipv4hint="203.0.113.10"
-www.example.com. 300  IN  HTTPS  1 . alpn="h3,h2"</code></pre>
+www.example.com. 300  IN  HTTPS  1 . alpn="h3,h2"</code>
 
         <p>Most managed DNS providers support this now; Cloudflare publishes it automatically when HTTP/3 is on. If you run your own DNS, check that your provider's UI actually supports type 65 records rather than requiring a generic <code>TYPE65 \# ...</code> hex blob, because hand-encoding those is exactly as unpleasant as it sounds and I have got it wrong twice.</p>
 
@@ -441,7 +441,7 @@ www.example.com. 300  IN  HTTPS  1 . alpn="h3,h2"</code></pre>
 
         <p>Cloudflare, Fastly, CloudFront, Akamai and Bunny all support HTTP/3 to the client with a checkbox or a single API call. Shopify serves HTTP/3 by default, and if you are on Shopify this entire section is not a decision you have.</p>
 
-        <pre><code class="language-bash"># Cloudflare: enable HTTP/3 and confirm it took
+        <code class="language-bash"># Cloudflare: enable HTTP/3 and confirm it took
 curl -sX PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/http3" \
   -H "Authorization: Bearer $CF_API_TOKEN" \
   -H "Content-Type: application/json" \
@@ -452,7 +452,7 @@ curl -sX PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/htt
 curl -sX PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/0rtt" \
   -H "Authorization: Bearer $CF_API_TOKEN" \
   -H "Content-Type: application/json" \
-  --data '{"value":"off"}' | jq '.result.value'</code></pre>
+  --data '{"value":"off"}' | jq '.result.value'</code>
 
         <p>The exception where origin HTTP/3 is worth it: you are not using a CDN at all, you serve a geographically concentrated audience directly, and a meaningful share of them are on mobile networks. That describes some regional retailers. It does not describe most stores, and if you are weighing whether to add a CDN or add QUIC to your origin, add the CDN — the caching and the proximity are worth far more than the transport. The trade-offs of running several are covered in the piece on <a href="/blog/multi-cdn-strategies/">multi-CDN strategies</a>.</p>
 
@@ -460,7 +460,7 @@ curl -sX PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/0rt
 
         <p>If you do run it yourself: mainline Nginx has supported QUIC since 1.25.0, but only when built against a TLS library that exposes the QUIC APIs. OpenSSL 3.x's built-in QUIC support is not what Nginx needs; you want BoringSSL, quictls, or LibreSSL. Distribution packages frequently are not built this way, which is the first thing to check when <code>listen 443 quic</code> produces an "unknown directive" error.</p>
 
-        <pre><code class="language-bash"># Verify the binary actually has QUIC and which TLS library it used
+        <code class="language-bash"># Verify the binary actually has QUIC and which TLS library it used
 nginx -V 2&gt;&amp;1 | tr ' ' '\n' | grep -E 'http_v3|quic|ssl'
 
 # Build against BoringSSL if the packaged build lacks it
@@ -470,11 +470,11 @@ cmake --build boringssl/build -j"$(nproc)"
 
 ./configure --with-http_v3_module --with-http_ssl_module \
   --with-cc-opt="-I../boringssl/include" \
-  --with-ld-opt="-L../boringssl/build/ssl -L../boringssl/build/crypto"</code></pre>
+  --with-ld-opt="-L../boringssl/build/ssl -L../boringssl/build/crypto"</code>
 
         <p>A working server block, with the settings that are not obvious:</p>
 
-        <pre><code class="language-nginx">http {
+        <code class="language-nginx">http {
     # QUIC needs TLS 1.3. There is no QUIC over TLS 1.2, ever.
     ssl_protocols TLSv1.3 TLSv1.2;
 
@@ -505,11 +505,11 @@ cmake --build boringssl/build -j"$(nproc)"
         ssl_certificate     /etc/ssl/acme/fullchain.pem;
         ssl_certificate_key /etc/ssl/acme/privkey.pem;
     }
-}</code></pre>
+}</code>
 
         <p>And the kernel tuning, which is not optional and is the single most common reason a self-hosted QUIC deployment performs worse than the TCP it replaced:</p>
 
-        <pre><code class="language-bash"># /etc/sysctl.d/99-quic.conf
+        <code class="language-bash"># /etc/sysctl.d/99-quic.conf
 # QUIC does its congestion control in user space and reads packets in
 # large batches. The default UDP buffers are sized for DNS and will
 # drop packets under any real load, which QUIC then interprets as
@@ -523,7 +523,7 @@ net.core.netdev_max_backlog = 8192
 
 # Check for drops after a load test; a non-zero and growing value in
 # the RcvbufErrors column means the buffers are still too small.
-netstat -su | grep -A4 Udp:</code></pre>
+netstat -su | grep -A4 Udp:</code>
 
         <p>The CPU cost is real and worth budgeting for. Because QUIC runs in user space, every packet crosses the kernel boundary and the encryption happens per-packet rather than per-record. On the hardware I have measured, serving the same traffic over HTTP/3 rather than HTTP/2 costs roughly 1.5 to 2 times the CPU, before GSO and hardware offload. Generic segmentation offload recovers a good chunk of that; <code>quic_gso on</code> is not a micro-optimisation.</p>
 
@@ -545,13 +545,13 @@ netstat -su | grep -A4 Udp:</code></pre>
 
         <p><strong>Your monitoring probably does not see it.</strong> If your synthetic checks use <code>curl</code> without HTTP/3 support, or your uptime monitor only speaks TCP, HTTP/3 could be completely broken for a week without a single alert. Add an explicit HTTP/3 check.</p>
 
-        <pre><code class="language-bash"># curl needs an HTTP/3-capable build; --http3-only fails rather than
+        <code class="language-bash"># curl needs an HTTP/3-capable build; --http3-only fails rather than
 # silently falling back, which is what you want in a monitor.
 curl --http3-only -sS -o /dev/null -w '%{http_version} %{time_total}\n' \
   https://www.example.com/
 
 # Confirm the advertisement is present on a normal HTTP/2 response
-curl -sI https://www.example.com/ | grep -i alt-svc</code></pre>
+curl -sI https://www.example.com/ | grep -i alt-svc</code>
 
         <h2>11. Measuring It Without Fooling Yourself</h2>
 
@@ -559,7 +559,7 @@ curl -sI https://www.example.com/ | grep -i alt-svc</code></pre>
 
         <p>The obvious approach is to record which protocol each page view used, then compare the two groups. The Navigation Timing API tells you directly:</p>
 
-        <pre><code class="language-javascript">// nextHopProtocol: 'h3' | 'h2' | 'http/1.1'
+        <code class="language-javascript">// nextHopProtocol: 'h3' | 'h2' | 'http/1.1'
 const nav = performance.getEntriesByType('navigation')[0];
 const proto = nav?.nextHopProtocol || 'unknown';
 
@@ -576,7 +576,7 @@ new PerformanceObserver((list) =&gt; {
       saveData: navigator.connection?.saveData === true,
     }));
   }
-}).observe({ type: 'largest-contentful-paint', buffered: true });</code></pre>
+}).observe({ type: 'largest-contentful-paint', buffered: true });</code>
 
         <p>Now the bias. The set of sessions that use HTTP/3 is not a random sample. It excludes first-time visitors, who are always HTTP/2 on their first load and who tend to have colder caches and worse metrics. It excludes users on networks that block UDP, which skews corporate. It over-represents returning visitors, who have warm caches and better metrics for reasons that have nothing to do with the transport.</p>
 
@@ -590,7 +590,7 @@ new PerformanceObserver((list) =&gt; {
 
         <p><strong>Randomise the advertisement.</strong> The clean version: for a random half of visitors, do not send the <code>Alt-Svc</code> header, so they stay on HTTP/2 by assignment rather than by circumstance. Bucket by a first-party cookie so assignment is sticky. This is a real A/B test and it is the only design that gives a defensible number.</p>
 
-        <pre><code class="language-nginx"># Sticky 50/50 assignment: only advertise HTTP/3 to the treatment arm.
+        <code class="language-nginx"># Sticky 50/50 assignment: only advertise HTTP/3 to the treatment arm.
 # The cookie is set by the application on first response.
 map $cookie_h3exp $advertise_h3 {
     "treatment"  1;
@@ -604,20 +604,20 @@ server {
 map $advertise_h3 $h3_header {
     1  'h3=":443"; ma=86400';
     0  '';
-}</code></pre>
+}</code>
 
         <p>One warning about that design: browsers cache the <code>Alt-Svc</code> advertisement for its <code>ma</code> lifetime, so a user assigned to treatment stays on HTTP/3 for up to a day even after reassignment, and a user who was in treatment before you started the experiment is contaminated. Set <code>ma</code> short — 600 seconds — for the duration of the experiment, and discard the first day of data.</p>
 
         <p>Do not use synthetic testing to evaluate this at all. Lighthouse runs on a simulated network with a configured loss rate of zero. QUIC's central benefit is invisible under those conditions, and you will conclude it does nothing. If you want a lab signal, use a network emulator with deliberate loss.</p>
 
-        <pre><code class="language-bash"># Emulate a bad 4G connection to see what QUIC is actually for.
+        <code class="language-bash"># Emulate a bad 4G connection to see what QUIC is actually for.
 # 2% loss, 80ms delay with 20ms jitter, 12mbit ceiling.
 sudo tc qdisc add dev eth0 root netem \
   loss 2% delay 80ms 20ms distribution normal rate 12mbit
 
 # ...run the comparison...
 
-sudo tc qdisc del dev eth0 root</code></pre>
+sudo tc qdisc del dev eth0 root</code>
 
         <h2>12. The Numbers From The Nutrition Client</h2>
 
@@ -661,7 +661,7 @@ sudo tc qdisc del dev eth0 root</code></pre>
 
         <p><strong>Debuggability.</strong> This one is underrated. You cannot read a QUIC stream in Wireshark without the keys, your existing packet captures become useless, and half your team's mental model of "connection" no longer maps onto what the network sees. Plan for the tooling.</p>
 
-        <pre><code class="language-bash"># Make QUIC debuggable: export session keys, then point Wireshark at them
+        <code class="language-bash"># Make QUIC debuggable: export session keys, then point Wireshark at them
 export SSLKEYLOGFILE=/tmp/quic-keys.log
 google-chrome --user-data-dir=/tmp/chrome-quic \
   --enable-quic --origin-to-force-quic-on=www.example.com:443
@@ -670,7 +670,7 @@ google-chrome --user-data-dir=/tmp/chrome-quic \
 
 # qlog is the QUIC-native option — structured JSON of every event,
 # viewable in qvis. Nginx does not emit it; quiche and picoquic do.
-QLOGDIR=/tmp/qlog ./quiche-client https://www.example.com/</code></pre>
+QLOGDIR=/tmp/qlog ./quiche-client https://www.example.com/</code>
 
         <h2>14. Platform Notes: Magento And Shopify</h2>
 
@@ -724,11 +724,19 @@ QLOGDIR=/tmp/qlog ./quiche-client https://www.example.com/</code></pre>
           <ul>
             <li>
               <strong><a href="/blog/http2-tls13-implementation/">Implementing HTTP/2 and TLS 1.3 for Secure, Fast Ecommerce</a></strong>
-              <p>TLS 1.3 handshake optimization and cipher suites.</p>
+              <p>HTTP/2 multiplexing and prioritisation, the TLS 1.3 handshake, session resumption, cipher an...</p>
             </li>
             <li>
-              <strong><a href="/blog/cdn-speed-seo/">Leveraging CDNs for Ecommerce Speed and SEO</a></strong>
-              <p>Edge CDN delivery over HTTP/3.</p>
+              <strong><a href="/blog/lazy-loading-strategies/">Lazy Loading Strategies: Eliminating Render-Blocking Assets</a></strong>
+              <p>Lazy loading images, iframes and video without breaking LCP or CLS: native loading=lazy, fet...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/reduce-render-blocking/">Eliminating Render-Blocking CSS and JavaScript</a></strong>
+              <p>How the parser, CSSOM and preload scanner really interact, and how to remove every render-bl...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/browser-network-stack-load-testing-cors/">CORS, Connection Pools, and HTTP/2 Multiplexing in Web-Based Stress Testing</a></strong>
+              <p>Deep dive into browser network internals: navigating CORS preflight overhead, HTTP/1.1 socke...</p>
             </li>
           </ul>
         </div>

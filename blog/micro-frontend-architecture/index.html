@@ -200,8 +200,8 @@
         <p class="lede">A storefront split across five teams was shipping three copies of React and a megabyte of duplicated framework code. The architecture was working exactly as designed.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 31 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 42 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -294,7 +294,7 @@
 
         <p>The core configuration is small, which is misleading. Almost every problem I have debugged in a federated storefront traces back to four lines of it.</p>
 
-        <pre><code class="language-javascript">// webpack.config.js — the product grid micro-frontend
+        <code class="language-javascript">// webpack.config.js — the product grid micro-frontend
 const { ModuleFederationPlugin } = require('webpack').container;
 const deps = require('./package.json').dependencies;
 
@@ -330,7 +330,7 @@ module.exports = {
       },
     }),
   ],
-};</code></pre>
+};</code>
 
         <p><code>singleton: true</code> is the setting that would have saved the retailer at the top of this article. Without it, Module Federation is perfectly happy to load two copies of React side by side, and it will not warn you, because from its point of view two remotes wanting incompatible versions is a situation it has resolved rather than a problem it has found.</p>
 
@@ -340,7 +340,7 @@ module.exports = {
 
         <h3>Consuming a remote</h3>
 
-        <pre><code class="language-javascript">// shell/webpack.config.js
+        <code class="language-javascript">// shell/webpack.config.js
 new ModuleFederationPlugin({
   name: 'shell',
   remotes: {
@@ -348,11 +348,11 @@ new ModuleFederationPlugin({
     catalog: `catalog@${process.env.CATALOG_URL}/remoteEntry.js`,
   },
   shared: { react: { singleton: true, strictVersion: true } },
-});</code></pre>
+});</code>
 
         <p>Hardcoding remote URLs into the shell bundle is the mistake that quietly recouples everything. The moment a URL is baked into the shell's build output, promoting the catalog remote to a new version requires a shell rebuild — and you have reinvented build-time composition while paying the runtime cost of federation. Load the manifest at runtime instead.</p>
 
-        <pre><code class="language-javascript">// Dynamic remote loading: the shell learns about remotes at runtime
+        <code class="language-javascript">// Dynamic remote loading: the shell learns about remotes at runtime
 async function loadRemote(scope, module, url) {
   // Inject the remote entry only once per scope
   if (!window[scope]) {
@@ -369,7 +369,7 @@ async function loadRemote(scope, module, url) {
   }
   const factory = await window[scope].get(module);
   return factory();
-}</code></pre>
+}</code>
 
         <p>The two <code>__webpack_*</code> calls are the whole mechanism. <code>init_sharing</code> populates the shared scope from the host; <code>init</code> hands that scope to the remote so it can decide whether to use the host's React or load its own. Call them out of order and the remote loads its own copy, silently. This is the single most common cause of "why do I have two Reacts" and it never produces an error.</p>
 
@@ -379,7 +379,7 @@ async function loadRemote(scope, module, url) {
 
         <p>Decide early and write it down: the shell owns routing, the document shell, authentication state, the shared dependency contract, and error isolation. It owns nothing that renders a product. If a shell change is required to ship a feature, that is a design smell and it will recur.</p>
 
-        <pre><code class="language-javascript">// A minimal shell mount with error isolation.
+        <code class="language-javascript">// A minimal shell mount with error isolation.
 // If one micro-frontend explodes, the rest of the page survives.
 class MicroFrontendBoundary extends React.Component {
   state = { failed: false };
@@ -401,7 +401,7 @@ class MicroFrontendBoundary extends React.Component {
     if (this.state.failed) return this.props.fallback ?? null;
     return this.props.children;
   }
-}</code></pre>
+}</code>
 
         <p>Error boundaries are not optional here in the way they are optional in a monolith. In a single application, an unhandled render error is your bug and you will see it in your own error tracking within minutes. In a federated page, it is another team's bug, it takes down the whole page, and the team who owns the shell gets the incident call. Boundaries turn a page outage into a missing recommendations strip.</p>
 
@@ -421,7 +421,7 @@ class MicroFrontendBoundary extends React.Component {
 
         <p><strong>The server is the source of truth and each micro-frontend fetches it</strong> is the approach I would defend. The cart lives on the backend, every consumer reads it through a shared cache keyed on the same endpoint, and mutations invalidate the key. Nobody shares JavaScript state at all; they share an HTTP resource, which is a contract you can version, test, and monitor.</p>
 
-        <pre><code class="language-javascript">// Cross-MFE cache invalidation without a shared store.
+        <code class="language-javascript">// Cross-MFE cache invalidation without a shared store.
 // Each micro-frontend owns its own query client; the only shared
 // surface is the URL, which is a contract the backend already publishes.
 const CART_KEY = '/api/cart';
@@ -446,7 +446,7 @@ export async function addToCart(sku, qty) {
 
 channel.onmessage = (e) =&gt; {
   if (e.data?.type === 'invalidate') mutate(CART_KEY);
-};</code></pre>
+};</code>
 
         <p>Yes, this means more network requests than a shared in-memory store. On a storefront that is usually the right trade: cart state that is subtly wrong is a support ticket and a lost order, and the request is a few hundred bytes against a stale-cart bug that takes a week to reproduce. Deduplicate aggressively, cache at the edge where you safely can, and accept the chattiness.</p>
 
@@ -460,7 +460,7 @@ channel.onmessage = (e) =&gt; {
 
         <p>I use shell-owned routing with a declarative table, because on a storefront the URL structure is an SEO asset and it should not be an emergent property of who deployed last.</p>
 
-        <pre><code class="language-javascript">// One readable routing table in the shell. Path ownership is explicit.
+        <code class="language-javascript">// One readable routing table in the shell. Path ownership is explicit.
 const ROUTES = [
   { path: '/',                mfe: 'home',     module: './HomePage' },
   { path: '/c/:slug',         mfe: 'catalog',  module: './CategoryPage' },
@@ -477,7 +477,7 @@ document.addEventListener('mouseover', (e) =&gt; {
   if (!link) return;
   const route = matchRoute(ROUTES, new URL(link.href).pathname);
   if (route) warmRemote(route.mfe);
-}, { passive: true });</code></pre>
+}, { passive: true });</code>
 
         <p>The hover prefetch is worth more than it looks. Median hover-to-click on desktop is a few hundred milliseconds, which is often enough to have fetched and parsed a remote entry. It does not help on touch, where you want an intersection-observer-driven prefetch of the likely next route instead. Neither technique removes the cost; both move it out of the interaction.</p>
 
@@ -516,7 +516,7 @@ document.addEventListener('mouseover', (e) =&gt; {
 
         <p><strong>Serve every remote from the same origin.</strong> Path-based routing at the CDN — <code>/mfe/catalog/</code>, <code>/mfe/checkout/</code> — rather than subdomains. This eliminates the DNS and TLS cost entirely and lets the connection be reused. It requires CDN configuration rather than DNS records, which teams find less convenient and which is worth the inconvenience.</p>
 
-        <pre><code class="language-nginx"># Same-origin remotes: the browser reuses one connection for everything.
+        <code class="language-nginx"># Same-origin remotes: the browser reuses one connection for everything.
 location /mfe/catalog/ {
     proxy_pass https://catalog-mfe.internal/;
     # remoteEntry.js must never be cached long: it is the pointer to
@@ -530,15 +530,15 @@ location /mfe/catalog/ {
 # The hashed chunks it points at, however, are immutable and cache forever.
 location ~ ^/mfe/[^/]+/static/.*\.[0-9a-f]{8,}\.(js|css)$ {
     add_header Cache-Control "public, max-age=31536000, immutable";
-}</code></pre>
+}</code>
 
         <p>That cache split is the important detail. <code>remoteEntry.js</code> is a manifest and must be revalidated; the chunks it names are content-hashed and should be cached for a year. Get this backwards — a long TTL on the entry file — and you will deploy a fix and watch it not reach anyone for hours, with no way to tell which customers are on which version.</p>
 
         <p><strong>Preload the entry files for the current route.</strong> The shell knows from its routing table which remotes this URL needs. Emit link hints in the initial HTML rather than discovering them in JavaScript.</p>
 
-        <pre><code class="language-html">&lt;!-- Rendered server-side, based on the matched route --&gt;
+        <code class="language-html">&lt;!-- Rendered server-side, based on the matched route --&gt;
 &lt;link rel="modulepreload" href="/mfe/catalog/remoteEntry.js"&gt;
-&lt;link rel="preload" as="script" href="/mfe/catalog/static/ProductGrid.8f3c2a91.js"&gt;</code></pre>
+&lt;link rel="preload" as="script" href="/mfe/catalog/static/ProductGrid.8f3c2a91.js"&gt;</code>
 
         <p>The second line requires the shell to know the current chunk hash, which means reading each remote's build manifest at render time. That is real infrastructure work, and it is the difference between a federated page that feels fine and one that feels sluggish.</p>
 
@@ -556,7 +556,7 @@ location ~ ^/mfe/[^/]+/static/.*\.[0-9a-f]{8,}\.(js|css)$ {
 
         <p><strong>Compose fragments over HTTP.</strong> Each micro-frontend exposes an endpoint that returns rendered HTML plus a manifest of the assets that hydrate it. The shell fetches those in parallel, with a timeout, and stitches them.</p>
 
-        <pre><code class="language-javascript">// Fragment composition with a hard timeout and a per-fragment fallback.
+        <code class="language-javascript">// Fragment composition with a hard timeout and a per-fragment fallback.
 // A slow team must not be able to slow the whole page down.
 async function fetchFragment(name, url, timeoutMs = 250) {
   const ctrl = new AbortController();
@@ -577,7 +577,7 @@ async function fetchFragment(name, url, timeoutMs = 250) {
 
 const fragments = await Promise.all(
   route.fragments.map(f =&gt; fetchFragment(f.name, f.ssrUrl))
-);</code></pre>
+);</code>
 
         <p>The 250ms timeout is a deliberate policy choice, not a tuning parameter. It says: any team whose server render takes longer than a quarter of a second forfeits their server-rendered HTML for that request. Without a number like that, one team's slow database query becomes everyone's slow page, and the political conversation that follows is worse than the technical one.</p>
 
@@ -595,7 +595,7 @@ const fragments = await Promise.all(
 
         <p><strong>CSS custom properties as the contract.</strong> The design system publishes tokens as custom properties on <code>:root</code>. Every micro-frontend consumes tokens and never hardcodes a value. Tokens can change centrally without any team rebuilding — one of the very few genuinely free wins in this architecture.</p>
 
-        <pre><code class="language-css">/* Published once by the shell. Every remote reads these and owns none. */
+        <code class="language-css">/* Published once by the shell. Every remote reads these and owns none. */
 :root {
   --shop-color-accent: #0b6b53;
   --shop-space-3: 0.75rem;
@@ -608,11 +608,11 @@ const fragments = await Promise.all(
   border-radius: var(--shop-radius-card);
   padding: var(--shop-space-3);
   font-family: var(--shop-font-body);
-}</code></pre>
+}</code>
 
         <p><strong>Scoped class names, enforced by build config.</strong> CSS Modules or a hashed prefix per remote, checked in CI. Cheap and effective.</p>
 
-        <pre><code class="language-javascript">// Every remote prefixes its generated class names with its own name.
+        <code class="language-javascript">// Every remote prefixes its generated class names with its own name.
 // A collision then becomes impossible rather than unlikely.
 {
   loader: 'css-loader',
@@ -621,7 +621,7 @@ const fragments = await Promise.all(
       localIdentName: 'catalog__[local]__[hash:base64:5]',
     },
   },
-}</code></pre>
+}</code>
 
         <p><strong>Shadow DOM</strong> gives true isolation and takes global styling away with it, including your design system's tokens unless you explicitly pierce through. Custom properties do inherit through shadow boundaries, which is precisely why the token approach pairs well with it.</p>
 
@@ -637,7 +637,7 @@ const fragments = await Promise.all(
 
         <p><strong>The interface between shell and remote is a versioned contract, tested from both sides.</strong> Whatever props the shell passes and whatever the remote exposes gets a schema, and both sides test against a shared fixture.</p>
 
-        <pre><code class="language-typescript">// contracts/catalog@2.ts — published as a versioned package,
+        <code class="language-typescript">// contracts/catalog@2.ts — published as a versioned package,
 // consumed by the shell AND by the catalog team's own tests.
 export interface CatalogMountProps {
   readonly version: 2;
@@ -658,7 +658,7 @@ export function assertProps(p: unknown): asserts p is CatalogMountProps {
   if (c?.version !== 2) {
     throw new Error(`catalog: expected contract v2, got ${c?.version}`);
   }
-}</code></pre>
+}</code>
 
         <p><strong>Expand and contract, never rename.</strong> Adding a field is safe. Removing or changing one requires publishing the new shape alongside the old, migrating consumers, then deleting — over at least two release cycles. This is the same discipline as evolving a public API, because that is what this is. The teams that skip it discover that a "quick prop rename" broke a page they have never opened.</p>
 
@@ -670,7 +670,7 @@ export function assertProps(p: unknown): asserts p is CatalogMountProps {
 
         <p>The important property: because the shell resolves remotes at runtime from a manifest, deploying is publishing assets plus updating a pointer. That makes rollback nearly instant, if you keep old versions addressable.</p>
 
-        <pre><code class="language-bash"># Deploy: publish immutable, versioned assets; then move the pointer.
+        <code class="language-bash"># Deploy: publish immutable, versioned assets; then move the pointer.
 VERSION="$(git rev-parse --short HEAD)"
 
 aws s3 sync ./dist "s3://mfe-assets/catalog/${VERSION}/" \
@@ -685,7 +685,7 @@ aws s3 cp manifest.json s3://mfe-assets/manifests/production.json \
   --cache-control "no-cache, must-revalidate"
 
 # Rollback is the same command with an older VERSION. Assets are
-# never deleted, so every previous release stays reachable.</code></pre>
+# never deleted, so every previous release stays reachable.</code>
 
         <p>Two rules that come from getting this wrong. Never delete old versioned assets on deploy — a customer mid-session holds the old chunk hashes in memory and will request them; deleting the directory turns your deploy into their 404. Keep the manifest small enough to inline into the HTML.</p>
 
@@ -699,7 +699,7 @@ aws s3 cp manifest.json s3://mfe-assets/manifests/production.json \
 
         <p><strong>Attribution on every error.</strong> Every micro-frontend tags its reports with name, version, and owning team, and the shell tags anything it catches from a boundary.</p>
 
-        <pre><code class="language-javascript">// Attribute uncaught errors by walking the stack for a known remote path.
+        <code class="language-javascript">// Attribute uncaught errors by walking the stack for a known remote path.
 // Crude, and better than the alternative of guessing in a war room.
 const REMOTE_PATTERNS = [
   { re: /\/mfe\/catalog\//,  mfe: 'catalog',  team: 'discovery' },
@@ -715,17 +715,17 @@ window.addEventListener('error', (e) =&gt; {
     team: owner?.team ?? 'platform',
     versions: window.__MFE_VERSIONS__, // full version map, every report
   });
-});</code></pre>
+});</code>
 
         <p>Shipping the whole version map with every error report costs a few hundred bytes and repeatedly pays for itself. "This only happens when catalog 4.2 runs alongside checkout 3.9" is a sentence you can only say if you recorded it.</p>
 
         <p><strong>Per-micro-frontend performance attribution.</strong> Total page LCP is not actionable when five teams contribute. Use the Long Animation Frames API or, at minimum, wrap each mount in a performance mark, so you can say which region cost what.</p>
 
-        <pre><code class="language-javascript">performance.mark(`mfe:${name}:start`);
+        <code class="language-javascript">performance.mark(`mfe:${name}:start`);
 await mount(el, props);
 performance.mark(`mfe:${name}:end`);
 const m = performance.measure(`mfe:${name}`, `mfe:${name}:start`, `mfe:${name}:end`);
-reportMetric('mfe_mount_ms', m.duration, { mfe: name, version });</code></pre>
+reportMetric('mfe_mount_ms', m.duration, { mfe: name, version });</code>
 
         <p><strong>Source maps uploaded from each pipeline to one place.</strong> Every team publishes maps to the shared error tracker on build, tagged with the same version string that appears in the manifest. Without this, minified traces are all you get and every investigation starts from nothing.</p>
 
@@ -767,7 +767,7 @@ reportMetric('mfe_mount_ms', m.duration, { mfe: name, version });</code></pre>
 
         <p>Canonical tags, <code>hreflang</code>, meta descriptions and the title belong to the shell, because they are document-level and there must be one authority. A remote that sets <code>document.title</code> after mount is a race condition against the crawler.</p>
 
-        <pre><code class="language-javascript">// Document metadata is shell-owned. Remotes *request* changes through a
+        <code class="language-javascript">// Document metadata is shell-owned. Remotes *request* changes through a
 // narrow API rather than writing to the document directly, so the shell
 // stays the single writer and can ignore late arrivals.
 export function requestMetadata(mfe, patch) {
@@ -776,7 +776,7 @@ export function requestMetadata(mfe, patch) {
     reportWarning('late_title_write', { mfe });
   }
   shellBus.emit('metadata', { mfe, patch });
-}</code></pre>
+}</code>
 
         <p>And test what the crawler sees rather than what your browser shows. Fetch the page with JavaScript disabled and read the HTML. If your product names, prices and descriptions are not in it, you have a problem that no amount of technical elegance offsets.</p>
 
@@ -792,7 +792,7 @@ export function requestMetadata(mfe, patch) {
 
         <p>The shell owns the landmark structure and the <code>h1</code>. Remotes start their heading hierarchy at <code>h2</code> and are linted for it. The shell provides one announcer service and one modal manager; remotes call them rather than implementing their own.</p>
 
-        <pre><code class="language-javascript">// One live region for the whole document, owned by the shell.
+        <code class="language-javascript">// One live region for the whole document, owned by the shell.
 // Remotes announce through it, so two simultaneous updates queue
 // instead of racing each other into silence.
 const region = document.getElementById('shell-announcer');
@@ -805,7 +805,7 @@ export function announce(message, priority = 'polite') {
     // Clearing after a beat lets an identical repeat message re-announce
     setTimeout(() =&gt; { region.textContent = ''; resolve(); }, 1200);
   }));
-}</code></pre>
+}</code>
 
         <p>And run the automated accessibility check against the <em>composed</em> page in CI, not each remote's storybook. I have seen a storefront where every team's axe run was green and the real page had four <code>h1</code> elements.</p>
 
@@ -819,7 +819,7 @@ export function announce(message, priority = 'polite') {
 
         <p><strong>Composed end-to-end tests, but few of them.</strong> Load the real shell with the real remotes and walk the two or three journeys that carry the revenue. These are slow and flaky and you still need them, because they are the only tests that exercise what a customer gets. Keep the number small enough that nobody is tempted to skip them when they go red.</p>
 
-        <pre><code class="language-javascript">// The composed smoke test: every region must actually appear.
+        <code class="language-javascript">// The composed smoke test: every region must actually appear.
 // Run against staging on every manifest update, not on every team's build.
 test('category page composes all regions', async ({ page }) =&gt; {
   const failures = [];
@@ -834,7 +834,7 @@ test('category page composes all regions', async ({ page }) =&gt; {
 
   // A page that renders but logs errors is a page halfway to broken.
   expect(failures).toEqual([]);
-});</code></pre>
+});</code>
 
         <p><strong>A version-matrix check in staging.</strong> Before promoting a remote, run the smoke test against the incoming version combined with the current production versions of everything else. This catches the class of bug that only exists between versions, which is the class no team's own pipeline can see.</p>
 
@@ -916,12 +916,20 @@ test('category page composes all regions', async ({ page }) =&gt; {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
-              <p>Decoupled front-end architecture patterns.</p>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Decoupling Front-End &amp; Back-End</a></strong>
+              <p>An honest engineering assessment of headless commerce: what decoupling genuinely buys you, t...</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
-              <p>GraphQL fetchers and edge rendering.</p>
+              <strong><a href="/blog/magento-hyva-themes/">Revolutionizing Magento 2 Frontends with Hyvä Themes &amp; Alpine.js</a></strong>
+              <p>Hyva versus Luma on real Magento stores: what the rewrite removes, Alpine and Tailwind in pr...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
+              <p>The content layer for headless commerce: modelling in Sanity, Strapi and Contentful, preview...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/multi-cdn-strategies/">Multi-CDN Architecture Strategies for High Availability</a></strong>
+              <p>Multi-CDN for ecommerce: DNS versus anycast steering, health checks with quorum, cache fragm...</p>
             </li>
           </ul>
         </div>

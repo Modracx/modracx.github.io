@@ -200,8 +200,8 @@
         <p class="lede">Forty-minute deploys, a white screen on one server in four, and a fix that involved SSH. Containers solved it — but the first attempt made product pages four times slower.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 24 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 35 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -278,7 +278,7 @@
 
         <p>Multi-stage builds are the whole game for PHP. The build stage needs Composer, Node, git, and a compiler toolchain; the runtime stage needs none of them, and shipping them is both a size problem and a security problem — a container with <code>git</code> and a package manager in it is a much more useful place for an attacker to land.</p>
 
-        <pre><code class="language-dockerfile"># syntax=docker/dockerfile:1.7
+        <code class="language-dockerfile"># syntax=docker/dockerfile:1.7
 
 # ---------- stage 1: PHP dependencies ----------
 FROM php:8.3-fpm-alpine AS vendor
@@ -344,7 +344,7 @@ COPY docker/fpm-pool.conf /usr/local/etc/php-fpm.d/zz-pool.conf
 WORKDIR /app
 USER app
 EXPOSE 9000
-CMD ["php-fpm", "-F"]</code></pre>
+CMD ["php-fpm", "-F"]</code>
 
         <p>Three notes on that file that are worth more than the rest of it.</p>
 
@@ -358,7 +358,7 @@ CMD ["php-fpm", "-F"]</code></pre>
 
         <p>Without one, the build context includes <code>.git</code>, <code>node_modules</code>, <code>var/</code>, and any database dump somebody left in the repository root. On the project I have been describing the initial build context was 4.2GB and took ninety seconds to send to the daemon before the build started.</p>
 
-        <pre><code class="language-text">.git
+        <code class="language-text">.git
 .github
 node_modules
 var/cache
@@ -371,7 +371,7 @@ generated
 *.sql
 *.sql.gz
 .env
-docker-compose.override.yml</code></pre>
+docker-compose.override.yml</code>
 
         <p>Note <code>pub/media</code> in there. It is not just size — including it means an image that contains customer-uploaded files, which is a data-handling problem as much as a build problem.</p>
 
@@ -379,7 +379,7 @@ docker-compose.override.yml</code></pre>
 
         <p>If you are running a decoupled front end — a Next.js or Nuxt storefront in front of a commerce API — the containerisation story is much simpler, because the framework was designed with it in mind.</p>
 
-        <pre><code class="language-dockerfile">FROM node:20-alpine AS deps
+        <code class="language-dockerfile">FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -409,7 +409,7 @@ USER nextjs
 EXPOSE 3000
 # Exec form, no shell. A shell as PID 1 does not forward SIGTERM, so the
 # container is killed rather than shut down gracefully.
-CMD ["node", "server.js"]</code></pre>
+CMD ["node", "server.js"]</code>
 
         <p>That last comment is the one that catches people. If your <code>CMD</code> is a string rather than an array, Docker runs it under <code>/bin/sh -c</code>, the shell becomes PID 1, and it does not pass signals to the child. Kubernetes sends <code>SIGTERM</code>, nothing happens, thirty seconds pass, and the pod is killed with <code>SIGKILL</code> mid-request. Every rolling deploy drops some connections and nobody can work out why.</p>
 
@@ -440,7 +440,7 @@ CMD ["node", "server.js"]</code></pre>
 
         <p>Magento's <code>#env()</code> syntax makes this tractable: the file lives in the image with placeholders, and real values arrive as environment variables.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // app/etc/env.php — committed, contains no secrets, identical in every
 // environment. Values resolve from the pod's environment at runtime.
 return [
@@ -468,7 +468,7 @@ return [
     ]]],
     // Non-secret, environment-shaped values are fine as plain config.
     'MAGE_MODE' =&gt; 'production',
-];</code></pre>
+];</code>
 
         <p>That <code>disable_locking</code> setting is worth a sentence, because it is the single most impactful line in the file for a multi-replica deployment. Magento's Redis session handler takes a lock per session by default, and under concurrency — a customer with the site open in two tabs, or an aggressive bot — requests queue behind each other until they time out. Symptom: intermittent 30-second responses on checkout that nobody can reproduce. Turning locking off is safe for the overwhelming majority of stores and I have never regretted it.</p>
 
@@ -500,7 +500,7 @@ return [
 
         <p><strong>Liveness probe</strong> controls whether the pod is killed. It must check only whether the process itself is wedged. If your liveness probe checks the database, then a database blip restarts every pod in the cluster simultaneously, all of them reconnect at once, and you have converted a thirty-second database hiccup into a fifteen-minute outage. I have watched this happen. It is the single most common self-inflicted Kubernetes outage I encounter.</p>
 
-        <pre><code class="language-yaml">containers:
+        <code class="language-yaml">containers:
   - name: web
     image: registry.example.com/shop:2024.11.14-a3f91c2
     ports:
@@ -537,13 +537,13 @@ return [
         exec: { command: ["sh", "-c", "sleep 8"] }
 
     # Must exceed preStop sleep plus the longest in-flight request.
-    terminationGracePeriodSeconds: 45</code></pre>
+    terminationGracePeriodSeconds: 45</code>
 
         <p>The <code>preStop</code> sleep looks like a hack and is in fact the correct fix for a real race in Kubernetes' design. When a pod is terminated, two things happen concurrently: the kubelet sends <code>SIGTERM</code>, and the endpoints controller removes the pod from the Service. There is no ordering guarantee, and the second can take several seconds to reach every kube-proxy. Sleeping before shutting down gives the removal time to propagate.</p>
 
         <p>The health endpoints themselves should be honest:</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // /health/ready — checks the things whose absence makes this pod useless.
 $checks = [];
 try {
@@ -563,7 +563,7 @@ $checks['redis'] = @$redis-&gt;connect(getenv('REDIS_CACHE_HOST'), 6379, 2.0)
 $ok = !in_array('fail', $checks, true);
 http_response_code($ok ? 200 : 503);
 header('Content-Type: application/json');
-echo json_encode(['ready' =&gt; $ok, 'checks' =&gt; $checks]);</code></pre>
+echo json_encode(['ready' =&gt; $ok, 'checks' =&gt; $checks]);</code>
 
         <h2>10. Resources, Limits, and the Throttling Trap</h2>
 
@@ -575,7 +575,7 @@ echo json_encode(['ready' =&gt; $ok, 'checks' =&gt; $checks]);</code></pre>
 
         <p>My position, which is not universal: set CPU requests carefully and either omit CPU limits or set them high enough to only catch runaway processes. Set memory requests and limits equal, because memory is incompressible — exceeding the limit means the OOM killer, not throttling, and a pod that gets OOM-killed under load is worse than one that was never scheduled.</p>
 
-        <pre><code class="language-yaml">resources:
+        <code class="language-yaml">resources:
   requests:
     cpu: "500m"        # scheduling guarantee, based on observed p50
     memory: "768Mi"
@@ -583,11 +583,11 @@ echo json_encode(['ready' =&gt; $ok, 'checks' =&gt; $checks]);</code></pre>
     # No CPU limit: this pod may burst into idle capacity on the node.
     # Revisit if a noisy neighbour ever becomes a real problem rather than
     # a theoretical one.
-    memory: "768Mi"    # equal to the request: predictable, no overcommit</code></pre>
+    memory: "768Mi"    # equal to the request: predictable, no overcommit</code>
 
         <p>Check whether you are already being throttled before changing anything. The metric is <code>container_cpu_cfs_throttled_periods_total</code> divided by <code>container_cpu_cfs_periods_total</code>. Anything sustained above a few percent is costing you latency.</p>
 
-        <pre><code class="language-promql"># Proportion of scheduling periods in which the container was throttled.
+        <code class="language-promql"># Proportion of scheduling periods in which the container was throttled.
 # Above 0.05 on a latency-sensitive workload, raise or remove the CPU limit.
 sum by (pod) (
   rate(container_cpu_cfs_throttled_periods_total{namespace="shop"}[5m])
@@ -595,7 +595,7 @@ sum by (pod) (
 /
 sum by (pod) (
   rate(container_cpu_cfs_periods_total{namespace="shop"}[5m])
-)</code></pre>
+)</code>
 
         <p>One PHP-specific note: PHP-FPM's process manager needs to agree with the container's resources. A pool configured with <code>pm.max_children = 120</code> inside a container with 768MB of memory will be OOM-killed the moment traffic arrives, because 120 PHP processes at 60MB each is 7.2GB. Size the pool from the memory limit divided by observed per-process usage, and set it explicitly rather than leaving a default from a shared-hosting era config.</p>
 
@@ -605,7 +605,7 @@ sum by (pod) (
 
         <p>The default HPA behaviour is too slow for that, and the reason is a chain of delays nobody accounts for: metrics are scraped every 15 to 30 seconds, the HPA evaluates every 15 seconds, the new pod is scheduled, the image is pulled if the node is cold, the container starts, the startup probe passes, opcache warms. Two and a half minutes is a realistic total, and your spike was ninety seconds.</p>
 
-        <pre><code class="language-yaml">apiVersion: autoscaling/v2
+        <code class="language-yaml">apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: shop-web
@@ -653,7 +653,7 @@ spec:
       policies:
         - type: Percent
           value: 20
-          periodSeconds: 120</code></pre>
+          periodSeconds: 120</code>
 
         <p>Asymmetry is the point. Aggressive up, patient down. The cost of ten unnecessary pods for ten minutes is pennies; the cost of a checkout outage during a campaign is not.</p>
 
@@ -667,7 +667,7 @@ spec:
 
         <p>The discipline is expand-and-contract, over three releases. Release one adds the new column and writes to both. Release two reads from the new column. Release three, days later, drops the old one. It is tedious and it is the only approach that actually works. I have watched a team try to shortcut it with a maintenance window and discover that their maintenance page was served by the same pods they were replacing.</p>
 
-        <pre><code class="language-yaml">apiVersion: apps/v1
+        <code class="language-yaml">apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: shop-web
@@ -698,7 +698,7 @@ metadata:
 spec:
   minAvailable: 4
   selector:
-    matchLabels: { app: shop-web }</code></pre>
+    matchLabels: { app: shop-web }</code>
 
         <p>The PodDisruptionBudget is the piece most teams omit and then need. It stops a node drain — a cluster upgrade, a spot instance reclaim, a routine maintenance operation performed by the platform team who did not tell you — from taking down more replicas at once than you can afford. Without one, a cluster autoscaler consolidating nodes at 03:00 can evict every pod of a deployment simultaneously and it will be entirely within its rights.</p>
 
@@ -712,7 +712,7 @@ spec:
 
         <p>Run a separate Deployment for consumers and Kubernetes CronJobs for scheduled work, from the same image with a different command. Same code, different resources, independent scaling.</p>
 
-        <pre><code class="language-yaml">apiVersion: batch/v1
+        <code class="language-yaml">apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: shop-cron-default
@@ -738,7 +738,7 @@ spec:
               command: ["php", "bin/magento", "cron:run", "--group=default"]
               resources:
                 requests: { cpu: "250m", memory: "512Mi" }
-                limits:   { memory: "1Gi" }</code></pre>
+                limits:   { memory: "1Gi" }</code>
 
         <p>Queue consumers are a Deployment rather than a CronJob, because they are long-running. Give them their own HPA driven by queue depth — the number of messages waiting is a far better scaling signal than CPU, and it is the metric that actually correlates with whether customers are getting their order confirmation emails.</p>
 
@@ -750,7 +750,7 @@ spec:
 
         <p>Logs go to stdout and stderr as structured JSON, and are collected by the platform. A PHP application writing to <code>var/log/system.log</code> inside a container is writing to a filesystem that will be deleted, and worse, is writing to a filesystem that will fill up and take the node with it.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // Structured logging to stdout. The request id is the thing that makes logs
 // usable at all once six pods are interleaving their output.
 use Monolog\Logger;
@@ -767,11 +767,11 @@ $log-&gt;pushProcessor(function (array $record) {
     $record['extra']['release']    = getenv('RELEASE_SHA');
     $record['extra']['request_id'] = $_SERVER['HTTP_X_REQUEST_ID'] ?? null;
     return $record;
-});</code></pre>
+});</code>
 
         <p>The pod name and release SHA come from the downward API, which is a small piece of manifest that pays for itself the first time you need to know whether an error came from the new release or the old one during a rollout.</p>
 
-        <pre><code class="language-yaml">env:
+        <code class="language-yaml">env:
   - name: POD_NAME
     valueFrom:
       fieldRef: { fieldPath: metadata.name }
@@ -779,7 +779,7 @@ $log-&gt;pushProcessor(function (array $record) {
     valueFrom:
       fieldRef: { fieldPath: spec.nodeName }
   - name: RELEASE_SHA
-    value: "a3f91c2"</code></pre>
+    value: "a3f91c2"</code>
 
         <p>The four alerts I would set up before the first production traffic: pod restart rate above zero over fifteen minutes, CFS throttling above 5%, readiness probe failures, and 5xx rate at the ingress. That is a short list on purpose. Alerting on everything means alerting on nothing.</p>
 
@@ -793,7 +793,7 @@ $log-&gt;pushProcessor(function (array $record) {
 
         <p>The alternative worth considering is skipping Varnish and doing full-page caching at the CDN, which is where I would start on a new build. Fastly and Cloudflare both support the surrogate-key invalidation model Magento's cache tags map onto, and it removes an entire tier from your cluster. The catch is that CDN-level page caching and personalised content need careful separation, and if your storefront renders customer-specific content server-side you will be doing more work than you saved.</p>
 
-        <pre><code class="language-yaml">apiVersion: networking.k8s.io/v1
+        <code class="language-yaml">apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: shop
@@ -819,7 +819,7 @@ spec:
             backend:
               service:
                 name: varnish
-                port: { number: 80 }</code></pre>
+                port: { number: 80 }</code>
 
         <h2>16. What It Costs, Honestly</h2>
 
@@ -888,12 +888,20 @@ spec:
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/cloud-migration-guide/">Cloud Migration Guide: Migrating Monolithic E-Commerce to AWS</a></strong>
-              <p>Migrating to AWS ECS and EKS clusters.</p>
+              <strong><a href="/blog/cicd-pipeline-ecommerce/">Building CI/CD Pipelines for Enterprise E-Commerce Deployments</a></strong>
+              <p>Vendor-neutral CI/CD for ecommerce: build once deploy many, gates that block vs warn, expand...</p>
             </li>
             <li>
-              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
-              <p>AWS Lambda container execution.</p>
+              <strong><a href="/blog/azure-devops-magento-shopify-cicd/">Azure DevOps CI/CD Pipelines for Enterprise E-Commerce</a></strong>
+              <p>Build-once-deploy-many Azure Pipelines for Magento 2 and Shopify themes: artefacts, static c...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Decoupling Front-End &amp; Back-End</a></strong>
+              <p>An honest engineering assessment of headless commerce: what decoupling genuinely buys you, t...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/database-sharding-scaling/">Database Sharding &amp; Read-Replica Architecture for E-Commerce</a></strong>
+              <p>Read replicas, replication lag, when sharding is warranted, shard key mistakes you cannot un...</p>
             </li>
           </ul>
         </div>

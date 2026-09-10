@@ -11,6 +11,10 @@
   if (!canvas) return;
 
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var isLowPower = (typeof navigator !== "undefined" && (
+    (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) ||
+    (navigator.deviceMemory && navigator.deviceMemory < 4)
+  )) || reduced;
 
   /* Motes are lit points against a night sky, and ink flecks against a day
      one — so the palette (and the constellation link colour) swaps with the
@@ -81,6 +85,7 @@
     this.vw = 0;
     this.vh = 0;
     this.isMobile = false;
+    this.isScrolling = false;
     createSprites(this.dpr);
     this.resize();
     this.seed();
@@ -114,8 +119,9 @@
     this.canvas.style.height = h + "px";
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-    var target = Math.round(Math.min(180, Math.max(50, (w * h) / 8500)));
-    if (this.isMobile) target = 24; // Low particle count on mobile for smooth 60fps scrolling
+    var target = Math.round(Math.min(160, Math.max(40, (w * h) / 9500)));
+    if (this.isMobile) target = 16; // Low particle count on mobile for smooth 60-120fps scrolling
+    else if (isLowPower) target = 32;
     this.target = target;
 
     /* Vanishing point. depth.js nudges cx/cy with the same head-sway it
@@ -218,6 +224,15 @@
       self.pointer.x = -9999;
       self.pointer.y = -9999;
     });
+
+    var scrollDebounce;
+    window.addEventListener("scroll", function () {
+      self.isScrolling = true;
+      clearTimeout(scrollDebounce);
+      scrollDebounce = setTimeout(function () {
+        self.isScrolling = false;
+      }, 90);
+    }, { passive: true });
 
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) self.stop();
@@ -350,7 +365,8 @@
     // At rest the sky is a chart; in motion it is a tunnel. Screen-space links
     // between motes at very different depths would read as rubber bands into
     // the screen and fight the fly-through, so they only exist when still.
-    if (!this.isMobile && Math.abs(this.sv || 0) <= 3) {
+    // Skip completely during active scroll and on low-power devices for 120fps fluid scrolling.
+    if (!this.isMobile && !isLowPower && !this.isScrolling && Math.abs(this.sv || 0) <= 3) {
       this.hash();
       ctx.lineWidth = 0.6;
       var range = this.linkRange;

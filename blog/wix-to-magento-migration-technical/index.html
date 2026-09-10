@@ -63,11 +63,11 @@
   <!-- Theme: apply the stored chart before first paint so there is no flash. -->
   <script>(function(){try{var t=localStorage.getItem('modracx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
   <link rel="stylesheet" href="/style.min.css?v=20260807-atlas2" />
-  <title>Wix to Magento: The Brutal Reality of Platform Migration | MODRACX</title>
-  <meta name="description" content="A developer guide to migrating from Wix to Magento 2: data extraction, mapping schemas, URL redirects, canonical configurations, and cutting over DNS safely." />
+  <title>Wix to Magento 2 Migration Guide: Data Architecture, 301 Redirects & SEO | MODRACX</title>
+  <meta name="description" content="Complete technical guide for migrating from Wix to Magento 2: exporting product catalogs, customer password handling, preserving URL slugs with 301 redirects, and zero revenue loss." />
 
-  <meta property="og:title" content="Wix to Magento: The Brutal Reality of Platform Migration | MODRACX" />
-  <meta property="og:description" content="A developer guide to migrating from Wix to Magento 2: data extraction, mapping schemas, URL redirects, canonical configurations, and cutting over DNS safely." />
+  <meta property="og:title" content="Wix to Magento 2 Migration Guide: Data Architecture, 301 Redirects & SEO | MODRACX" />
+  <meta property="og:description" content="Complete technical guide for migrating from Wix to Magento 2: exporting product catalogs, customer password handling, preserving URL slugs with 301 redirects, and zero revenue loss." />
   <meta property="og:type" content="article" />
   <link rel="canonical" href="https://www.modracx.com/blog/wix-to-magento-migration-technical/" />
   <link rel="alternate" hreflang="en" href="https://www.modracx.com/blog/wix-to-magento-migration-technical/" />
@@ -208,8 +208,8 @@
         <p class="lede">A developer guide to migrating from Wix to Magento 2: data extraction, mapping schemas, URL redirects, canonical configurations, and cutting over DNS safely.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> &bull;
-          <span>Reading Time: 21 min read</span> &bull;
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 26 min read</span> &bull;
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -247,7 +247,7 @@
 <p>Wix stores product data in what effectively behaves like a flat document structure. When you call the Wix Stores API, you get a JSON blob representing a product, its variants, and its pricing all neatly nested. Magento 2 stores catalog data using the EAV (Entity-Attribute-Value) model. A single product is not a single row in a database table. It is spread across a minimum of six tables depending on the data types of its attributes.</p>
 <p>The core table is <code>catalog_product_entity</code>. This stores the <code>entity_id</code>, <code>sku</code>, <code>created_at</code>, <code>updated_at</code>, and <code>type_id</code>. That is it. If you want the product name, you must join <code>catalog_product_entity_varchar</code>. If you want the price, you join <code>catalog_product_entity_decimal</code>. If you want the description, you join <code>catalog_product_entity_text</code>. If you want a boolean flag like <code>status</code> or <code>visibility</code>, you join <code>catalog_product_entity_int</code>. This normalization allows Magento to support a virtually infinite number of custom attributes without altering the database schema, but it makes data migration an incredibly heavy operation.</p>
 <p>Here is an ASCII data flow diagram demonstrating the extraction and insertion process:</p>
-<pre><code>
+<code>
 +-----------------+       +--------------------+       +----------------------+       +-------------------------+
 |                 |       |                    |       |                      |       | Magento 2 EAV Database  |
 |   Wix REST API  +-----> | Python Extraction  +-----> | Data Transformation  +-----> | catalog_product_entity  |
@@ -257,11 +257,11 @@
                                                                                       | + _text                 |
                                                                                       | + _datetime             |
                                                                                       +-------------------------+
-</code></pre>
+</code>
 
 <h2>Data Extraction: Asynchronous Python Scripts</h2>
 <p>To extract data from Wix, we cannot rely on manual CSV exports. We need automated, paginated, robust API extraction. Wix rate limits heavily. We need asynchronous I/O to maximize throughput while respecting the <code>429 Too Many Requests</code> headers. Here is the exact Python extraction script I wrote utilizing <code>aiohttp</code> and <code>asyncio</code>.</p>
-<pre><code>
+<code>
 import asyncio
 import aiohttp
 import json
@@ -342,17 +342,17 @@ async def extract_all_products() -> List[Dict[str, Any]]:
 
 if __name__ == "__main__":
     asyncio.run(extract_all_products())
-</code></pre>
+</code>
 <p>This script is fault-tolerant. It handles exponential backoff for rate limiting, paginates through the entire catalog, and dumps a massive raw JSON array. We need this raw state saved independently of the transformation logic so we can replay transformations without re-hitting the Wix API.</p>
 
 <h2>Transforming Flat JSON to EAV SQL Inserts</h2>
 <p>We do not use Magento's native CSV import for 100,000+ SKU catalogs. It is agonizingly slow, often processing at 2-3 SKUs per second because it re-indexes and validates on every row. We generate raw SQL queries to insert directly into the EAV tables, completely bypassing the Magento ORM layer, then trigger a single re-index at the end. This drops import time from days to minutes.</p>
 <p>First, you must resolve the <code>attribute_id</code> for every piece of data. Look them up in <code>eav_attribute</code>.</p>
-<pre><code>
+<code>
 SELECT attribute_id, attribute_code, backend_type 
 FROM eav_attribute 
 WHERE entity_type_id = 4; -- 4 is catalog_product
-</code></pre>
+</code>
 <p>Assume we found the following mapping:</p>
 <ul>
     <li>name: 73 (varchar)</li>
@@ -362,7 +362,7 @@ WHERE entity_type_id = 4; -- 4 is catalog_product
     <li>visibility: 99 (int)</li>
 </ul>
 <p>Here is the Python script that reads <code>wix_products_raw.json</code> and generates massive multi-row SQL insert statements.</p>
-<pre><code>
+<code>
 import json
 
 def escape_sql_string(val):
@@ -450,7 +450,7 @@ def generate_sql():
 
 if __name__ == "__main__":
     generate_sql()
-</code></pre>
+</code>
 <p>Execute that generated SQL file via <code>mysql -u root -p magento_db < magento_import.sql</code>, then run <code>bin/magento indexer:reindex</code>. You will have 100,000 products loaded in under 45 seconds.</p>
 
 <h2>Customer Migration and Password Hashing</h2>
@@ -469,7 +469,7 @@ if __name__ == "__main__":
 <h2>URL Routing and Nginx Redirect Maps</h2>
 <p>Wix structures URLs differently than Magento. Wix often uses paths like <code>/product-page/black-shirt</code>. Magento uses <code>/black-shirt.html</code>. If you do not map these exactly, your SEO will plummet. You must extract every single URL from the Wix sitemap and generate an Nginx map. Doing this in Nginx is drastically faster than doing it via Magento's URL Rewrite module, which hits the database on every request.</p>
 <p>Here is how you structure the Nginx map block. Place this in <code>/etc/nginx/conf.d/redirects.map</code>:</p>
-<pre><code>
+<code>
 map $request_uri $new_uri {
     default 0;
     /product-page/black-shirt /black-shirt.html;
@@ -477,9 +477,9 @@ map $request_uri $new_uri {
     /category/mens-apparel /mens.html;
     # ... 50,000 more lines ...
 }
-</code></pre>
+</code>
 <p>Then, in your main Magento <code>nginx.conf</code> server block:</p>
-<pre><code>
+<code>
 server {
     listen 443 ssl http2;
     server_name www.yourdomain.com;
@@ -492,7 +492,7 @@ server {
     set $MAGE_ROOT /var/www/magento;
     include /var/www/magento/nginx.conf.sample;
 }
-</code></pre>
+</code>
 <p>This offloads the entire 301 redirect processing to Nginx's C-based memory maps, taking 0 CPU cycles away from PHP-FPM and avoiding the MySQL connection completely.</p>
 
 <h2>Media Migration: Handling Images and Videos</h2>
@@ -516,7 +516,7 @@ server {
 
 <h2>Extensive Sequence Diagrams</h2>
 <p>Understanding the synchronization process requires viewing the interactions across time. Here is an ASCII sequence diagram for the differential sync process:</p>
-<pre><code>
+<code>
 Client Browser      Wix API         Migration Worker        Magento DB
       |                |                   |                    |
       |-- Buys item -->|                   |                    |
@@ -525,13 +525,13 @@ Client Browser      Wix API         Migration Worker        Magento DB
       |                |                   |                    |
       |                |                   |--- Map Wix ID ---> |
       |                |                   |    to Mage ID      |
-      |                |                   |<-- Returns ID ---- |
+      |                |                   |&lt;-- Returns ID ---- |
       |                |                   |                    |
       |                |                   |--- UPDATE inv ---> |
       |                |                   |                    |
       |                |                   |--- INSERT order--> |
       |                |                   |                    |
-</code></pre>
+</code>
 
 <h2>Massive Technical FAQ</h2>
 <p><strong>Q1: Why not use a third-party migration service like Cart2Cart?</strong></p>
@@ -567,7 +567,7 @@ Client Browser      Wix API         Migration Worker        Magento DB
 <h2>7. Advanced Wix Data Extraction: Overcoming Rate Limits</h2>
 <p>When migrating from Wix to Magento, the sheer volume of data extraction can become a bottleneck. Wix's APIs are notoriously rate-limited. In our migration of the telescope components catalog, we had to extract over 50,000 SKUs, each with intricate attributes like focal length, aperture size, and mount compatibility.</p>
 <p>To handle this, we implemented a highly parallelized Python extraction script using <code>asyncio</code> and <code>aiohttp</code>, implementing exponential backoff and jitter to avoid triggering Wix's aggressive throttling mechanisms. The script below demonstrates the architecture of our extraction pipeline:</p>
-<pre><code class="language-python">
+<code class="language-python">
 import asyncio
 import aiohttp
 import json
@@ -640,12 +640,12 @@ if __name__ == '__main__':
     with open('wix_products_dump.json', 'w') as f:
         json.dump(products, f, indent=2)
     logger.info(f"Extracted {len(products)} products.")
-</code></pre>
+</code>
 
 <h2>8. Mapping Flat Schemas to Magento EAV</h2>
 <p>Wix uses a relatively flat schema for product variants. Magento 2 uses the Entity-Attribute-Value (EAV) model. This structural mismatch is where most migrations fail. In the amateur astronomy niche, a single telescope might have variations in mount type (Equatorial vs Altazimuth), optical tube color, and included eyepieces.</p>
 <p>To bridge this gap, we constructed an intermediary mapping database using PostgreSQL. We first loaded the flat Wix JSON into a staging table, then used complex SQL transformations to normalize the data into Magento's EAV structure before generating the final CSV imports. Here is the SQL transformation logic we employed to create the configurable attributes:</p>
-<pre><code class="language-sql">
+<code class="language-sql">
 -- Step 1: Extract unique attribute names from Wix variants
 CREATE TABLE staging_attributes AS
 SELECT DISTINCT
@@ -675,12 +675,12 @@ INSERT INTO magento.eav_attribute_option (attribute_id, sort_order)
 SELECT a.attribute_id, 0
 FROM staging_attribute_options o
 JOIN magento.eav_attribute a ON a.attribute_code = o.attribute_code;
-</code></pre>
+</code>
 
 <h2>9. Nginx Configuration for Zero-Downtime Cutover</h2>
 <p>When cutting over DNS from Wix to Magento, preserving SEO equity is paramount. Wix has highly specific URL structures (e.g., `/product-page/telescope-name`). Magento has its own routing. We had to map over 200,000 URLs perfectly.</p>
 <p>Instead of relying on Magento's internal URL rewrite engine—which would buckle under a 200,000-row table on a high-traffic site—we pushed the redirect logic to the Nginx edge. We generated a massive map file and utilized Nginx's `map` directive for O(1) lookup speeds. This ensured that legacy Wix URLs were redirected in less than 2 milliseconds.</p>
-<pre><code class="language-nginx">
+<code class="language-nginx">
 # /etc/nginx/conf.d/wix_redirects.map
 map $request_uri $wix_redirect {
     default 0;
@@ -701,7 +701,7 @@ server {
     set $MAGE_ROOT /var/www/magento;
     include /var/www/magento/nginx.conf.sample;
 }
-</code></pre>
+</code>
 
 <h2>10. Comprehensive Migration FAQ</h2>
 <dl>
@@ -746,7 +746,7 @@ server {
 <p>Magento 2, conversely, distributes a single product across over 40 distinct database tables. The core entity resides in <code>catalog_product_entity</code>. Its text attributes (like name and description) live in <code>catalog_product_entity_varchar</code> and <code>catalog_product_entity_text</code>. Its pricing lives in <code>catalog_product_index_price</code>. Its stock levels are managed by MSI (Multi-Source Inventory) in <code>inventory_source_item</code>.</p>
 <p>During our telescope migration, we encountered a massive data hygiene issue. Over the years, the client's merchandising team had entered focal lengths inconsistently in Wix. Some were "1000mm", others "1000 mm", and some "1 meter". Because Wix uses a flat structure, these were treated as entirely separate attributes. If imported directly into Magento, this would create 3 distinct filter options in the layered navigation, destroying the user experience.</p>
 <p>We had to inject a rigorous data sanitization phase into our Python extraction pipeline. We utilized regular expressions to normalize all units of measurement before they ever touched the PostgreSQL staging database.</p>
-<pre><code class="language-python">
+<code class="language-python">
 import re
 
 def sanitize_focal_length(value: str) -> str:
@@ -772,12 +772,12 @@ def sanitize_focal_length(value: str) -> str:
         return f"{int(val)}mm"
         
     return value
-</code></pre>
+</code>
 
 <h2>14. Architectural Differences: Category Hierarchies</h2>
 <p>Wix manages categories via 'Collections'. A product can belong to multiple collections, but there is no native concept of a deep, multi-level hierarchy (e.g., Telescopes > Refractor > Apochromatic). Magento requires a strict category tree originating from a Root Category, governed by the <code>catalog_category_entity</code> tables.</p>
 <p>To solve this, we forced the merchandising team to map their flat Wix Collections to a new Magento taxonomy spreadsheet. Our Python script then read this CSV, programmatically created the Magento category tree using the REST API, captured the generated Magento Category IDs, and finally assigned the extracted products to those specific IDs.</p>
-<pre><code class="language-python">
+<code class="language-python">
 # Example payload for creating a nested category in Magento 2
 category_payload = {
     "category": {
@@ -800,7 +800,7 @@ category_payload = {
     }
 }
 # This payload is sent via POST to /rest/V1/categories
-</code></pre>
+</code>
 
 <h2>15. Additional FAQ: Expanding the Edge Cases</h2>
 <dl>
@@ -824,16 +824,20 @@ category_payload = {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization</a></strong>
-              <p>Tuning the frontend for core web vitals and fast loading.</p>
+              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 on AWS: Cloud Architecture, Migration &amp; Cost Optimization</a></strong>
+              <p>Deploying Magento 2 on AWS: design patterns for ECS/EKS nodes, Aurora RDS performance tuning...</p>
             </li>
             <li>
-              <strong><a href="/blog/security-hardening-checklist/">Security Hardening Checklist</a></strong>
-              <p>Essential production server and application hardening.</p>
+              <strong><a href="/blog/wix-to-shopify-magento-migration/">Wix to Shopify &amp; Magento 2 Migration Roadmap</a></strong>
+              <p>Replatforming from Wix to Shopify or Magento 2: building a complete URL inventory, 301 mappi...</p>
             </li>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Why SEO Matters in E-commerce</a></strong>
-              <p>Search intent, crawlability, and conversion optimization.</p>
+              <strong><a href="/blog/azure-cloud-architecture-magento/">Enterprise Azure Cloud Architecture for Magento 2</a></strong>
+              <p>Running Magento 2 on Azure: AKS node pool design, MySQL Flexible Server tuning, the shared m...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/headless-api-data-architecture/">Headless API &amp; Data Architecture for Large-Scale Ecommerce</a></strong>
+              <p>Designing decoupled ecommerce backends: Storefront API budgets, persisted query optimization...</p>
             </li>
           </ul>
         </div>

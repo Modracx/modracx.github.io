@@ -200,8 +200,8 @@
         <p class="lede">Thirty-one warehouse staff were paid short because a retry landed ten hours after the payroll cutoff. Everything worked as designed, and that was the problem.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 35 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -300,7 +300,7 @@
 
         <p>Access uses OAuth 2.0 client credentials, which is ordinary. What is not ordinary is that the token request itself is made over mutual TLS with a client certificate that ADP issues to you for a specific consumer application. No certificate, no token. The certificate has an expiry, typically a year or two out, and when it expires your integration stops completely.</p>
 
-        <pre><code class="language-python">import requests, time, threading
+        <code class="language-python">import requests, time, threading
 
 class AdpAuth:
     """ADP client-credentials with mutual TLS. The cert is the credential;
@@ -334,7 +334,7 @@ class AdpAuth:
             body = r.json()
             self._token = body["access_token"]
             self._expires_at = time.time() + int(body.get("expires_in", 3600))
-            return self._token</code></pre>
+            return self._token</code>
 
         <p>Three operational points follow from certificate-based auth, and all three have bitten real projects.</p>
 
@@ -360,7 +360,7 @@ class AdpAuth:
 
         <p><strong>Pseudonymous identifiers everywhere downstream.</strong> The ADP Associate OID is a stable identifier tied to a real person in a system your HR team can query. Downstream of the integration, use a keyed hash of it, with the key held only by the integration. Then a leak of the analytics database is a leak of opaque strings rather than a leak of a workforce roster.</p>
 
-        <pre><code class="language-python">import hmac, hashlib
+        <code class="language-python">import hmac, hashlib
 
 # Keyed hash, not a plain digest: an unkeyed SHA-256 of an identifier
 # is trivially reversible by anyone who can enumerate the identifier space,
@@ -370,11 +370,11 @@ def pseudonym(associate_oid: str, key: bytes) -&gt; str:
 
 # The reverse map lives only in the integration's own encrypted store and is
 # only ever read for a named, logged, time-boxed purpose — a payroll query
-# from HR, not a curiosity from an analyst.</code></pre>
+# from HR, not a curiosity from an analyst.</code>
 
         <p><strong>Field-level redaction in logs, enforced by the logger.</strong> Not by convention, not by code review. A serialiser that refuses to emit any key on a deny list, applied at the logging boundary, so a developer adding a debug line cannot accidentally leak. And a test that asserts it.</p>
 
-        <pre><code class="language-python">import json, logging
+        <code class="language-python">import json, logging
 
 DENY = {"associateOID", "governmentID", "birthDate", "legalName", "givenName",
         "familyName1", "bankAccountNumber", "routingNumber", "baseRemuneration",
@@ -395,7 +395,7 @@ class RedactingFormatter(logging.Formatter):
         return obj
 
 # Test that must exist and must fail the build:
-#   assert "[redacted]" in capture_log(worker_payload_with_government_id)</code></pre>
+#   assert "[redacted]" in capture_log(worker_payload_with_government_id)</code>
 
         <h2>6. Access Control On Your Side Of The Line</h2>
 
@@ -423,7 +423,7 @@ class RedactingFormatter(logging.Formatter):
 
         <p>So the scheduler needs to know the calendar.</p>
 
-        <pre><code class="language-python">from datetime import datetime, timedelta, timezone
+        <code class="language-python">from datetime import datetime, timedelta, timezone
 
 class PayCalendar:
     """Deadline-aware scheduling. The integration's job is not 'run nightly',
@@ -449,7 +449,7 @@ class PayCalendar:
             return "critical"      # page a human, do not just retry
         if remaining &lt; timedelta(hours=24):
             return "elevated"      # run every 30 minutes, alert on any failure
-        return "normal"</code></pre>
+        return "normal"</code>
 
         <p>What changes with urgency is not just the frequency. Three behaviours flip.</p>
 
@@ -471,7 +471,7 @@ class PayCalendar:
 
         <p>The defence is to make every join key temporal. A mapping row has a valid-from and a valid-to, and every lookup passes a date. This is more work than a dictionary and it is the difference between correct history and plausible history.</p>
 
-        <pre><code class="language-sql">-- Temporal identity mapping. The uniqueness constraint is on the identifier
+        <code class="language-sql">-- Temporal identity mapping. The uniqueness constraint is on the identifier
 -- plus the period, not on the identifier alone, because badge numbers get
 -- reissued and a naive unique index will reject the new starter.
 CREATE TABLE worker_identity (
@@ -494,7 +494,7 @@ FROM worker_identity
 WHERE source_system = 'timeclock'
   AND source_id = :clock_number
   AND :work_date &gt;= valid_from
-  AND (valid_to IS NULL OR :work_date &lt; valid_to);</code></pre>
+  AND (valid_to IS NULL OR :work_date &lt; valid_to);</code>
 
         <p>Two other worker-model realities worth designing for from the start.</p>
 
@@ -538,7 +538,7 @@ WHERE source_system = 'timeclock'
 
         <p><strong>A dry-run mode that produces the exact payload and a diff.</strong> Before every real submission during the first few cycles, and permanently for any change to the mapping. The diff goes to a payroll administrator who eyeballs it. This is slow, it is manual, and after the February incident nobody on that project ever argued against it again.</p>
 
-        <pre><code class="language-python">def submit_period(client, period, entries, dry_run=False):
+        <code class="language-python">def submit_period(client, period, entries, dry_run=False):
     payload = build_payroll_input(period, entries)
     # The idempotency key must identify the period AND the revision, so a
     # corrected resubmission is accepted while a duplicate of the same
@@ -555,7 +555,7 @@ WHERE source_system = 'timeclock'
         return "already-submitted"
     resp.raise_for_status()
     mark_submitted(period, key, resp.json()["confirmationId"])
-    return "submitted"</code></pre>
+    return "submitted"</code>
 
         <h2>11. Events, And ADP's Pull Queue</h2>
 
@@ -567,7 +567,7 @@ WHERE source_system = 'timeclock'
 
         <p>Second, the poll loop is a piece of infrastructure that can die quietly. A stopped poller produces no errors — it produces an absence, and events accumulate on ADP's side. Alert on time since last successful poll and on time since last confirmed message, not on error rate. This is the same argument I made about queue age on ERP integrations and it applies with more force here because the consequence of a missed worker-terminated event is that somebody who left the business is still in your systems.</p>
 
-        <pre><code class="language-python">def drain_events(client, handler, max_batches=50):
+        <code class="language-python">def drain_events(client, handler, max_batches=50):
     processed = 0
     for _ in range(max_batches):
         msgs = client.get("/core/v1/event-notification-messages").json()
@@ -584,7 +584,7 @@ WHERE source_system = 'timeclock'
             confirm(client, ev)     # confirm only after the work is durable
             processed += 1
     heartbeat("adp-event-poller")   # the metric that proves this ran at all
-    return processed</code></pre>
+    return processed</code>
 
         <h2>12. The Audit Trail</h2>
 
@@ -694,11 +694,19 @@ WHERE source_system = 'timeclock'
           <ul>
             <li>
               <strong><a href="/blog/zoho-people-hrms-ecommerce-operations/">Zoho People HRMS &amp; Operations Management for E-Commerce</a></strong>
-              <p>Warehouse workforce shift tracking.</p>
+              <p>Making Zoho People the system of record for warehouse operations: joiner-mover-leaver provis...</p>
             </li>
             <li>
-              <strong><a href="/blog/intranet-employee-portal-ecommerce/">Building Custom Intranet Employee Portals for E-Commerce Operations</a></strong>
-              <p>Internal corporate staff hubs.</p>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
+              <p>Technical guide to syncing customers, orders, inventory, and deals between Magento 2 / Shopi...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/hubspot-crm-automation-ecommerce/">HubSpot CRM Automation &amp; Marketing Integration</a></strong>
+              <p>HubSpot and ecommerce integration: contact deduplication, unique-value properties, lifecycle...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/depop-omnichannel-marketplace-sync/">Depop &amp; Omnichannel Marketplace Synchronization</a></strong>
+              <p>Building marketplace inventory sync across Depop, eBay, Amazon and Shopify: event-driven pus...</p>
             </li>
           </ul>
         </div>

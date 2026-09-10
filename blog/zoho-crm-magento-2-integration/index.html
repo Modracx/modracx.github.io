@@ -204,8 +204,8 @@
         <p class="lede">A developer guide to integrating Zoho CRM with Magento 2: synchronizing customer cohorts, mappings, webhooks, handling API rate limits, and conflict resolution.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 35 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 22 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -264,7 +264,7 @@
 
         <p>A typical mapping configuration file defines exactly which Magento fields map to which Zoho fields, taking into account data type transformations. For instance, a Magento boolean attribute representing `newsletter_subscribed` (0 or 1) must be transformed into a literal `true` or `false` boolean for Zoho's REST API. Date formats in Magento (Y-m-d H:i:s) must be cast to ISO 8601 strings to satisfy Zoho's strict parser.</p>
 
-        <pre><code class="language-javascript">const CustomerMapping = {
+        <code class="language-javascript">const CustomerMapping = {
     "Email": "email",
     "First_Name": "firstname",
     "Last_Name": "lastname",
@@ -299,7 +299,7 @@ async function executeMapping(magentoEntity, mappingConfig) {
     }
     return zohoPayload;
 }
-</code></pre>
+</code>
 
         <p>This dynamic mapping layer allows rapid modification of the integration behavior without deploying new code. When the sales director decided they wanted to sync the customer's preferred clay firing temperature (e.g., Cone 6, Cone 10), we simply added a custom attribute in Magento, added a custom field in Zoho, and updated the mapping configuration JSON. The middleware handled the rest automatically on the next synchronization cycle.</p>
 
@@ -323,7 +323,7 @@ async function executeMapping(magentoEntity, mappingConfig) {
 
         <p>The engineering solution is a Dead Letter Exchange (DLX). When configuring RabbitMQ within the Magento `queue_topology.xml`, we define a primary queue and a secondary dead-letter queue. We instruct RabbitMQ to automatically move messages to the DLX if they have been rejected by the consumer more than three times, or if they have sat in the queue longer than the Time-To-Live (TTL) threshold.</p>
 
-        <pre><code class="language-xml">&lt;config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework-message-queue:etc/topology.xsd"&gt;
+        <code class="language-xml">&lt;config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework-message-queue:etc/topology.xsd"&gt;
     &lt;exchange name="zoho.sync.exchange" type="topic" connection="amqp"&gt;
         &lt;binding id="CustomerSync" topic="zoho.crm.customer.sync" destinationType="queue" destination="zoho_customer_sync_queue"/&gt;
     &lt;/exchange&gt;
@@ -332,7 +332,7 @@ async function executeMapping(magentoEntity, mappingConfig) {
         &lt;binding id="DeadLetter" topic="zoho.dead.letter" destinationType="queue" destination="zoho_dead_letter_queue"/&gt;
     &lt;/exchange&gt;
 &lt;/config&gt;
-</code></pre>
+</code>
 
         <p>Within the Node.js middleware consumer, the retry configuration implements an exponential backoff. The first failure triggers a retry after 10 seconds. The second failure waits 60 seconds. The third failure waits five minutes. If the fourth attempt fails, the message is explicitly rejected with `requeue: false`, triggering RabbitMQ to route it to the dead-letter queue.</p>
 
@@ -352,7 +352,7 @@ async function executeMapping(magentoEntity, mappingConfig) {
 
         <p>To survive these limits, the middleware must implement a centralized, distributed rate limiter. Since middleware is often scaled horizontally across multiple containers, an in-memory limiter fails. The system requires a Redis-backed leaky bucket algorithm to coordinate traffic across all worker nodes.</p>
 
-        <pre><code class="language-javascript">const Redis = require('ioredis');
+        <code class="language-javascript">const Redis = require('ioredis');
 const redis = new Redis(process.env.REDIS_URL);
 
 class ZohoRateLimiter {
@@ -396,7 +396,7 @@ class ZohoRateLimiter {
         await redis.decr('zoho_concurrent');
     }
 }
-</code></pre>
+</code>
 
         <p>This Redis Lua script ensures atomic evaluation of both the concurrency limit and the minute-based limit. Before any worker executes a request to Zoho, it must acquire a token. After the HTTP response returns, the worker releases the concurrency token, allowing the next queued request to proceed. This strict traffic shaping entirely prevents Zoho from blacklisting the client.</p>
 
@@ -420,7 +420,7 @@ class ZohoRateLimiter {
 
         <p>To resolve this, the middleware maintains an independent state database (typically PostgreSQL). For every entity synchronized, it stores a mapping record containing the Magento Entity ID, the Zoho Record ID, and a JSON block representing the last known synchronized state of every individual field.</p>
 
-        <pre><code class="language-sql">CREATE TABLE entity_mapping (
+        <code class="language-sql">CREATE TABLE entity_mapping (
     id UUID PRIMARY KEY,
     magento_entity_type VARCHAR(50) NOT NULL,
     magento_entity_id BIGINT NOT NULL,
@@ -432,7 +432,7 @@ class ZohoRateLimiter {
     UNIQUE(magento_entity_type, magento_entity_id),
     UNIQUE(zoho_module, zoho_record_id)
 );
-</code></pre>
+</code>
 
         <p>When a field-level race condition occurs—meaning Zoho and Magento transmit updates targeting the exact same record within a few seconds of one another—the middleware must arbitrate the collision dynamically. The first defense against this is the row-level locking provided by PostgreSQL. When a worker thread picks up a message for a specific customer, it executes a `SELECT ... FOR UPDATE` statement against the `entity_mapping` table. This immediately places an exclusive lock on that exact mapping row. If another worker thread simultaneously picks up a competing message for the same customer (e.g., the Magento update arriving right behind the Zoho webhook), the second thread hits the database lock and is forced to wait. This guarantees that arbitration happens serially, completely eliminating the risk of dual-writes stepping on each other in memory.</p>
 
@@ -505,16 +505,20 @@ class ZohoRateLimiter {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization</a></strong>
-              <p>Tuning the frontend for core web vitals and fast loading.</p>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
+              <p>Technical guide to syncing customers, orders, inventory, and deals between Magento 2 / Shopi...</p>
             </li>
             <li>
-              <strong><a href="/blog/security-hardening-checklist/">Security Hardening Checklist</a></strong>
-              <p>Essential production server and application hardening.</p>
+              <strong><a href="/blog/wix-to-magento-migration-technical/">Wix to Magento: The Brutal Reality of Platform Migration</a></strong>
+              <p>Complete technical guide for migrating from Wix to Magento 2: exporting product catalogs, cu...</p>
             </li>
             <li>
-              <strong><a href="/blog/why-seo-matters/">Why SEO Matters in E-commerce</a></strong>
-              <p>Search intent, crawlability, and conversion optimization.</p>
+              <strong><a href="/blog/magento-2-aws-architecture/">Magento 2 on AWS: Cloud Architecture, Migration &amp; Cost Optimization</a></strong>
+              <p>Deploying Magento 2 on AWS: design patterns for ECS/EKS nodes, Aurora RDS performance tuning...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/magento-2-developer-toolbar-and-profiler-tools/">Magento 2 Developer Toolbar &amp; Profiler Tools: Streamline Your Workflow</a></strong>
+              <p>Discover Admin Dev Tools &amp; Frontend Dev Tools for Magento 2: in-browser cache flushing, ...</p>
             </li>
           </ul>
         </div>

@@ -200,8 +200,8 @@
         <p class="lede">The same £340 order refunded four times, because a payment API took 22 seconds and a consumer timed out at 15. Delivery guarantees, the dual-write problem, and debugging without a call stack.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 28 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 38 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -260,7 +260,7 @@
 
         <p>My rule: <strong>commands go point-to-point on a queue and may expect a reply; events go to a topic, fan out, and never expect one.</strong> Mixing those is where most trouble starts.</p>
 
-        <pre><code class="language-json">// COMMAND. One handler. Imperative. The sender cares about the result.
+        <code class="language-json">// COMMAND. One handler. Imperative. The sender cares about the result.
 {
   "type": "ReserveStock",
   "target": "inventory-service",
@@ -277,7 +277,7 @@
   "aggregate": { "type": "Order", "id": "ord_88213" },
   "version": 3,
   "payload": { "orderId": "ord_88213", "lines": [{ "sku": "PL-4402", "qty": 2 }] }
-}</code></pre>
+}</code>
 
         <p>Two fields in the event are worth pointing at. <code>eventId</code> is what makes consumers idempotent. <code>version</code> is what lets a consumer detect that it has missed something or received things out of order. Neither is optional and both are routinely omitted in the first version of a system, then added painfully later.</p>
 
@@ -309,7 +309,7 @@
 
         <p>What I do in practice, and would defend: <strong>fat enough to act, thin enough to stay true.</strong> Include the fields that were part of the fact at the moment it happened — the prices charged, the quantities ordered, the address it shipped to — because those are immutable properties of the event. Exclude fields that are current-state and may drift, like the customer's marketing preferences or their loyalty tier. For those, carry the id and let the consumer look them up.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "type": "order.placed.v2",
   "eventId": "evt_01HQ8V4B2NW",
   "occurredAt": "2026-03-17T09:41:22.318Z",
@@ -330,7 +330,7 @@
     // Those are current state. A consumer that needs them fetches them,
     // and gets the value that is true when it acts, not when we published.
   }
-}</code></pre>
+}</code>
 
         <p>Note that money is in minor units as integers. Floating-point currency in event payloads is a bug that will find you eventually, usually as a penny discrepancy in a reconciliation report six months after anyone remembers writing the code.</p>
 
@@ -368,7 +368,7 @@
 
         <p>Every event carries a monotonically increasing version for its aggregate. The consumer stores the last version it applied and discards anything lower. Simple, works across any transport, and it turns an ordering problem into a deduplication problem you have already solved.</p>
 
-        <pre><code class="language-sql">-- Apply an event only if it is newer than what we have already
+        <code class="language-sql">-- Apply an event only if it is newer than what we have already
 -- applied for this aggregate. Out-of-order arrivals become no-ops.
 INSERT INTO order_read_model (order_id, status, last_version, updated_at)
 VALUES (?, ?, ?, NOW())
@@ -376,7 +376,7 @@ ON DUPLICATE KEY UPDATE
   status       = IF(VALUES(last_version) &gt; last_version, VALUES(status), status),
   updated_at   = IF(VALUES(last_version) &gt; last_version, NOW(), updated_at),
   last_version = GREATEST(last_version, VALUES(last_version));
--- One statement, atomic, no read-modify-write race between consumers.</code></pre>
+-- One statement, atomic, no read-modify-write race between consumers.</code>
 
         <h3>Design the operations to commute</h3>
 
@@ -394,7 +394,7 @@ ON DUPLICATE KEY UPDATE
 
         <p><strong>A processed-events table.</strong> Record every event id you have handled, and check before processing. The check and the write must be in the same transaction as the business change, or you have created a smaller version of the dual-write problem described below.</p>
 
-        <pre><code class="language-javascript">// Idempotent consumer. The dedupe insert and the business write share
+        <code class="language-javascript">// Idempotent consumer. The dedupe insert and the business write share
 // one transaction, so a crash between them is impossible.
 async function handle(event) {
   const tx = await db.begin();
@@ -417,20 +417,20 @@ async function handle(event) {
     }
     throw err;
   }
-}</code></pre>
+}</code>
 
         <p>Two operational notes on that table. It grows without bound, so partition it by date and drop partitions older than your longest possible redelivery window plus a margin — I use 30 days. And the <code>consumer</code> column matters: the same event is legitimately processed by six different consumers and each needs its own record.</p>
 
         <p><strong>Idempotency keys at the boundary.</strong> For calls to external systems, pass a key the remote end honours. Stripe, Adyen and most modern payment APIs support this, and it is the correct fix for the refund incident that opens this article.</p>
 
-        <pre><code class="language-javascript">// The key must be derived from the event, not generated per attempt.
+        <code class="language-javascript">// The key must be derived from the event, not generated per attempt.
 // crypto.randomUUID() here would defeat the entire mechanism.
 await stripe.refunds.create(
   { payment_intent: event.payload.paymentIntentId, amount: event.payload.amountMinor },
   { idempotencyKey: `refund:${event.payload.refundId}` },
 );
 // Stripe returns the ORIGINAL response for a repeated key within 24h.
-// Four retries now produce one refund and three replays of the receipt.</code></pre>
+// Four retries now produce one refund and three replays of the receipt.</code>
 
         <p>That one line, in place from the start, would have turned a four-times refund into a non-event. It costs nothing. I now treat a call to an external system without an idempotency key as a code review blocker in any consumer.</p>
 
@@ -438,12 +438,12 @@ await stripe.refunds.create(
 
         <p>Here is the bug in almost every first-generation event integration I have reviewed.</p>
 
-        <pre><code class="language-javascript">// This is broken. It looks completely reasonable.
+        <code class="language-javascript">// This is broken. It looks completely reasonable.
 async function placeOrder(cmd) {
   const order = await db.insert('orders', cmd);      // write 1
   await broker.publish('order.placed.v2', order);    // write 2
   return order;
-}</code></pre>
+}</code>
 
         <p>Two writes to two systems with no shared transaction. Four things can happen and only one of them is what you want.</p>
 
@@ -461,7 +461,7 @@ async function placeOrder(cmd) {
 
         <p>Write the event to a table in the same database, in the same transaction as the business data. One transaction, one system, atomic. A separate process reads the table and publishes.</p>
 
-        <pre><code class="language-sql">CREATE TABLE outbox (
+        <code class="language-sql">CREATE TABLE outbox (
   id            BIGINT AUTO_INCREMENT PRIMARY KEY,
   aggregate_id  VARCHAR(64)  NOT NULL,
   event_type    VARCHAR(128) NOT NULL,
@@ -473,9 +473,9 @@ async function placeOrder(cmd) {
   -- Partial-ish index: the relay only ever scans unpublished rows.
   -- Without this the relay table-scans and gets slower every day.
   KEY idx_unpublished (published_at, id)
-) ENGINE=InnoDB;</code></pre>
+) ENGINE=InnoDB;</code>
 
-        <pre><code class="language-javascript">// Now there is one write. If the transaction commits, the event WILL
+        <code class="language-javascript">// Now there is one write. If the transaction commits, the event WILL
 // be published. If it rolls back, the event never existed.
 async function placeOrder(cmd) {
   const tx = await db.begin();
@@ -487,11 +487,11 @@ async function placeOrder(cmd) {
   });
   await tx.commit();
   return order;
-}</code></pre>
+}</code>
 
         <p>The relay is the part people get wrong, so here it is with the details that matter.</p>
 
-        <pre><code class="language-javascript">// Outbox relay. Runs continuously. At-least-once by construction,
+        <code class="language-javascript">// Outbox relay. Runs continuously. At-least-once by construction,
 // which is fine because consumers are idempotent.
 async function relay() {
   const tx = await db.begin();
@@ -522,7 +522,7 @@ async function relay() {
 
   await tx.commit();
   return rows.length;
-}</code></pre>
+}</code>
 
         <p>Three details that are easy to miss and expensive to discover.</p>
 
@@ -574,7 +574,7 @@ async function relay() {
 
         <p>For a genuinely breaking change, run both versions. Publish <code>order.placed.v1</code> and <code>order.placed.v2</code> simultaneously from the same outbox transaction, let consumers migrate on their own schedule, then instrument v1 to find out who is still reading it. Instrument first — asking around does not work, because the team that owns the forgotten consumer left last year.</p>
 
-        <pre><code class="language-javascript">// Dual publishing during a migration. v1 is derived from v2 so there
+        <code class="language-javascript">// Dual publishing during a migration. v1 is derived from v2 so there
 // is one source of truth and no chance of the two drifting.
 await tx.insert('outbox', [
   { event_type: 'order.placed.v2', payload: JSON.stringify(v2) },
@@ -589,7 +589,7 @@ function downgrade(v2) {
     total: v2.totals.grand / 100,
     items: v2.lines.map(l =&gt; ({ sku: l.sku, qty: l.qty })),
   };
-}</code></pre>
+}</code>
 
         <p>Set an end date and publish it when you introduce v2. "We will stop publishing v1 on 30 September" written down at the start is the only thing I have found that actually gets consumers migrated. Without it both versions run for years.</p>
 
@@ -624,7 +624,7 @@ function downgrade(v2) {
 
         <p>What you must therefore build. Verify the signature before parsing anything. Persist the raw body and return 200 within a couple of seconds; do the work asynchronously. Deduplicate on the provider's event id, which every serious provider supplies. Handle out-of-order arrival explicitly, because a shipment webhook overtaking an order webhook is routine.</p>
 
-        <pre><code class="language-javascript">export async function receive(req, res) {
+        <code class="language-javascript">export async function receive(req, res) {
   // 1. Verify first, on the RAW body. Parsing before verifying is how
   //    signature checks get bypassed by a body-parser that normalises.
   if (!verifyHmac(req.rawBody, req.headers['x-shopify-hmac-sha256'])) {
@@ -648,7 +648,7 @@ function downgrade(v2) {
   // 3. Acknowledge fast. Shopify's timeout is 5s; exceeding it triggers
   //    a retry and eventually gets the webhook subscription removed.
   res.status(200).end();
-}</code></pre>
+}</code>
 
         <p>That <code>webhook_inbox</code> table has paid for itself on every build I have used it on. When a downstream consumer has a bug, you fix the bug and replay from the table. Without it, the events are gone and you are asking the provider to resend, which most will not do beyond a short window.</p>
 
@@ -662,7 +662,7 @@ function downgrade(v2) {
 
         <p>Exponential backoff with jitter, always. Without jitter, a downstream service that recovers gets hit by every retrying consumer simultaneously and falls over again. The retry storm that follows a brief outage is frequently more damaging than the outage.</p>
 
-        <pre><code class="language-javascript">// Full jitter. The random spread is the important part, not the base.
+        <code class="language-javascript">// Full jitter. The random spread is the important part, not the base.
 const delay = Math.random() * Math.min(30_000, 200 * 2 ** attempt);
 
 // Retry only what can succeed on a second attempt.
@@ -671,7 +671,7 @@ function retryable(err) {
   if (err.name === 'TimeoutError' || err.code === 'ECONNRESET') return true;
   if (err.name === 'ValidationError') return false;   // never
   return RETRYABLE.has(err.statusCode);
-}</code></pre>
+}</code>
 
         <p>Then the dead letter queue. Every consumer needs one, and a DLQ with no alarm and no owner is a folder where messages go to be forgotten. I have opened DLQs containing eighteen months of failed messages that nobody had looked at once — including, on one occasion, forty-one orders that had never reached the warehouse.</p>
 
@@ -689,13 +689,13 @@ function retryable(err) {
 
         <p>A correlation id is minted at the true entry point — a customer request, a scheduled job — and copied into every event, message and log line that results, however many hops away. A causation id points at the immediate parent event. Together they give you a tree.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "eventId": "evt_04",
   "type": "shipment.dispatched.v1",
   "correlationId": "cor_9f2a",   // same across the whole customer journey
   "causationId": "evt_03",       // the event that directly caused this one
   "occurredAt": "2026-03-17T11:02:04.771Z"
-}</code></pre>
+}</code>
 
         <p>With those two fields, one query returns every event in the journey and the parent pointers let you draw the actual causal graph. Without them you are correlating on timestamps and order ids, and order ids only work while you are inside a flow that has one — which excludes exactly the failures where the order was never created.</p>
 
@@ -703,7 +703,7 @@ function retryable(err) {
 
         <p>OpenTelemetry propagates a trace context in HTTP headers automatically. It does not cross a queue unless you put the <code>traceparent</code> into the message and restore it on the consuming side. That is about fifteen lines of code and it is the difference between a trace that ends at the publish call and one that spans the whole flow.</p>
 
-        <pre><code class="language-javascript">// Producer: inject the active trace context into message attributes.
+        <code class="language-javascript">// Producer: inject the active trace context into message attributes.
 const carrier = {};
 propagation.inject(context.active(), carrier);
 await sqs.send(new SendMessageCommand({
@@ -719,7 +719,7 @@ await sqs.send(new SendMessageCommand({
 const parent = propagation.extract(context.active(), {
   traceparent: record.messageAttributes?.traceparent?.stringValue,
 });
-await context.with(parent, () =&gt; handle(JSON.parse(record.body)));</code></pre>
+await context.with(parent, () =&gt; handle(JSON.parse(record.body)));</code>
 
         <h3>An event store you can query</h3>
 
@@ -818,12 +818,20 @@ await context.with(parent, () =&gt; handle(JSON.parse(record.body)));</code></pr
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></strong>
-              <p>AWS SQS message processing.</p>
+              <strong><a href="/blog/cicd-pipeline-ecommerce/">Building CI/CD Pipelines for Enterprise E-Commerce Deployments</a></strong>
+              <p>Vendor-neutral CI/CD for ecommerce: build once deploy many, gates that block vs warn, expand...</p>
             </li>
             <li>
-              <strong><a href="/blog/shopify-app-development/">Custom Shopify App Development</a></strong>
-              <p>Shopify Webhook subscriptions.</p>
+              <strong><a href="/blog/headless-cms-seo-performance/">Leveraging Headless CMS for SEO &amp; Performance</a></strong>
+              <p>The content layer for headless commerce: modelling in Sanity, Strapi and Contentful, preview...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/zero-downtime-deployment/">Zero-Downtime Deployments for High-Traffic E-Commerce</a></strong>
+              <p>Zero-downtime deploys for Magento and high-traffic ecommerce: realpath cache, connection dra...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/multi-cdn-strategies/">Multi-CDN Architecture Strategies for High Availability</a></strong>
+              <p>Multi-CDN for ecommerce: DNS versus anycast steering, health checks with quorum, cache fragm...</p>
             </li>
           </ul>
         </div>

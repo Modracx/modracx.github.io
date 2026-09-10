@@ -208,8 +208,8 @@
         <p class="lede">Eleven thousand orders sat in a dead-letter queue for five days because a category was renamed in the ERP. The storefront never broke. Here are the patterns that prevent silent divergence between commerce and SAP.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 22 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 27 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -330,7 +330,7 @@
 
         <p>The fix is that the commerce side generates a stable, unique key for each order and the ERP side treats a repeat of that key as the same order rather than a new one.</p>
 
-        <pre><code class="language-java">// Commerce side: the key is generated once, at order placement, and never regenerated
+        <code class="language-java">// Commerce side: the key is generated once, at order placement, and never regenerated
 public class OrderExportPayload {
     private final String idempotencyKey;   // e.g. "WEB-2026-000184213"
     private final String orderCode;
@@ -348,7 +348,7 @@ public class OrderExportPayload {
             attempt
         );
     }
-}</code></pre>
+}</code>
 
         <p>On the ERP side, the receiving service checks whether that key has been seen and returns the existing document rather than creating a second one. If your ERP integration layer cannot enforce this, put a deduplication table in the middleware and enforce it there — it is worth building even as a workaround.</p>
 
@@ -358,14 +358,14 @@ public class OrderExportPayload {
 
         <p><strong>A dead-letter queue somebody watches.</strong> The distributor at the top of this article had one. It worked exactly as designed. Nobody had ever looked at it. A dead-letter queue without an alert is a place where problems go to be forgotten quietly, which is worse than no queue at all because it creates the impression of a safety net.</p>
 
-        <pre><code class="language-java">// Alert on depth and on age — depth alone misses the slow leak
+        <code class="language-java">// Alert on depth and on age — depth alone misses the slow leak
 if (deadLetterQueue.depth() &gt; 0) {
     Duration oldest = Duration.between(deadLetterQueue.oldestMessageTime(), Instant.now());
     if (oldest.toMinutes() &gt; 15) {
         alerting.page("order export dead-letter: " + deadLetterQueue.depth()
             + " messages, oldest " + oldest.toMinutes() + "m");
     }
-}</code></pre>
+}</code>
 
         <h2>6. Synchronous or Asynchronous</h2>
 
@@ -395,14 +395,14 @@ if (deadLetterQueue.depth() &gt; 0) {
 
         <p><strong>Log correlation identifiers everywhere.</strong> One identifier that follows an order from storefront through middleware to ERP document number. Without it, investigating "where did order 184213 go" means searching three log systems by timestamp and hoping.</p>
 
-        <pre><code class="language-java">MDC.put("correlationId", order.getCode());
+        <code class="language-java">MDC.put("correlationId", order.getCode());
 MDC.put("customerId", order.getUser().getUid());
 try {
     exportService.send(payload);
     log.info("order exported, erpDocument={}", response.getDocumentNumber());
 } finally {
     MDC.clear();
-}</code></pre>
+}</code>
 
         <h2>8. Getting the Catalogue Load Right</h2>
 
@@ -452,7 +452,7 @@ try {
 
         <p>And a circuit breaker is worth the complexity on any synchronous path. When the ERP starts failing, continuing to send it traffic makes recovery slower and makes every affected page slow. Trip the breaker, serve fallbacks, and probe periodically until it recovers.</p>
 
-        <pre><code class="language-java">// Fail fast and degrade, rather than queue customers behind a struggling ERP
+        <code class="language-java">// Fail fast and degrade, rather than queue customers behind a struggling ERP
 private final CircuitBreaker breaker = CircuitBreaker.of("erp-pricing",
     CircuitBreakerConfig.custom()
         .failureRateThreshold(50)
@@ -469,7 +469,7 @@ public Price priceFor(String customerId, String material, Price listPrice) {
             return listPrice.withFlag(PriceFlag.FALLBACK);
         })
         .get();
-}</code></pre>
+}</code>
 
         <p>That <code>FALLBACK</code> flag matters as much as the breaker. It gives support a way to explain a price a customer queries, and it gives you a metric that tells you how often customers are seeing a degraded answer — which is the number that should drive whether the integration needs attention.</p>
 
@@ -479,13 +479,13 @@ public Price priceFor(String customerId, String material, Price listPrice) {
 
         <p>The fix is a scheduled comparison that treats divergence as an expected condition rather than an emergency.</p>
 
-        <pre><code class="language-sql">-- Daily: orders placed on the storefront with no corresponding ERP document
+        <code class="language-sql">-- Daily: orders placed on the storefront with no corresponding ERP document
 SELECT o.code, o.creationtime, o.totalprice, o.erp_status
 FROM orders o
 WHERE o.creationtime &gt;= NOW() - INTERVAL 7 DAY
   AND (o.erp_document_number IS NULL OR o.erp_document_number = '')
   AND o.status NOT IN ('CANCELLED', 'DRAFT')
-ORDER BY o.creationtime;</code></pre>
+ORDER BY o.creationtime;</code>
 
         <p>Three reconciliations worth running, in order of value:</p>
 
@@ -580,12 +580,20 @@ ORDER BY o.creationtime;</code></pre>
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/enterprise-erp-systems-ecommerce/">Enterprise ERP Systems Integration for High-Volume E-Commerce</a></strong>
-              <p>NetSuite and Dynamics 365 ERP connectors.</p>
+              <strong><a href="/blog/zoho-crm-magento-shopify-integration/">Zoho CRM Integration with Magento 2 &amp; Shopify Plus</a></strong>
+              <p>Technical guide to syncing customers, orders, inventory, and deals between Magento 2 / Shopi...</p>
             </li>
             <li>
-              <strong><a href="/blog/salesforce-commerce-cloud-integration/">Salesforce Commerce Cloud (SFCC) Integration Architecture</a></strong>
-              <p>Comparing SAP Commerce Cloud with SFCC.</p>
+              <strong><a href="/blog/enterprise-erp-systems-ecommerce/">Enterprise ERP Systems Integration for High-Volume E-Commerce</a></strong>
+              <p>Choosing a commerce-to-ERP integration architecture: point-to-point versus middleware versus...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/zoho-books-inventory-accounting-sync/">Zoho Books Inventory &amp; Accounting Synchronization</a></strong>
+              <p>Syncing Magento and Shopify with Zoho Books: the document chain, tax mapping, credit notes, ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/hubspot-crm-automation-ecommerce/">HubSpot CRM Automation &amp; Marketing Integration</a></strong>
+              <p>HubSpot and ecommerce integration: contact deduplication, unique-value properties, lifecycle...</p>
             </li>
           </ul>
         </div>

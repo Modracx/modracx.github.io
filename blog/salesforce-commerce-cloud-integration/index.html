@@ -200,8 +200,8 @@
         <p class="lede">OCAPI tokens expire after thirty minutes. A headless storefront that does not refresh them quietly empties baskets, and nothing in your monitoring will tell you.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 26 min read</span> •
-          <span>Category: <a href="/blog/?category=Integrations+%26+Systems">Integrations &amp; Systems</a></span>
+          <span>Reading Time: 35 min read</span> •
+          <span>Category: <a href="/blog/archive/#integrations-systems">Integrations &amp; Systems</a></span>
         </div>
       </div>
 
@@ -297,7 +297,7 @@
 
         <p>The mistake the welding supplies retailer made was treating the access token as the session. It is not. The refresh token is the session, and the access token is a thirty-minute lease on it.</p>
 
-        <pre><code class="language-javascript">// A refresh that runs ahead of expiry, not after a 401.
+        <code class="language-javascript">// A refresh that runs ahead of expiry, not after a 401.
 // Reacting to 401 means at least one customer-facing request already failed;
 // on a checkout POST that failure can cost you the order.
 const SKEW_MS = 120_000; // refresh two minutes early
@@ -347,7 +347,7 @@ class ShopperSession {
     });
     return body.access_token;
   }
-}</code></pre>
+}</code>
 
         <p>Three things in there are load-bearing and each was learned the expensive way.</p>
 
@@ -369,7 +369,7 @@ class ShopperSession {
 
         <p>The first structural fix is separate client IDs per workload. Storefront traffic, batch integration, and back-office tooling should each have their own, so a runaway batch job cannot starve customer-facing requests. This costs nothing and prevents an entire category of incident.</p>
 
-        <pre><code class="language-javascript">// Honour Retry-After. Randomised backoff without it will either hammer
+        <code class="language-javascript">// Honour Retry-After. Randomised backoff without it will either hammer
 // the platform or wait far longer than necessary.
 async function callWithBackoff(fn, { maxAttempts = 5 } = {}) {
   let attempt = 0;
@@ -390,7 +390,7 @@ async function callWithBackoff(fn, { maxAttempts = 5 } = {}) {
     metrics.increment('sfcc.rate_limited', { attempt });
     await sleep(waitMs);
   }
-}</code></pre>
+}</code>
 
         <p>The second fix is to stop making so many calls. Most quota problems I have investigated were an N+1 in disguise: an integration fetching a list of orders and then fetching each customer individually, or a product feed reading price book entries one SKU at a time. SFCC's APIs support expansion and batching in most places, and using them turns a job that trips the quota into one that finishes in a tenth of the time.</p>
 
@@ -408,7 +408,7 @@ async function callWithBackoff(fn, { maxAttempts = 5 } = {}) {
 
         <p><strong>Code.</strong> Everything else. If it needs a code release to change, it should be in code and it should be reviewed.</p>
 
-        <pre><code class="language-javascript">// dw.svc: define once, use everywhere. The point is that the endpoint,
+        <code class="language-javascript">// dw.svc: define once, use everywhere. The point is that the endpoint,
 // credentials and timeout are configuration, not literals in your cartridge.
 var LocalServiceRegistry = require('dw/svc/LocalServiceRegistry');
 
@@ -428,7 +428,7 @@ var oms = LocalServiceRegistry.createService('int.oms.orderstatus', {
   filterLogMessage: function (msg) {
     return msg.replace(/"email":"[^"]*"/g, '"email":"[redacted]"');
   }
-});</code></pre>
+});</code>
 
         <p>That <code>filterLogMessage</code> is not optional in any jurisdiction I have worked in. Service logs are readable by anyone with Business Manager access and are downloadable over WebDAV. An unfiltered order payload puts customer names, addresses and emails into a file that persists for weeks.</p>
 
@@ -438,7 +438,7 @@ var oms = LocalServiceRegistry.createService('int.oms.orderstatus', {
 
         <p>The rule I hold to is that hooks may enrich and validate; they may not become the integration. A hook that makes a synchronous outbound HTTP call on every basket calculation has just tied your add-to-cart latency to a third party's uptime. I have inherited a site where the <code>dw.ocapi.shop.basket.calculate</code> hook called a tax service with a five-second timeout, and the p95 add-to-cart was four seconds during that provider's bad days.</p>
 
-        <pre><code class="language-javascript">// A hook that enriches without becoming a dependency.
+        <code class="language-javascript">// A hook that enriches without becoming a dependency.
 // Registered in hooks.json against dw.ocapi.shop.order.afterPOST
 exports.afterPOST = function (order, orderResponse) {
   try {
@@ -460,7 +460,7 @@ exports.afterPOST = function (order, orderResponse) {
       .error('afterPOST enrichment failed for {0}: {1}', order.getOrderNo(), e.message);
   }
   return new (require('dw/system/Status'))(require('dw/system/Status').OK);
-};</code></pre>
+};</code>
 
         <p>Note the try/catch wrapping everything. An unhandled exception in an order hook can abort order creation. The customer has been charged by the payment provider at that point, and you now have an authorisation with no order. Hooks that decorate must never be able to fail the thing they decorate.</p>
 
@@ -470,7 +470,7 @@ exports.afterPOST = function (order, orderResponse) {
 
         <p>The platform's native path is XML import: write a catalog XML file to WebDAV, then run a job that imports it. It is unglamorous and it is by far the most reliable way to move volume. The Data API can write products too, and for a handful of updates it is fine, but for fifty thousand SKUs it will spend your entire quota and take hours.</p>
 
-        <pre><code class="language-xml">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+        <code class="language-xml">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
 &lt;catalog xmlns="http://www.demandware.com/xml/impex/catalog/2006-10-31"
          catalog-id="master-catalog"&gt;
   &lt;product product-id="HW-4410-GRY"&gt;
@@ -485,7 +485,7 @@ exports.afterPOST = function (order, orderResponse) {
       &lt;custom-attribute attribute-id="dispatchLeadDays"&gt;2&lt;/custom-attribute&gt;
     &lt;/custom-attributes&gt;
   &lt;/product&gt;
-&lt;/catalog&gt;</code></pre>
+&lt;/catalog&gt;</code>
 
         <p>Three decisions to make deliberately before writing the exporter.</p>
 
@@ -511,7 +511,7 @@ exports.afterPOST = function (order, orderResponse) {
 
         <p>The design principle is the same either way, and it is the one I will defend against any amount of merchandising pressure: the displayed quantity is advisory, the reservation is authoritative. Show banded availability — in stock, low stock, made to order — rather than exact counts wherever you can get away with it. A customer who is told "3 left" and finds there are 2 has been mildly misled. A customer who completes checkout for something that does not exist has been refunded, apologised to, and lost.</p>
 
-        <pre><code class="language-javascript">// Banding removes a whole class of complaint, and it makes the
+        <code class="language-javascript">// Banding removes a whole class of complaint, and it makes the
 // acceptable staleness of your inventory feed much wider.
 function availabilityBand(ats, product) {
   if (ats &lt;= 0) {
@@ -521,7 +521,7 @@ function availabilityBand(ats, product) {
   // 5 units of a teaspoon is nothing.
   var low = product.custom.lowStockThreshold || 5;
   return ats &lt;= low ? 'LOW_STOCK' : 'IN_STOCK';
-}</code></pre>
+}</code>
 
         <p>Do not call an external inventory system on a product listing page. A category rendering 48 tiles must serve availability from data SFCC already holds. I have seen a listing page make one call per tile through a well-intentioned wrapper, and the resulting page took eleven seconds on the first uncached load. The customer-facing critical path deserves the same scrutiny you would give any other latency budget; the reasoning in the piece on <a href="/blog/core-web-vitals/">Core Web Vitals</a> applies directly to server-side integration calls, not just to front-end assets.</p>
 
@@ -533,7 +533,7 @@ function availabilityBand(ats, product) {
 
         <p>The pattern that works: the order hook stamps a key derived from the order number and enqueues, a scheduled job drains the queue, and the job records the downstream document number back onto the order as a custom attribute. That last part is what makes support self-sufficient — a customer service agent can open the order in Business Manager and see whether it reached the OMS, without asking an engineer to read a log.</p>
 
-        <pre><code class="language-javascript">// Job step: drain the export queue. Runs every two minutes.
+        <code class="language-javascript">// Job step: drain the export queue. Runs every two minutes.
 // The custom object acts as the queue; status transitions are the state machine.
 function drainExportQueue(params) {
   var CustomObjectMgr = require('dw/object/CustomObjectMgr');
@@ -578,7 +578,7 @@ function drainExportQueue(params) {
   }
   q.close();
   return processed;
-}</code></pre>
+}</code>
 
         <p>Two details that are easy to skip and expensive to omit. The <code>nextAttemptAt</code> is stored rather than held in memory, so a job that is killed mid-run does not restart the backoff clock and hammer a struggling downstream system. And the DEAD status exists as a distinct state rather than as "PENDING with lots of attempts", because you can alert on a count of DEAD rows and you cannot easily alert on "PENDING rows whose attempt count is high".</p>
 
@@ -604,7 +604,7 @@ function drainExportQueue(params) {
 
         <p>Deletion deserves specific attention because it is a legal obligation with a technical trap. A right-to-erasure request must remove personal data from SFCC, from your integration queues, from your service logs, and from any downstream system you exported to. That last clause is the one teams forget: an order export queue holding a payload with a customer's address is personal data, and a custom object used as a queue with no retention policy is a compliance liability that grows daily.</p>
 
-        <pre><code class="language-javascript">// Retention job: queue rows are transient by design. Anything DONE
+        <code class="language-javascript">// Retention job: queue rows are transient by design. Anything DONE
 // older than the audit window loses its payload, keeping only the
 // non-personal fields needed for reconciliation.
 function pruneExportQueue() {
@@ -623,7 +623,7 @@ function pruneExportQueue() {
     });
   }
   q.close();
-}</code></pre>
+}</code>
 
         <h2>13. Headless: PWA Kit, Managed Runtime, and Whether to Bother</h2>
 
@@ -647,7 +647,7 @@ function pruneExportQueue() {
 
         <p><strong>Overlapping runs.</strong> A job scheduled every five minutes that sometimes takes seven produces two concurrent runs over the same data. The framework will not always protect you. Take an explicit lock — a custom object row with a timestamp is enough — and exit cleanly if another run holds it.</p>
 
-        <pre><code class="language-javascript">// Cheap mutual exclusion for a frequently-scheduled job.
+        <code class="language-javascript">// Cheap mutual exclusion for a frequently-scheduled job.
 // The TTL matters: without it, one crashed run locks the job forever.
 function acquireLock(name, ttlSeconds) {
   var CustomObjectMgr = require('dw/object/CustomObjectMgr');
@@ -664,7 +664,7 @@ function acquireLock(name, ttlSeconds) {
     lock.custom.holder = require('dw/system/System').getInstanceHostname();
   });
   return true;
-}</code></pre>
+}</code>
 
         <p><strong>Code versions accumulate.</strong> There is a limit on how many you can hold, and hitting it during a release is a bad time to discover it. Prune as part of the deployment pipeline rather than manually.</p>
 
@@ -756,11 +756,19 @@ function acquireLock(name, ttlSeconds) {
           <ul>
             <li>
               <strong><a href="/blog/enterprise-erp-systems-ecommerce/">Enterprise ERP Systems Integration for High-Volume E-Commerce</a></strong>
-              <p>NetSuite and Dynamics 365 ERP connectors.</p>
+              <p>Choosing a commerce-to-ERP integration architecture: point-to-point versus middleware versus...</p>
             </li>
             <li>
-              <strong><a href="/blog/headless-architecture/">Headless Architecture: Why Decoupling Front-End Unlocks Speed &amp; SEO</a></strong>
-              <p>Decoupled front-end API performance.</p>
+              <strong><a href="/blog/vertex-ai-sfcc-product-recommendations/">SFCC AI &amp; Vertex AI Product Recommendations: Integration Architecture</a></strong>
+              <p>How we replaced a monolithic SFCC recommendation engine with Google Vertex AI (Cloud Retail ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/sap-commerce-cloud-erp-sync/">SAP Commerce Cloud &amp; S/4HANA ERP Synchronization</a></strong>
+              <p>SAP Commerce Cloud to S/4HANA integration: deciding system of record per field, idempotent o...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/designing-for-convert/">Designing for Conversions: UX Architecture &amp; Frictionless Checkout</a></strong>
+              <p>Checkout and decision design: field reduction, guest checkout, validation timing, decline-co...</p>
             </li>
           </ul>
         </div>

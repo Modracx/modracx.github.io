@@ -108,8 +108,8 @@
         <p class="lede">Their Lighthouse scores were green the whole time their field data was red. Cold starts hit crawlers hardest and hide behind averages — here is why serverless breaks Core Web Vitals at the 75th percentile, and how caching fixes it.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 23 min read</span> •
-          <span>Category: <a href="/blog/?category=Performance+%26+Speed">Performance &amp; Speed</a></span>
+          <span>Reading Time: 28 min read</span> •
+          <span>Category: <a href="/blog/archive/#performance-speed">Performance &amp; Speed</a></span>
         </div>
       </div>
 
@@ -189,7 +189,7 @@
 
         <p>Second, the variables you control most cheaply are bundle size and initialisation work. A function importing your whole ORM, your validation library, your date library and your analytics SDK pays for all of it on every cold start. Moving a heavyweight import inside the handler so it only loads on the paths that need it is often worth several hundred milliseconds.</p>
 
-        <pre><code class="language-javascript">// Loaded on every cold start, even for requests that never use it
+        <code class="language-javascript">// Loaded on every cold start, even for requests that never use it
 import { PDFDocument } from 'pdf-lib';
 import { heavyAnalytics } from './analytics';
 
@@ -207,7 +207,7 @@ export async function handler(req) {
     return renderInvoice(req, PDFDocument);
   }
   return renderPage(req);
-}</code></pre>
+}</code>
 
         <p>Measure before you assume. Most platforms report initialisation duration separately from execution duration, and the split tells you immediately whether your problem is boot time or your own code.</p>
 
@@ -219,11 +219,11 @@ export async function handler(req) {
 
         <p><strong>Transitive dependencies you did not choose.</strong> A validation library that pulls a date library that pulls a locale bundle covering every language on earth. The tooling to find these is good and underused:</p>
 
-        <pre><code class="language-bash"># What is actually in the bundle, largest first
+        <code class="language-bash"># What is actually in the bundle, largest first
 npx esbuild src/handler.js --bundle --platform=node --analyze --outfile=/dev/null 2&gt;&amp;1 | head -30
 
 # Which dependency dragged in a package you did not expect
-npm ls date-fns-tz --all</code></pre>
+npm ls date-fns-tz --all</code>
 
         <p><strong>Top-level side effects.</strong> Code that runs on import rather than on call. Reading a config file, building a route table, compiling a schema, instantiating an SDK client. Each is small; together they are frequently the largest single component of init time, and they are invisible because nobody thinks of an import as work.</p>
 
@@ -259,20 +259,20 @@ npm ls date-fns-tz --all</code></pre>
 
         <p>Generate a page on first request, cache it, serve the cached copy to everyone else, and refresh it in the background on a schedule or on demand. The first visitor pays the cold cost; nobody else does.</p>
 
-        <pre><code class="language-javascript">// Next.js App Router: revalidate this route's cache every 5 minutes
+        <code class="language-javascript">// Next.js App Router: revalidate this route's cache every 5 minutes
 export const revalidate = 300;
 
 // Pre-render the products that matter; let the tail generate on demand
 export async function generateStaticParams() {
   const top = await getBestSellingProductSlugs(500);
   return top.map(slug =&gt; ({ slug }));
-}</code></pre>
+}</code>
 
         <p>This is the pattern that fits ecommerce best, and the nuance is which pages you pre-render. Pre-render your best sellers and your main categories; let the long tail generate on demand. That way real customers almost never hit a cold generation, and the ones who do are looking at a product nobody buys.</p>
 
         <p>The important addition for search: pair it with on-demand invalidation so a price or stock change purges the affected page immediately rather than waiting out the revalidation window. Serving a stale price is worse than serving a slow page.</p>
 
-        <pre><code class="language-javascript">// Called from your PIM/ERP webhook when a product changes
+        <code class="language-javascript">// Called from your PIM/ERP webhook when a product changes
 import { revalidatePath, revalidateTag } from 'next/cache';
 
 export async function POST(request) {
@@ -280,7 +280,7 @@ export async function POST(request) {
   revalidatePath(`/product/${sku}`);
   for (const id of categoryIds) revalidateTag(`category-${id}`);
   return Response.json({ revalidated: true });
-}</code></pre>
+}</code>
 
         <h3>Server rendering</h3>
 
@@ -308,7 +308,7 @@ export async function POST(request) {
 
         <p><strong>Keep the rest out of the index.</strong> This is the part that gets skipped, and it costs both crawl budget and function spend. Uncontrolled facet URLs are one of the classic ways to waste a crawl allowance on a large catalogue.</p>
 
-        <pre><code class="language-javascript">// Facet combinations beyond the curated set: canonical to the base
+        <code class="language-javascript">// Facet combinations beyond the curated set: canonical to the base
 // category, and keep them out of the index.
 export function generateMetadata({ params, searchParams }) {
   const curated = isCuratedFacet(params.category, searchParams);
@@ -316,7 +316,7 @@ export function generateMetadata({ params, searchParams }) {
     alternates: { canonical: curated ? currentUrl(params, searchParams) : `/category/${params.category}` },
     robots: curated ? undefined : { index: false, follow: true }
   };
-}</code></pre>
+}</code>
 
         <p><strong>Cache aggressively on a normalised key.</strong> Sort filter parameters into a canonical order before they reach the cache key, so <code>?colour=black&amp;size=9</code> and <code>?size=9&amp;colour=black</code> are one cache entry rather than two. This one-line change routinely doubles hit rate on faceted routes.</p>
 
@@ -340,7 +340,7 @@ export function generateMetadata({ params, searchParams }) {
 
         <p>And a smaller detail that matters more than it should: initialise the client outside the handler so warm invocations reuse it, rather than opening a fresh connection every request.</p>
 
-        <pre><code class="language-javascript">// Module scope — survives between warm invocations on the same instance
+        <code class="language-javascript">// Module scope — survives between warm invocations on the same instance
 let client;
 
 function getClient() {
@@ -358,7 +358,7 @@ function getClient() {
 export async function handler(req) {
   const db = getClient();
   // ...
-}</code></pre>
+}</code>
 
         <p><code>max: 1</code> looks wrong to anyone used to server-side pooling, and it's correct here. Each function instance handles one request at a time, so a pool of ten per instance multiplies your connection count by ten for no benefit.</p>
 
@@ -376,7 +376,7 @@ export async function handler(req) {
 
         <p><strong>Collapse sequential queries.</strong> Six queries in sequence is six times the latency of one. Parallelise what's independent, and push joins into the database rather than assembling in application code.</p>
 
-        <pre><code class="language-javascript">// Three sequential round trips
+        <code class="language-javascript">// Three sequential round trips
 const product = await getProduct(sku);
 const stock = await getStock(product.id);
 const reviews = await getReviews(product.id);
@@ -386,7 +386,7 @@ const product = await getProduct(sku);
 const [stock, reviews] = await Promise.all([
   getStock(product.id),
   getReviews(product.id)
-]);</code></pre>
+]);</code>
 
         <h2>10. Keeping Functions Warm, and Why It's Usually the Wrong Fix</h2>
 
@@ -410,7 +410,7 @@ const [stock, reviews] = await Promise.all([
 
         <p><strong>Cached function output.</strong> The function ran once; everyone else gets the stored response. Use <code>stale-while-revalidate</code> so a customer never waits for a regeneration:</p>
 
-        <pre><code class="language-http">Cache-Control: public, s-maxage=300, stale-while-revalidate=86400</code></pre>
+        <code class="language-http">Cache-Control: public, s-maxage=300, stale-while-revalidate=86400</code>
 
         <p>That header is doing a lot of work. For five minutes the cached copy is fresh. For the next day it's stale but still served immediately, while a background refresh happens. The visitor never waits, and the function runs on a schedule rather than on demand. On a serverless storefront this single header is frequently worth more than every code optimisation combined.</p>
 
@@ -428,22 +428,22 @@ const [stock, reviews] = await Promise.all([
 
         <p><strong>Soft 404s.</strong> A common serverless bug: a missing product renders a "not found" page with a 200 status because the framework's error path wasn't wired to set the status code. Google indexes those as thin content. Verify with curl, not with your eyes.</p>
 
-        <pre><code class="language-bash">curl -sI https://shop.example.com/product/does-not-exist | head -1
-# HTTP/2 404   <- correct
-# HTTP/2 200   <- soft 404, fix this</code></pre>
+        <code class="language-bash">curl -sI https://shop.example.com/product/does-not-exist | head -1
+# HTTP/2 404   &lt;- correct
+# HTTP/2 200   &lt;- soft 404, fix this</code>
 
         <p><strong>Timeouts under crawl load.</strong> Googlebot crawling hundreds of long-tail URLs can spawn many concurrent cold functions, and functions that are fine individually can hit concurrency or database connection limits in aggregate. If Search Console shows a spike in server errors that doesn't correspond to customer traffic, this is a likely cause.</p>
 
         <p><strong>Preview deployments.</strong> Platforms that give every branch a public URL will happily let those URLs be crawled and indexed, producing duplicate content across dozens of hostnames. Every preview environment needs <code>X-Robots-Tag: noindex</code> and ideally HTTP authentication.</p>
 
-        <pre><code class="language-javascript">// middleware — keep non-production deployments out of the index
+        <code class="language-javascript">// middleware — keep non-production deployments out of the index
 export function middleware(request) {
   const res = NextResponse.next();
   if (process.env.DEPLOY_ENV !== 'production') {
     res.headers.set('X-Robots-Tag', 'noindex, nofollow');
   }
   return res;
-}</code></pre>
+}</code>
 
         <h2>13. The Cost Conversation</h2>
 
@@ -469,7 +469,7 @@ export function middleware(request) {
 
         <p><strong>Split cold from warm.</strong> Most platforms expose an init duration; if yours doesn't, set a module-scope flag:</p>
 
-        <pre><code class="language-javascript">let warm = false;
+        <code class="language-javascript">let warm = false;
 
 export async function handler(req) {
   const wasCold = !warm;
@@ -485,13 +485,13 @@ export async function handler(req) {
   });
 
   return response;
-}</code></pre>
+}</code>
 
         <p>Then chart cold and warm as separate series. The cold p75 is the number that predicts your field data.</p>
 
         <p><strong>Collect real user metrics.</strong> Lab testing cannot reproduce cold starts reliably, so field data is not optional here:</p>
 
-        <pre><code class="language-javascript">// Report TTFB and LCP from real sessions
+        <code class="language-javascript">// Report TTFB and LCP from real sessions
 new PerformanceObserver((list) =&gt; {
   for (const entry of list.getEntries()) {
     navigator.sendBeacon('/_rum', JSON.stringify({
@@ -502,7 +502,7 @@ new PerformanceObserver((list) =&gt; {
       path: location.pathname
     }));
   }
-}).observe({ type: 'navigation', buffered: true });</code></pre>
+}).observe({ type: 'navigation', buffered: true });</code>
 
         <p><strong>Watch cache hit rate by route.</strong> A route with a collapsed hit rate is a route serving cold functions to everyone, and it will show up in your Core Web Vitals weeks before you find it by reading logs.</p>
 
@@ -586,7 +586,28 @@ new PerformanceObserver((list) =&gt; {
 
         <p>The thing worth remembering from the migration at the top: their lab scores were green the entire time the field data was red. Serverless is the architecture where those two numbers diverge most, and the one where believing the wrong number costs you the most.</p>
 
-        <div class="blog-suggested-reads"><h3>Suggested &amp; Related Reading</h3><ul><li><a href="/blog/serverless-architecture-ecommerce/">Serverless Architecture for E-Commerce: Scalability &amp; Cost Optimization</a></li></ul></div>
+        <div class="blog-suggested-reads">
+          <h3>Suggested &amp; Related Reading</h3>
+          <p>Explore related engineering guides from Kenneth D'Silva:</p>
+          <ul>
+            <li>
+              <strong><a href="/blog/pwa-seo-performance/">Progressive Web Apps (PWA) for SEO &amp; Performance</a></strong>
+              <p>Master PWA SEO for ecommerce: how Googlebot renders Single Page Apps, server-side rendering ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/cdn-speed-seo/">CDN Speed Optimization &amp; Edge Caching for Global Stores</a></strong>
+              <p>Single-CDN fundamentals for ecommerce: what edge caching does to TTFB, cache key normalisati...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/performance-monitoring/">Real-Time Performance Monitoring for Enterprise Ecommerce</a></strong>
+              <p>RUM versus synthetic, metrics that actually predict revenue, why you cannot average percenti...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/brotli-compression/">Brotli vs Gzip Compression for E-Commerce</a></strong>
+              <p>In-depth Brotli vs Gzip compression comparison: dynamic vs static pre-compression levels, CP...</p>
+            </li>
+          </ul>
+        </div>
       </article>
     </section>
   </main>

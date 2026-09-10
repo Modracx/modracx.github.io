@@ -200,8 +200,8 @@
         <p class="lede">A fashion retailer sharded 340GB of orders across eight instances. The actual problem was a missing composite index. Unpicking it took eleven weeks and £70,000.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 27 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 35 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -264,7 +264,7 @@
 
         <p>Measure before you decide. Slow query log with <code>long_query_time = 0.2</code>, Performance Schema, and half an hour with <code>pt-query-digest</code> will tell you which of those you have.</p>
 
-        <pre><code class="language-sql">-- The single most useful query on a struggling MySQL instance.
+        <code class="language-sql">-- The single most useful query on a struggling MySQL instance.
 -- Ranks statement patterns by total time spent, not by slowest
 -- single execution -- which is the distinction that matters.
 SELECT
@@ -276,7 +276,7 @@ SELECT
 FROM performance_schema.events_statements_summary_by_digest
 WHERE SCHEMA_NAME = 'magento'
 ORDER BY SUM_TIMER_WAIT DESC
-LIMIT 20;</code></pre>
+LIMIT 20;</code>
 
         <p>The column that matters most is <code>examined_per_row</code>. A query examining 40,000 rows to return one is missing an index, whatever its average duration says. And ordering by total time rather than average is what surfaces the query that takes 12ms and runs four thousand times a minute — which is almost always the real problem, and which a slow query log with a one-second threshold will never show you.</p>
 
@@ -294,7 +294,7 @@ LIMIT 20;</code></pre>
 
         <p>Covering indexes are underused. If an index contains every column the query needs, MySQL never touches the table data at all. On a hot query this is often a 5–10x improvement for the cost of one extra column in an index.</p>
 
-        <pre><code class="language-sql">-- Before: index on (customer_id) only. MySQL seeks the index, then
+        <code class="language-sql">-- Before: index on (customer_id) only. MySQL seeks the index, then
 -- reads 900 table rows to get status and total. ~180ms.
 SELECT entity_id, increment_id, status, grand_total, created_at
 FROM sales_order
@@ -309,7 +309,7 @@ ALTER TABLE sales_order
   (customer_id, created_at, status, grand_total, increment_id);
 
 -- Confirm with EXPLAIN: Extra must say "Using index", not
--- "Using index condition" or "Using where".</code></pre>
+-- "Using index condition" or "Using where".</code>
 
         <p>Two warnings, because indexes are not free. Every index slows writes, and on an order table taking a thousand inserts a minute during a sale that is measurable. And redundant indexes are common — an index on <code>(a)</code> is entirely covered by an index on <code>(a, b)</code> and can be dropped. On the cookware retailer we dropped nine redundant indexes from <code>sales_order</code> and write throughput improved 18%.</p>
 
@@ -345,7 +345,7 @@ ALTER TABLE sales_order
 
         <p>Before you scale up, check that you would benefit. If your buffer pool hit rate is 99.9% and your CPU is at 30%, a bigger machine does nothing and your problem is query shape.</p>
 
-        <pre><code class="language-sql">-- Buffer pool efficiency. Below ~99% on a read-heavy store means
+        <code class="language-sql">-- Buffer pool efficiency. Below ~99% on a read-heavy store means
 -- the working set does not fit in RAM and more memory will help.
 SELECT
   ROUND(100 - (Innodb_buffer_pool_reads / Innodb_buffer_pool_read_requests * 100), 3) AS hit_pct
@@ -354,7 +354,7 @@ FROM (
     MAX(IF(VARIABLE_NAME='Innodb_buffer_pool_reads', VARIABLE_VALUE, 0))         AS Innodb_buffer_pool_reads,
     MAX(IF(VARIABLE_NAME='Innodb_buffer_pool_read_requests', VARIABLE_VALUE, 0)) AS Innodb_buffer_pool_read_requests
   FROM performance_schema.global_status
-) s;</code></pre>
+) s;</code>
 
         <h2>6. Read Replicas, and the Lag Nobody Plans For</h2>
 
@@ -370,7 +370,7 @@ FROM (
 
         <p><strong>Route by operation type, with stickiness after a write.</strong> The default rule is reads to replicas, writes to primary. The addition that actually makes it safe is that once a session has written, its reads go to the primary for a window longer than your worst-case lag.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // Read-your-own-writes. The session flag is the important part;
 // naive read/write splitting without it produces intermittent,
 // unreproducible bugs that get closed as "cannot replicate".
@@ -394,7 +394,7 @@ final class ConnectionRouter
         // 40 seconds is worse than no replica at all.
         return $this->healthyReplica(maxLagSeconds: 2) ?? $this->primary();
     }
-}</code></pre>
+}</code>
 
         <p><strong>Route by data class.</strong> Some data must never be read from a replica regardless of session: stock levels during checkout, payment status, anything the next decision depends on. Some data can tolerate minutes of staleness: category listings, review counts, blog content. Making this explicit per query is more work than a global rule and considerably safer.</p>
 
@@ -480,7 +480,7 @@ final class ConnectionRouter
 
         <p>The technique that mitigates unevenness is to shard on a hash of the key rather than the key itself, and to use far more logical shards than physical instances.</p>
 
-        <pre><code class="language-python">import hashlib
+        <code class="language-python">import hashlib
 
 # 1024 logical shards mapped onto 8 physical instances. Growing to
 # 16 instances later moves whole logical shards and never rehashes
@@ -505,7 +505,7 @@ def instance_for(key: str) -> str:
     for (lo, hi), node in PLACEMENT.items():
         if lo &lt;= ls &lt; hi:
             return node
-    raise LookupError(f"no placement for logical shard {ls}")</code></pre>
+    raise LookupError(f"no placement for logical shard {ls}")</code>
 
         <p>The comment about Python's randomised hash is not hypothetical. I have debugged that exact failure on a client system where writes and reads went to different shards depending on which worker process handled them, producing data that appeared and disappeared. It took two days to find because everything looked correct in isolation.</p>
 
@@ -523,7 +523,7 @@ def instance_for(key: str) -> str:
 
         <p>Joins across shards do not exist. You do them in the application, which means fetching both sides and joining in memory, which is a nested loop with network latency in it.</p>
 
-        <pre><code class="language-python">import asyncio
+        <code class="language-python">import asyncio
 
 async def find_orders_by_email(email: str, limit: int = 20):
     # No shard key in this query, so every shard is asked. This is the
@@ -545,7 +545,7 @@ async def find_orders_by_email(email: str, limit: int = 20):
         rows.extend(r)
 
     rows.sort(key=lambda x: x["created_at"], reverse=True)
-    return {"rows": rows[:limit], "partial": degraded}</code></pre>
+    return {"rows": rows[:limit], "partial": degraded}</code>
 
         <p>That <code>partial</code> flag is not a nicety. On a sharded system, "no results" and "we could not check" are different answers and conflating them causes refunds to be issued for orders that exist.</p>
 
@@ -575,7 +575,7 @@ async def find_orders_by_email(email: str, limit: int = 20):
 
         <p>Without logical shards — if you took the modulo of the instance count — every row potentially moves, and you are looking at a full dual-write migration measured in weeks.</p>
 
-        <pre><code class="language-bash">#!/usr/bin/env bash
+        <code class="language-bash">#!/usr/bin/env bash
 # Move logical shards 128-191 from db-1 to the new db-8.
 # Written to be resumable: every step is idempotent and the flip
 # is the only irreversible moment.
@@ -600,7 +600,7 @@ shardctl verify --src "$SRC" --dst "$DST" --logical "$RANGE_LO-$RANGE_HI" --chec
 
 # 5. Flip placement, then unfreeze. Keep SRC data for 7 days.
 shardctl place --logical "$RANGE_LO-$RANGE_HI" --node "$DST"
-shardctl unfreeze --logical "$RANGE_LO-$RANGE_HI"</code></pre>
+shardctl unfreeze --logical "$RANGE_LO-$RANGE_HI"</code>
 
         <p>Step four is the one people skip and it is the one that saves you. A write path that bypasses the router — a cron job, a report, an admin tool someone wrote in 2019 — writes to the old shard after the flip and the data is silently lost. Checksumming catches it. So does auditing every connection to your shards for a week beforehand, which I now do as standard.</p>
 
@@ -652,7 +652,7 @@ shardctl unfreeze --logical "$RANGE_LO-$RANGE_HI"</code></pre>
 
         <p>What Magento does support well is read replicas, configured per connection in <code>env.php</code>, and it handles the read/write split for you at the resource level.</p>
 
-        <pre><code class="language-php">&lt;?php
+        <code class="language-php">&lt;?php
 // app/etc/env.php -- Magento read replica configuration.
 return [
     'db' => [
@@ -679,7 +679,7 @@ return [
             ],
         ],
     ],
-];</code></pre>
+];</code>
 
         <p>The tables that cause most Magento database pain, and what to do about them: <code>sales_order_grid</code> and its siblings, which are denormalised copies that grow enormous and can be indexed aggressively; <code>quote</code> and <code>quote_item</code>, where abandoned carts accumulate forever and where a cleanup policy is the fix; <code>report_event</code>, which is usually pure waste and can be truncated; and the <code>catalog_product_index_price</code> family, where the answer is to move to Elasticsearch and reduce how much of the indexing MySQL does.</p>
 
@@ -756,12 +756,20 @@ return [
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/performance-optimization/">Performance Optimization for Magento &amp; Shopify Stores</a></strong>
-              <p>Redis caching backend and Varnish setup.</p>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Decoupling Front-End &amp; Back-End</a></strong>
+              <p>An honest engineering assessment of headless commerce: what decoupling genuinely buys you, t...</p>
             </li>
             <li>
-              <strong><a href="/blog/performance-monitoring/">Real-Time Performance Monitoring for Enterprise Ecommerce</a></strong>
-              <p>Datadog APM database query latency tracking.</p>
+              <strong><a href="/blog/cicd-pipeline-ecommerce/">Building CI/CD Pipelines for Enterprise E-Commerce Deployments</a></strong>
+              <p>Vendor-neutral CI/CD for ecommerce: build once deploy many, gates that block vs warn, expand...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/azure-devops-magento-shopify-cicd/">Azure DevOps CI/CD Pipelines for Enterprise E-Commerce</a></strong>
+              <p>Build-once-deploy-many Azure Pipelines for Magento 2 and Shopify themes: artefacts, static c...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/containerization-docker-kubernetes/">Containerizing Monolithic E-Commerce: Docker &amp; Kubernetes</a></strong>
+              <p>Containerising a Magento or Node commerce monolith: multi-stage Dockerfiles, persistent medi...</p>
             </li>
           </ul>
         </div>

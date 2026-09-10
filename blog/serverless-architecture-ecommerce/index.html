@@ -200,8 +200,8 @@
         <p class="lede">One Lambda function, a switch statement, and forty-two orders stuck in pending_payment. Where to draw function boundaries, where state goes, and when serverless costs more than it saves.</p>
         <div class="blog-meta-info">
           <span>By <strong>Kenneth D'Silva</strong></span> •
-          <span>Reading Time: 31 min read</span> •
-          <span>Category: <a href="/blog/?category=Architecture+%26+Cloud">Architecture &amp; Cloud</a></span>
+          <span>Reading Time: 41 min read</span> •
+          <span>Category: <a href="/blog/archive/#architecture-cloud">Architecture &amp; Cloud</a></span>
         </div>
       </div>
 
@@ -298,7 +298,7 @@
 
         <p>Here is what that looks like in practice on a storefront API. Not one function, not forty.</p>
 
-        <pre><code class="language-yaml"># serverless.yml — boundaries drawn on scaling, failure and IAM,
+        <code class="language-yaml"># serverless.yml — boundaries drawn on scaling, failure and IAM,
 # not on "one function per route".
 functions:
 
@@ -342,7 +342,7 @@ functions:
     memorySize: 3008
     timeout: 900
     events:
-      - schedule: cron(0 3 1 * ? *)</code></pre>
+      - schedule: cron(0 3 1 * ? *)</code>
 
         <p>Four functions covering what a naive split would have made fifteen. Each one has a defensible reason to exist separately from the others.</p>
 
@@ -356,7 +356,7 @@ functions:
 
         <p>It is also deployable in an afternoon, and it lets you find out whether the operational model suits you before you commit to a decomposition you cannot easily undo.</p>
 
-        <pre><code class="language-javascript">// handler.js — the whole Express app as one function.
+        <code class="language-javascript">// handler.js — the whole Express app as one function.
 // Fine as a first step. Not fine as a destination.
 import serverlessExpress from '@codegenie/serverless-express';
 import { app } from './app.js';
@@ -370,7 +370,7 @@ export const handler = async (event, context) => {
   context.callbackWaitsForEmptyEventLoop = false;
   server = server ?? serverlessExpress({ app });
   return server(event, context);
-};</code></pre>
+};</code>
 
         <p>The line I want to draw attention to is <code>callbackWaitsForEmptyEventLoop</code>. Left at its default of <code>true</code>, Lambda waits for the Node event loop to drain before it considers the invocation complete. If you have an open database pool or an HTTP agent with keep-alive — and you should — the loop never drains, and every request bills for the full timeout. I have seen a bill drop 60% from that one line.</p>
 
@@ -408,7 +408,7 @@ export const handler = async (event, context) => {
 
         <p>The rule I use now: module scope is for things that cannot change during the life of a deployment. Clients, compiled regexes, parsed schemas. Never business data.</p>
 
-        <pre><code class="language-javascript">// Safe: a client, built once, no business meaning.
+        <code class="language-javascript">// Safe: a client, built once, no business meaning.
 const dynamo = new DynamoDBClient({ region: process.env.AWS_REGION });
 
 // Safe: config that is baked at deploy time and changes only on deploy.
@@ -416,14 +416,14 @@ const FEATURE_FLAGS = JSON.parse(process.env.FEATURE_FLAGS ?? '{}');
 
 // Dangerous: business data with a real-world expiry, cached for the
 // lifetime of an instance you do not control.
-let vatRates = null;   // <-- do not do this
+let vatRates = null;   // &lt;-- do not do this
 
 export const handler = async (event) =&gt; {
   // If you must cache business data, give it a TTL you enforce
   // yourself, and make it short enough that staleness is tolerable.
   const rates = await cachedFor(60_000, 'vat', () =&gt; loadVatRates());
   return price(event, rates);
-};</code></pre>
+};</code>
 
         <h3>Distributed locks are harder than they look</h3>
 
@@ -431,7 +431,7 @@ export const handler = async (event) =&gt; {
 
         <p>My honest recommendation is to avoid needing the lock. Conditional writes — "decrement this counter only if it is currently greater than zero" — handle the overwhelming majority of inventory cases atomically without any lock at all, and they cannot leak.</p>
 
-        <pre><code class="language-javascript">// Atomic stock decrement. No lock, no TTL to leak, no lost update.
+        <code class="language-javascript">// Atomic stock decrement. No lock, no TTL to leak, no lost update.
 // The ConditionExpression makes the whole thing fail if stock is short.
 await dynamo.send(new UpdateItemCommand({
   TableName: 'inventory',
@@ -441,7 +441,7 @@ await dynamo.send(new UpdateItemCommand({
   ExpressionAttributeValues: { ':q': { N: String(qty) } },
 }));
 // Throws ConditionalCheckFailedException when stock is insufficient.
-// That exception IS your business logic — catch it, do not retry it.</code></pre>
+// That exception IS your business logic — catch it, do not retry it.</code>
 
         <p>That last comment matters. A conditional check failure is not a transient error and retrying it is pointless. Distinguishing retryable from terminal failures is a discipline serverless forces on you that a monolith lets you skip.</p>
 
@@ -465,7 +465,7 @@ await dynamo.send(new UpdateItemCommand({
 
         <p><strong>Do not use a relational database on the hot path.</strong> DynamoDB, or a read model in a key-value store, has no connection concept at all. This is the cleanest answer and the one that requires the most rework.</p>
 
-        <pre><code class="language-javascript">// If you must talk to MySQL/Postgres from a function: one connection
+        <code class="language-javascript">// If you must talk to MySQL/Postgres from a function: one connection
 // per container, reused across warm invocations, closed on nothing.
 import mysql from 'mysql2/promise';
 
@@ -486,7 +486,7 @@ async function db() {
     connectTimeout: 3000,
   });
   return conn;
-}</code></pre>
+}</code>
 
         <p>If your data layer is already under strain before you go serverless, the connection problem will make it worse rather than better, and you should read the argument in <a href="/blog/database-sharding-scaling/">the piece on scaling the database tier</a> before you add hundreds of concurrent clients to something that is already unhappy.</p>
 
@@ -518,7 +518,7 @@ async function db() {
 
         <p>Here is a trimmed order workflow with the parts that matter.</p>
 
-        <pre><code class="language-json">{
+        <code class="language-json">{
   "Comment": "Order fulfilment. Compensation on every failure path.",
   "StartAt": "ReserveStock",
   "States": {
@@ -583,7 +583,7 @@ async function db() {
     "OrderComplete":     { "Type": "Succeed" },
     "OrderFailed":       { "Type": "Fail", "Error": "OrderNotFulfilled" }
   }
-}</code></pre>
+}</code>
 
         <p>Three things in there are the whole reason to use this rather than chained events.</p>
 
@@ -619,7 +619,7 @@ async function db() {
 
         <p>Whatever tooling you pick, the thing that makes serverless development bearable is keeping business logic out of handlers entirely. The handler parses an event, calls a pure function, formats a response. The pure function knows nothing about Lambda and is tested with a normal unit test at normal speed.</p>
 
-        <pre><code class="language-typescript">// domain/pricing.ts — no AWS types, no I/O, testable in 4ms.
+        <code class="language-typescript">// domain/pricing.ts — no AWS types, no I/O, testable in 4ms.
 export function applyPromotions(
   lines: CartLine[],
   promos: Promotion[],
@@ -636,7 +636,7 @@ export const handler = async (event: APIGatewayProxyEventV2) =&gt; {
   const promos = await promotions.active();
   const result = applyPromotions(cart.lines, promos, new Date());
   return { statusCode: 200, body: JSON.stringify(result) };
-};</code></pre>
+};</code>
 
         <p>On the kitchenware build we ended up with about 4,000 lines of domain code with no AWS import anywhere, covered by fast unit tests, and roughly 600 lines of handlers covered by a much smaller number of integration tests against a deployed environment. That ratio is the thing that made the codebase pleasant to work in. It is also platform-portable, which matters more than people admit given how often the platform decision gets revisited.</p>
 
@@ -650,7 +650,7 @@ export const handler = async (event: APIGatewayProxyEventV2) =&gt; {
 
         <p>What I do is deploy an ephemeral stack per pull request, named after the branch, run the integration suite against it, and tear it down. On a reasonably sized stack that adds four to six minutes to CI, which is the real cost and is worth it.</p>
 
-        <pre><code class="language-yaml"># .github/workflows/pr.yml — ephemeral stack per PR.
+        <code class="language-yaml"># .github/workflows/pr.yml — ephemeral stack per PR.
 jobs:
   integration:
     runs-on: ubuntu-latest
@@ -673,7 +673,7 @@ jobs:
       # always() so a failing test still removes the stack. Orphaned
       # stacks are how a dev account ends up at its resource quota.
       - if: always()
-        run: npx serverless remove --stage pr-${{ github.event.number }}</code></pre>
+        run: npx serverless remove --stage pr-${{ github.event.number }}</code>
 
         <p>The test I have found most valuable, and least commonly written: a load test that pushes concurrency past your database connection budget and confirms the system degrades rather than collapses. That is the failure mode that costs money, and it is invisible in every other kind of test.</p>
 
@@ -747,7 +747,7 @@ jobs:
 
         <p><strong>Structured JSON logs with a correlation id threaded through everything.</strong> Not optional. A single customer action might touch six functions and two queues, and without a shared id you cannot reconstruct it. Generate the id at the entry point, put it in the event payload, put it in every log line, propagate it across queue messages in a message attribute.</p>
 
-        <pre><code class="language-javascript">// A minimal correlation-aware logger. AsyncLocalStorage keeps the id
+        <code class="language-javascript">// A minimal correlation-aware logger. AsyncLocalStorage keeps the id
 // available without threading it through every function signature.
 import { AsyncLocalStorage } from 'node:async_hooks';
 const ctx = new AsyncLocalStorage();
@@ -769,7 +769,7 @@ export const withContext = (event, fn) =&gt; ctx.run({
   // Accept an inbound id if there is one; only mint a new one at
   // the true entry point of a flow.
   correlationId: event.headers?.['x-correlation-id'] ?? crypto.randomUUID(),
-}, fn);</code></pre>
+}, fn);</code>
 
         <p><strong>Distributed tracing.</strong> X-Ray, or OpenTelemetry into whatever backend you prefer. This is what answers "where did the 4 seconds go" across a chain of functions. The instrumentation cost is small; the ADOT Lambda layer covers most of it automatically.</p>
 
@@ -813,7 +813,7 @@ export const withContext = (event, fn) =&gt; ctx.run({
 
         <p>Validate every event payload at the boundary, even the ones from your own services. An event from SQS is untrusted input in exactly the same way an HTTP body is; the only difference is that you trust the transport. A schema check at the top of every handler costs a millisecond and catches both attacks and your own regressions.</p>
 
-        <pre><code class="language-typescript">// Validate at the boundary, always. Zod, ajv, whatever you like —
+        <code class="language-typescript">// Validate at the boundary, always. Zod, ajv, whatever you like —
 // the point is that a malformed event fails here, loudly, and does
 // not reach code that assumes the shape is right.
 const OrderEvent = z.object({
@@ -836,7 +836,7 @@ export const handler = async (event: SQSEvent) =&gt; {
     }
     await process(parsed.data);
   }
-};</code></pre>
+};</code>
 
         <p>The comment on that catch block is a real lesson. Throwing on a poison message in a batched SQS consumer sends every message in the batch back, including the nine that were fine, and they get reprocessed. If your processing is not idempotent, that is a correctness bug, not just an efficiency one. Either use partial batch responses or route bad messages aside explicitly.</p>
 
@@ -883,12 +883,20 @@ export const handler = async (event: SQSEvent) =&gt; {
           <p>Explore related engineering guides from Kenneth D'Silva:</p>
           <ul>
             <li>
-              <strong><a href="/blog/headless-commerce-seo-performance/">Headless Commerce: Architecture, SEO &amp; Performance Strategies</a></strong>
-              <p>Combining serverless edge logic with static site generation.</p>
+              <strong><a href="/blog/headless-architecture/">Headless Architecture: Decoupling Front-End &amp; Back-End</a></strong>
+              <p>An honest engineering assessment of headless commerce: what decoupling genuinely buys you, t...</p>
             </li>
             <li>
-              <strong><a href="/blog/edge-personalization/">Leveraging Edge Computing for Real-Time Personalization</a></strong>
-              <p>Executing low-latency Vercel Edge functions.</p>
+              <strong><a href="/blog/vercel-nextjs-edge-rendering-ecommerce/">Vercel &amp; Next.js Edge Rendering for E-Commerce</a></strong>
+              <p>Vercel and Next.js for ecommerce: middleware matchers, edge vs node runtime, how ISR really ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/event-driven-architecture/">Event-Driven Architecture for E-Commerce: Kafka &amp; Webhooks</a></strong>
+              <p>Event-driven ecommerce architecture: events vs commands, at-least-once delivery, idempotent ...</p>
+            </li>
+            <li>
+              <strong><a href="/blog/micro-frontend-architecture/">Micro-Frontend Architecture for Enterprise E-Commerce Storefronts</a></strong>
+              <p>When micro-frontends are the wrong choice, and how to implement Module Federation on a store...</p>
             </li>
           </ul>
         </div>
