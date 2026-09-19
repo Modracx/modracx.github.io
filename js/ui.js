@@ -201,6 +201,9 @@
           write("grimoire", "🛡️ Webadmin invoked: Nginx server blocks and Let's Encrypt certificates synchronized.");
         }
       },
+      "cast pascal": function () {
+        write("grimoire", "💎 Pascal invoked: Performance-first editorial Shopify theme deployed. Zero global JavaScript, token engine active, Core Web Vitals passing!");
+      },
       matrix: function () {
         var canvas = document.getElementById("particles");
         if (canvas) {
@@ -250,6 +253,7 @@
       if (!word) return;
       write("you", word, true);
       if (spells[word]) spells[word]();
+      else if (word.indexOf("pascal") !== -1) spells["cast pascal"]();
       else if (word.indexOf("dabiro") !== -1) spells["cast dabiro"]();
       else if (word.indexOf("webadmin") !== -1) spells["cast webadmin"]();
       else write("grimoire", "No such incantation. Try <strong>quest</strong> or <strong>help</strong>.");
