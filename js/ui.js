@@ -140,7 +140,7 @@
 
   var brief = document.getElementById("brief-form");
   if (brief) {
-    if (window.location.hash === "#sent") {
+    if (window.location.search.indexOf("sent=true") !== -1 || window.location.hash === "#sent") {
       say("Thank you! Your project brief has been sent.");
     }
   }
