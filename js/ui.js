@@ -140,23 +140,9 @@
 
   var brief = document.getElementById("brief-form");
   if (brief) {
-    brief.addEventListener("submit", function (e) {
-      e.preventDefault();
-      var data = new FormData(brief);
-      var name = (data.get("name") || "").toString().trim();
-      var subject = "Project brief — " + (data.get("projectType") || "New project");
-      var lines = [
-        "Name: " + name,
-        "Email: " + (data.get("email") || ""),
-        "Company: " + (data.get("company") || "—"),
-        "Project type: " + (data.get("projectType") || ""),
-        "",
-        (data.get("brief") || "").toString()
-      ];
-      window.location.href = "mailto:kd.xtrm@gmail.com?subject=" +
-        encodeURIComponent(subject) + "&body=" + encodeURIComponent(lines.join("\n"));
-      say("Draft ready — check your mail app");
-    });
+    if (window.location.hash === "#sent") {
+      say("Thank you! Your project brief has been sent.");
+    }
   }
 
   /* --- Realm clock ------------------------------------------------------ */
